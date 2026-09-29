@@ -14,6 +14,22 @@ const PG_CODE_MAP: Record<string, { status: number; code: string }> = {
 };
 
 /**
+ * Find a mapped PG error code on the exception or anywhere down its
+ * `cause` chain (drizzle ≥0.44 wraps driver errors). Cycle-safe.
+ */
+function findPgMapping(exception: unknown): { status: number; code: string } | undefined {
+  let cur: unknown = exception;
+  const seen = new Set<unknown>();
+  while (cur && (typeof cur === 'object' || typeof cur === 'function') && !seen.has(cur)) {
+    seen.add(cur);
+    const code = (cur as { code?: unknown }).code;
+    if (typeof code === 'string' && PG_CODE_MAP[code]) return PG_CODE_MAP[code];
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return undefined;
+}
+
+/**
  * Single place where every error becomes a safe, predictable JSON body.
  * - never leaks stack traces or driver internals to clients
  * - always carries a requestId so client reports can be correlated with logs
@@ -55,8 +71,9 @@ export class AllExceptionsFilter implements ExceptionFilter {
       // silent handling of noisy framework errors
       if (status === 404 && code === 'ERROR') code = 'NOT_FOUND';
     } else {
-      const anyErr = exception as { code?: string; message?: string; stack?: string };
-      const mapped = typeof anyErr?.code === 'string' ? PG_CODE_MAP[anyErr.code] : undefined;
+      // drizzle ≥0.44 wraps driver errors ("Failed query: ...", code on
+      // `.cause`), so walk the cause chain to find a PG code.
+      const mapped = findPgMapping(exception);
       if (mapped) {
         status = mapped.status;
         code = mapped.code;
@@ -64,7 +81,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
           mapped.code === 'CONFLICT' ? 'Resource already exists' : 'Database request could not be completed';
       }
       this.log.error(
-        `${path} → ${status} ${code} [${requestId}]\n${anyErr?.stack ?? String(exception)}`,
+        `${path} → ${status} ${code} [${requestId}]\n${exception instanceof Error ? exception.stack : String(exception)}`,
       );
     }
 
