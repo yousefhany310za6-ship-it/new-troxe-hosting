@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { randomBytes } from 'crypto';
+import type { StringValue } from 'ms';
 
 /**
  * Central, validated configuration.
@@ -57,6 +58,22 @@ function bool(name: string, def: boolean): boolean {
 
 function ephemeralSecret(): string {
   return randomBytes(48).toString('base64url');
+}
+
+/**
+ * Access-token lifetime: must look like `90s`, `15m` or `1h` and land in
+ * 60s..1h. An operator typo (e.g. `100y`) must fail the boot, never mint
+ * forever-tokens. Returns an `ms` StringValue so jsonwebtoken's
+ * `expiresIn` accepts it without casts.
+ */
+function accessTtl(v: string): StringValue {
+  const m = /^(\d+)(s|m|h)$/.exec(v.trim());
+  const secs = m ? Number(m[1]) * (m[2] === 's' ? 1 : m[2] === 'm' ? 60 : 3600) : NaN;
+  if (!m || !Number.isSafeInteger(secs) || secs < 60 || secs > 3600) {
+    errors.push('JWT_ACCESS_TTL must look like 15m (60s..1h).');
+    return '15m';
+  }
+  return `${Number(m[1])}${m[2]}` as StringValue;
 }
 
 // --- Secrets -----------------------------------------------------------------
@@ -121,7 +138,7 @@ export interface AppConfig {
   readonly PG_STATEMENT_TIMEOUT_MS: number;
   readonly JWT_ACCESS_SECRET: string;
   readonly JWT_REFRESH_SECRET: string;
-  readonly JWT_ACCESS_TTL: string;
+  readonly JWT_ACCESS_TTL: StringValue;
   readonly JWT_REFRESH_TTL_SEC: number;
   readonly BCRYPT_ROUNDS: number;
   readonly ENV_ENCRYPTION_KEY: string;
@@ -157,9 +174,9 @@ export const config: AppConfig = Object.freeze({
 
   JWT_ACCESS_SECRET: ACCESS_SECRET,
   JWT_REFRESH_SECRET: REFRESH_SECRET,
-  JWT_ACCESS_TTL: raw.JWT_ACCESS_TTL ?? '15m',
+  JWT_ACCESS_TTL: accessTtl(raw.JWT_ACCESS_TTL ?? '15m'),
   JWT_REFRESH_TTL_SEC: num('JWT_REFRESH_TTL_SEC', 7 * 24 * 3600, 600, 30 * 24 * 3600),
-  BCRYPT_ROUNDS: num('BCRYPT_ROUNDS', IS_PROD ? 12 : 10, 4, 15),
+  BCRYPT_ROUNDS: num('BCRYPT_ROUNDS', IS_PROD ? 12 : 10, IS_PROD ? 10 : 4, 15),
   ENV_ENCRYPTION_KEY: ENV_KEY,
   REFRESH_COOKIE: IS_PROD ? '__Host-troxe_refresh' : 'troxe_refresh',
 
@@ -187,3 +204,12 @@ export const config: AppConfig = Object.freeze({
 
   LOG_LEVEL: raw.LOG_LEVEL ?? 'log',
 });
+
+// Authoritative gate: the early check above only sees secret errors — every
+// num()/bool()/accessTtl() call inside the freeze pushes here, so re-check
+// AFTER construction. Without this, invalid numeric/boolean/TTL values boot
+// silently with defaults (fail-open config).
+if (errors.length) {
+  const body = ['Invalid environment configuration — refusing to start:', ...errors.map((e) => `  • ${e}`)].join('\n');
+  throw new Error(body);
+}

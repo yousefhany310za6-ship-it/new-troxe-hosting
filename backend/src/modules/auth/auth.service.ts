@@ -62,7 +62,7 @@ export class AuthService {
   private accessToken(user: { id: string; email: string; role: string }, sid: string): string {
     return this.jwt.sign(
       { sub: user.id, sid, email: user.email, role: user.role, typ: 'access' },
-      { secret: config.JWT_ACCESS_SECRET, expiresIn: config.JWT_ACCESS_TTL },
+      { secret: config.JWT_ACCESS_SECRET, expiresIn: config.JWT_ACCESS_TTL, algorithm: 'HS256' },
     );
   }
 

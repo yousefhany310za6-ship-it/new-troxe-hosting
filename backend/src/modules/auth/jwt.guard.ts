@@ -27,7 +27,10 @@ export class JwtAuthGuard implements CanActivate {
     if (!token || token.length > 4096) throw Err.unauthorized();
 
     try {
-      const payload = await this.jwt.verifyAsync(token, { secret: config.JWT_ACCESS_SECRET });
+      const payload = await this.jwt.verifyAsync(token, {
+        secret: config.JWT_ACCESS_SECRET,
+        algorithms: ['HS256'],
+      });
       if (payload?.typ !== 'access' || typeof payload.sub !== 'string') throw new Error('bad typ');
       req.user = {
         sub: payload.sub,
