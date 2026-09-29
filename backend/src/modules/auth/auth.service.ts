@@ -5,6 +5,7 @@ import { randomUUID } from 'crypto';
 import { and, desc, eq, gt, isNull } from 'drizzle-orm';
 import { config } from '../../config/env';
 import { randomToken, safeEqual, sha256 } from '../../common/crypto';
+import { hashPassword, verifyPassword } from '../../common/password';
 import { Err } from '../../common/errors';
 import { ReqCtx } from '../../common/request-context';
 import { DB, Db } from '../../db/db.module';
@@ -48,14 +49,14 @@ export class AuthService {
     this.dummyHash = bcrypt.hash(randomToken(32), config.BCRYPT_ROUNDS);
   }
 
-  // ---- primitives -----------------------------------------------------------
+  // ---- primitives (canonical: ../../common/password) ------------------------
 
   private hashPassword(plain: string): Promise<string> {
-    return bcrypt.hash(sha256(plain), config.BCRYPT_ROUNDS);
+    return hashPassword(plain);
   }
 
   private checkPassword(plain: string, hash: string): Promise<boolean> {
-    return bcrypt.compare(sha256(plain), hash);
+    return verifyPassword(plain, hash);
   }
 
   private accessToken(user: { id: string; email: string; role: string }, sid: string): string {
