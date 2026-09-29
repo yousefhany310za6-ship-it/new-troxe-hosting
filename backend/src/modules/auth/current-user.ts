@@ -1,7 +1,10 @@
 import { createParamDecorator, ExecutionContext } from '@nestjs/common';
+import type { ReqUser } from './jwt.guard';
 
-export type ReqUser = { sub: string; email: string; role: string };
-
+/** Extracts the verified user attached by JwtAuthGuard. */
 export const CurrentUser = createParamDecorator(
-  (_: unknown, ctx: ExecutionContext): ReqUser => ctx.switchToHttp().getRequest().user,
+  (_data: unknown, ctx: ExecutionContext): ReqUser => {
+    const req = ctx.switchToHttp().getRequest();
+    return req.user as ReqUser;
+  },
 );

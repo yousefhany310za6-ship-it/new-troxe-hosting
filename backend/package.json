@@ -9,7 +9,9 @@
     "build": "nest build",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "db:seed": "ts-node --transpile-only src/db/seed.ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@nestjs/common": "^10.4.4",
@@ -23,6 +25,8 @@
     "dockerode": "^4.0.2",
     "dotenv": "^16.4.5",
     "drizzle-orm": "^0.36.4",
+    "helmet": "^8.0.0",
+    "@nestjs/throttler": "^6.2.1",
     "pg": "^8.13.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"
@@ -36,6 +40,7 @@
     "@types/node": "^20.16.13",
     "@types/pg": "^8.11.0",
     "drizzle-kit": "^0.28.1",
+    "ts-node": "^10.9.2",
     "typescript": "^5.6.3"
   }
 }

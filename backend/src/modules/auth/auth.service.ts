@@ -1,122 +1,304 @@
-import { ConflictException, Inject, Injectable, UnauthorizedException } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import bcrypt from 'bcrypt';
-import { and, desc, eq } from 'drizzle-orm';
+import { randomUUID } from 'crypto';
+import { and, desc, eq, gt, isNull } from 'drizzle-orm';
+import { config } from '../../config/env';
+import { randomToken, safeEqual, sha256 } from '../../common/crypto';
+import { Err } from '../../common/errors';
+import { ReqCtx } from '../../common/request-context';
 import { DB, Db } from '../../db/db.module';
-import { sessions, users } from '../../db/schema';
+import { authSessions, sessions, users, type User } from '../../db/schema';
+import { AuditService } from '../audit/audit.module';
 import { LoginDto, SignupDto } from './dto';
 
-const ACCESS_TTL = process.env.JWT_ACCESS_TTL ?? '15m';
+/** `<sessionId>.<48-byte secret>` — opaque, high entropy, versionless */
+const REFRESH_RE = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.([A-Za-z0-9_-]{20,128})$/;
 
-function ctxOf(req: any) {
-  const ip = (req.headers?.['x-forwarded-for'] as string)?.split(',')[0] ?? req.ip ?? 'unknown';
-  const device: string = req.headers?.['user-agent']?.slice(0, 255) ?? 'unknown';
-  return { ip: String(ip).slice(0, 45), device };
+export interface IssuedSession {
+  accessToken: string;
+  refreshToken: string;
+  sessionId: string;
+  expiresAt: Date;
 }
 
+/**
+ * Authentication with rotating refresh tokens + theft detection.
+ *
+ * Guarantees:
+ *  - access tokens are 15-minute JWTs, useless for session renewal
+ *  - refresh tokens are opaque, stored only as sha256, single-use (rotated)
+ *  - replaying an old refresh token revokes the entire session family
+ *  - passwords are pre-hashed (sha256) before bcrypt → fixes bcrypt's 72-byte
+ *    truncation and allows long passphrases
+ *  - constant-time login (unknown emails still pay a bcrypt round)
+ *  - progressive per-account lockout on repeated failures
+ */
 @Injectable()
 export class AuthService {
-  constructor(@Inject(DB) private db: Db, private jwt: JwtService) {}
+  private readonly log = new Logger(AuthService.name);
+  /** compared against when the account does not exist, to equalise timing */
+  private readonly dummyHash: Promise<string>;
 
-  private accessToken(u: { id: string; email: string; role: string }) {
+  constructor(
+    @Inject(DB) private db: Db,
+    private jwt: JwtService,
+    private audit: AuditService,
+  ) {
+    this.dummyHash = bcrypt.hash(randomToken(32), config.BCRYPT_ROUNDS);
+  }
+
+  // ---- primitives -----------------------------------------------------------
+
+  private hashPassword(plain: string): Promise<string> {
+    return bcrypt.hash(sha256(plain), config.BCRYPT_ROUNDS);
+  }
+
+  private checkPassword(plain: string, hash: string): Promise<boolean> {
+    return bcrypt.compare(sha256(plain), hash);
+  }
+
+  private accessToken(user: { id: string; email: string; role: string }, sid: string): string {
     return this.jwt.sign(
-      { sub: u.id, email: u.email, role: u.role },
-      { secret: process.env.JWT_ACCESS_SECRET ?? 'dev', expiresIn: ACCESS_TTL },
+      { sub: user.id, sid, email: user.email, role: user.role, typ: 'access' },
+      { secret: config.JWT_ACCESS_SECRET, expiresIn: config.JWT_ACCESS_TTL },
     );
   }
 
-  private refreshToken(userId: string) {
-    return this.jwt.sign(
-      { sub: userId, type: 'refresh' },
-      { secret: process.env.JWT_REFRESH_SECRET ?? 'dev-refresh', expiresIn: '7d' },
-    );
+  private parseRefresh(token: string | undefined): { sid: string; secret: string } | null {
+    if (!token || token.length > 512) return null;
+    const m = REFRESH_RE.exec(token);
+    if (!m) return null;
+    return { sid: m[1], secret: m[2] };
   }
 
-  async signup(dto: SignupDto, req: any) {
+  // ---- signup / login -------------------------------------------------------
+
+  async signup(dto: SignupDto, ctx: ReqCtx) {
     const email = dto.email.toLowerCase().trim();
-    const exists = await this.db.select().from(users).where(eq(users.email, email)).limit(1);
-    if (exists.length) throw new ConflictException('EMAIL_TAKEN');
+    const existing = await this.db.select({ id: users.id }).from(users).where(eq(users.email, email)).limit(1);
+    if (existing.length) {
+      await this.audit.record({ actorEmail: email, action: 'auth.signup.duplicate', ip: ctx.ip, userAgent: ctx.device });
+      throw Err.conflict('EMAIL_TAKEN', 'An account with this email already exists');
+    }
 
-    const passwordHash = await bcrypt.hash(dto.password, 10);
     const [user] = await this.db
       .insert(users)
-      .values({ name: dto.name.trim(), email, passwordHash })
-      .returning({ id: users.id, name: users.name, email: users.email, role: users.role });
-
-    const refresh = this.refreshToken(user.id);
-    const { ip, device } = ctxOf(req);
-    await this.db.insert(sessions).values({
-      userId: user.id,
-      refreshHash: await bcrypt.hash(refresh, 10),
-      ip,
-      device,
-      location: 'Unknown',
-      status: 'success',
-    } as any);
-    return { user, accessToken: this.accessToken(user), refresh };
-  }
-
-  async login(dto: LoginDto, req: any) {
-    const email = dto.email.toLowerCase().trim();
-    const rows = await this.db.select().from(users).where(eq(users.email, email)).limit(1);
-    const user = rows[0];
-    const { ip, device } = ctxOf(req);
-
-    if (!user || !(await bcrypt.compare(dto.password, user.passwordHash))) {
-      if (user) {
-        await this.db.insert(sessions).values({ userId: user.id, ip, device, status: 'failed' } as any);
-      }
-      throw new UnauthorizedException('INVALID_CREDENTIALS');
-    }
-    const refresh = this.refreshToken(user.id);
-    await this.db.insert(sessions).values({
-      userId: user.id,
-      refreshHash: await bcrypt.hash(refresh, 10),
-      ip,
-      device,
-      status: 'success',
-    } as any);
-    const safe = { id: user.id, name: user.name, email: user.email, role: user.role };
-    return { user: safe, accessToken: this.accessToken(safe), refresh };
-  }
-
-  async refresh(refresh: string | undefined) {
-    if (!refresh) throw new UnauthorizedException('NO_REFRESH');
-    let payload: any;
-    try {
-      payload = await this.jwt.verifyAsync(refresh, {
-        secret: process.env.JWT_REFRESH_SECRET ?? 'dev-refresh',
+      .values({ name: dto.name.trim(), email, passwordHash: await this.hashPassword(dto.password) })
+      .returning({ id: users.id, name: users.name, email: users.email, role: users.role, passwordHash: users.passwordHash })
+      .catch((e: { code?: string }) => {
+        if (e?.code === '23505') throw Err.conflict('EMAIL_TAKEN', 'An account with this email already exists');
+        throw e;
       });
-    } catch {
-      throw new UnauthorizedException('INVALID_REFRESH');
+
+    await this.recordLogin(user.id, ctx, 'success');
+    const issued = await this.newRefreshSession(user, ctx);
+    await this.audit.record({
+      actorId: user.id,
+      actorEmail: user.email,
+      action: 'auth.signup',
+      targetType: 'user',
+      targetId: user.id,
+      ip: ctx.ip,
+      userAgent: ctx.device,
+    });
+    return {
+      user: { id: user.id, name: user.name, email: user.email, role: user.role },
+      accessToken: issued.accessToken,
+      refreshToken: issued.refreshToken,
+      expiresAt: issued.expiresAt,
+    };
+  }
+
+  async login(dto: LoginDto, ctx: ReqCtx) {
+    const email = dto.email.toLowerCase().trim();
+    const [user] = await this.db.select().from(users).where(eq(users.email, email)).limit(1);
+
+    // account lockout is checked first: locked accounts stop paying for bcrypt
+    if (user?.lockedUntil && user.lockedUntil.getTime() > Date.now()) {
+      const seconds = Math.ceil((user.lockedUntil.getTime() - Date.now()) / 1000);
+      await this.audit.record({ actorId: user.id, actorEmail: email, action: 'auth.login.locked', ip: ctx.ip, userAgent: ctx.device });
+      throw Err.accountLocked(seconds);
     }
+
+    // always run a bcrypt comparison so unknown emails take the same time
+    const hash = user ? user.passwordHash : await this.dummyHash;
+    const ok = await this.checkPassword(dto.password, hash);
+
+    if (!user || !ok) {
+      if (user) {
+        const lockedSeconds = await this.registerFailure(user);
+        await this.recordLogin(user.id, ctx, 'failed');
+        await this.audit.record({
+          actorId: user.id,
+          actorEmail: email,
+          action: 'auth.login.fail',
+          ip: ctx.ip,
+          userAgent: ctx.device,
+          meta: { lockedSeconds },
+        });
+        if (lockedSeconds) throw Err.accountLocked(lockedSeconds);
+      } else {
+        await this.audit.record({ actorEmail: email, action: 'auth.login.fail.unknown', ip: ctx.ip, userAgent: ctx.device });
+      }
+      throw Err.invalidCredentials();
+    }
+
+    if (user.failedLogins || user.lockedUntil) {
+      await this.db.update(users).set({ failedLogins: 0, lockedUntil: null }).where(eq(users.id, user.id));
+    }
+
+    await this.recordLogin(user.id, ctx, 'success');
+    const issued = await this.newRefreshSession(user, ctx);
+    await this.audit.record({
+      actorId: user.id,
+      actorEmail: user.email,
+      action: 'auth.login.success',
+      targetType: 'user',
+      targetId: user.id,
+      ip: ctx.ip,
+      userAgent: ctx.device,
+    });
+    return {
+      user: { id: user.id, name: user.name, email: user.email, role: user.role },
+      accessToken: issued.accessToken,
+      refreshToken: issued.refreshToken,
+      expiresAt: issued.expiresAt,
+    };
+  }
+
+  // ---- refresh / logout -----------------------------------------------------
+
+  async refresh(token: string | undefined, ctx: ReqCtx): Promise<IssuedSession> {
+    const parsed = this.parseRefresh(token);
+    if (!parsed) throw Err.unauthorized('INVALID_REFRESH');
+
+    const [row] = await this.db.select().from(authSessions).where(eq(authSessions.id, parsed.sid)).limit(1);
+    const presented = sha256(parsed.secret);
+
+    if (!row) throw Err.unauthorized('INVALID_REFRESH');
+
+    // replay of an already-rotated token → assume theft, kill the whole family
+    if (!safeEqual(presented, row.refreshTokenHash)) {
+      await this.db.delete(authSessions).where(eq(authSessions.familyId, row.familyId));
+      await this.audit.record({
+        actorId: row.userId,
+        action: 'auth.refresh.reuse',
+        targetType: 'auth_session',
+        targetId: row.familyId,
+        ip: ctx.ip,
+        userAgent: ctx.device,
+      });
+      this.log.warn(`refresh-token reuse detected for family ${row.familyId}`);
+      throw Err.unauthorized('REFRESH_REUSED');
+    }
+
+    if (row.revokedAt || row.expiresAt.getTime() <= Date.now()) {
+      await this.db.delete(authSessions).where(eq(authSessions.familyId, row.familyId));
+      throw Err.unauthorized('REFRESH_EXPIRED');
+    }
+
+    const [user] = await this.db.select().from(users).where(eq(users.id, row.userId)).limit(1);
+    if (!user) throw Err.unauthorized('USER_GONE');
+
+    // rotate: same row/family, brand new secret
+    const secret = randomToken(32);
+    const expiresAt = new Date(Date.now() + config.JWT_REFRESH_TTL_SEC * 1000);
+    await this.db
+      .update(authSessions)
+      .set({ refreshTokenHash: sha256(secret), expiresAt, lastUsedAt: new Date(), ip: ctx.ip, device: ctx.device })
+      .where(eq(authSessions.id, row.id));
+
+    return {
+      accessToken: this.accessToken({ id: user.id, email: user.email, role: user.role }, row.id),
+      refreshToken: `${row.id}.${secret}`,
+      sessionId: row.id,
+      expiresAt,
+    };
+  }
+
+  async logout(token: string | undefined, ctx: ReqCtx): Promise<void> {
+    const parsed = this.parseRefresh(token);
+    if (!parsed) return;
+    const [row] = await this.db.select().from(authSessions).where(eq(authSessions.id, parsed.sid)).limit(1);
+    if (!row) return;
+    await this.db.delete(authSessions).where(eq(authSessions.familyId, row.familyId));
+    await this.audit.record({
+      actorId: row.userId,
+      action: 'auth.logout',
+      targetType: 'auth_session',
+      targetId: row.familyId,
+      ip: ctx.ip,
+      userAgent: ctx.device,
+    });
+  }
+
+  /** Used after a password change / "sign out everywhere". */
+  async revokeAllForUser(userId: string): Promise<number> {
     const rows = await this.db
-      .select()
-      .from(sessions)
-      .where(and(eq(sessions.userId, payload.sub)))
-      .orderBy(desc(sessions.createdAt))
-      .limit(20);
-    for (const s of rows) {
-      if (s.refreshHash && (await bcrypt.compare(refresh, s.refreshHash))) {
-        const [u] = await this.db.select().from(users).where(eq(users.id, payload.sub)).limit(1);
-        if (!u) throw new UnauthorizedException('USER_GONE');
-        return { accessToken: this.accessToken({ id: u.id, email: u.email, role: u.role }) };
-      }
-    }
-    throw new UnauthorizedException('REFRESH_REUSED');
+      .delete(authSessions)
+      .where(eq(authSessions.userId, userId))
+      .returning({ id: authSessions.id });
+    return rows.length;
   }
 
-  async logout(refresh: string | undefined) {
-    if (!refresh) return;
-    const all = await this.db.select().from(sessions);
-    for (const s of all.slice(-200)) {
-      if (s.refreshHash && (await bcrypt.compare(refresh, s.refreshHash))) {
-        await this.db.delete(sessions).where(eq(sessions.id, s.id));
-        break;
-      }
-    }
+  // ---- helpers --------------------------------------------------------------
+
+  private async newRefreshSession(
+    user: { id: string; email: string; role: string },
+    ctx: ReqCtx,
+  ): Promise<IssuedSession> {
+    const secret = randomToken(32);
+    const expiresAt = new Date(Date.now() + config.JWT_REFRESH_TTL_SEC * 1000);
+    const [row] = await this.db
+      .insert(authSessions)
+      .values({
+        familyId: randomUUID(), // one browser session = one rotation family
+        userId: user.id,
+        refreshTokenHash: sha256(secret),
+        ip: ctx.ip,
+        device: ctx.device,
+        expiresAt,
+      })
+      .returning({ id: authSessions.id });
+
+    return {
+      accessToken: this.accessToken(user, row.id),
+      refreshToken: `${row.id}.${secret}`,
+      sessionId: row.id,
+      expiresAt,
+    };
   }
 
+  private async registerFailure(user: User): Promise<number> {
+    const count = user.failedLogins + 1;
+    let lockedSeconds = 0;
+    if (count >= config.LOCKOUT_THRESHOLD) {
+      const step = count - config.LOCKOUT_THRESHOLD; // 0,1,2,...
+      lockedSeconds = Math.min(30 * 2 ** step, 900); // 30s → 15m cap
+    }
+    await this.db
+      .update(users)
+      .set({
+        failedLogins: count,
+        lockedUntil: lockedSeconds ? new Date(Date.now() + lockedSeconds * 1000) : user.lockedUntil,
+      })
+      .where(eq(users.id, user.id));
+    return lockedSeconds;
+  }
+
+  private async recordLogin(userId: string, ctx: ReqCtx, status: 'success' | 'failed') {
+    await this.db.insert(sessions).values({
+      userId,
+      ip: ctx.ip,
+      device: ctx.device,
+      status,
+      location: null,
+      countryCode: null,
+    } as never);
+  }
+
+  /** Login history for the Overview page. */
   async history(userId: string) {
     const rows = await this.db
       .select()
@@ -124,7 +306,7 @@ export class AuthService {
       .where(eq(sessions.userId, userId))
       .orderBy(desc(sessions.createdAt))
       .limit(20);
-    const [current, ...rest] = rows;
+
     const fmt = (s: (typeof rows)[number]) => ({
       id: s.id,
       status: s.status,
@@ -134,6 +316,40 @@ export class AuthService {
       device: s.device,
       createdAt: s.createdAt,
     });
-    return { current: current ? fmt(current) : null, history: rows.map(fmt) };
+
+    const currentSuccess = rows.find((s) => s.status === 'success');
+    return { current: currentSuccess ? fmt(currentSuccess) : null, history: rows.map(fmt) };
+  }
+
+  /** Active refresh sessions of a user (security page). */
+  async activeSessions(userId: string) {
+    const rows = await this.db
+      .select({
+        id: authSessions.id,
+        ip: authSessions.ip,
+        device: authSessions.device,
+        createdAt: authSessions.createdAt,
+        lastUsedAt: authSessions.lastUsedAt,
+        expiresAt: authSessions.expiresAt,
+      })
+      .from(authSessions)
+      .where(and(eq(authSessions.userId, userId), isNull(authSessions.revokedAt), gt(authSessions.expiresAt, new Date())))
+      .orderBy(desc(authSessions.lastUsedAt))
+      .limit(50);
+    return rows;
+  }
+
+  async logoutAll(userId: string, ctx: ReqCtx): Promise<number> {
+    const n = await this.revokeAllForUser(userId);
+    await this.audit.record({
+      actorId: userId,
+      action: 'auth.logout_all',
+      targetType: 'user',
+      targetId: userId,
+      ip: ctx.ip,
+      userAgent: ctx.device,
+      meta: { revoked: n },
+    });
+    return n;
   }
 }
