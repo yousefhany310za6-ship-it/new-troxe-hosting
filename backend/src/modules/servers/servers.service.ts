@@ -1,4 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
+import { rm } from 'fs/promises';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { config } from '../../config/env';
 import { decryptEnv, encryptEnv, maskEnv } from '../../common/crypto';
@@ -11,6 +12,7 @@ import { DockerService } from './provisioning/docker.service';
 import { ProvisionerService, type ProvisionResult } from './provisioning/provisioner.service';
 import { runtimeImage, type Runtime } from './provisioning/images';
 import { CreateServerDto, UpdateServerDto } from './dto';
+import { backupDirFor, backupOwnerDir } from './backup-paths';
 
 const CONTROL_CHARS = /[\u0000-\u0008\u000B-\u001F\u007F]/g;
 
@@ -211,6 +213,10 @@ export class ServersService {
       volumeName: row.volumeName,
     });
 
+    // backup rows cascade with the server row, but archive files on disk do
+    // not — remove them so deleted servers (and their PII) leave nothing.
+    await rm(backupDirFor(ownerId, id), { recursive: true, force: true }).catch(() => undefined);
+
     // rows go away regardless; the reconciler GCs any resource that failed
     await this.db.delete(servers).where(and(eq(servers.id, id), eq(servers.ownerId, ownerId)));
 
@@ -313,6 +319,8 @@ export class ServersService {
       });
     }
     await this.db.delete(servers).where(eq(servers.ownerId, ownerId));
+    // backup files are not cascade-deleted — remove the whole owner tree.
+    await rm(backupOwnerDir(ownerId), { recursive: true, force: true }).catch(() => undefined);
     if (rows.length) this.log.log(`purged ${rows.length} sandbox(es) for user ${ownerId}`);
     return rows.length;
   }

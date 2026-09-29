@@ -5,10 +5,16 @@ import { DB, Db } from '../../db/db.module';
 import { servers } from '../../db/schema';
 import { DockerService } from './provisioning/docker.service';
 import { NetworkHardeningService } from './provisioning/network-hardening.service';
+import { ProvisionerService } from './provisioning/provisioner.service';
+import { runtimeImage } from './provisioning/images';
 import { BackupsService } from './backups.service';
 
 const GRACE_MS = 5 * 60 * 1000; // never GC a resource that is seconds old
 const STUCK_PROVISIONING_MS = 15 * 60 * 1000;
+// storage fence: re-check a server's disk usage at most once per hour, and
+// bound the work per tick so a large fleet never stalls the reconciler.
+const STORAGE_CHECK_INTERVAL_MS = 60 * 60 * 1000;
+const STORAGE_CHECKS_PER_TICK = 5;
 
 /**
  * Background reconciler — the source of truth is the database, Docker is
@@ -34,11 +40,13 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
   private busy = false;
   private tickCount = 0;
   private lastPingOk = true;
+  private lastStorageCheck = new Map<string, number>();
 
   constructor(
     @Inject(DB) private db: Db,
     private docker: DockerService,
     private hardening: NetworkHardeningService,
+    private provisioner: ProvisionerService,
     private backups: BackupsService,
   ) {}
 
@@ -70,6 +78,7 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
       this.tickCount++;
       await this.syncStatuses();
       if (recovered || this.tickCount % 5 === 0) await this.syncHardening();
+      await this.enforceStorage();
       await this.gcOrphans();
       await this.backups.createAutoIfDue();
     } catch (e) {
@@ -149,6 +158,57 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
         await this.hardening.apply(subnet, row.networkName, { quiet: true });
       } catch (e) {
         this.log.debug(`hardening sync ${row.id}: ${(e as Error).message}`);
+      }
+    }
+  }
+
+  /**
+   * Storage fence: volumes are plain Docker local volumes with no
+   * filesystem quota, so converge usage against the plan cap here. A server
+   * over quota is stopped and fenced to `error` (never silently deleted —
+   * the data stays until the owner frees space or upgrades, then starts).
+   * Staggered (hourly per server, bounded per tick) so fleet size never
+   * stalls the tick: each check spawns one short-lived `du` helper.
+   */
+  private async enforceStorage(): Promise<void> {
+    if (this.lastStorageCheck.size > 10_000) this.lastStorageCheck.clear();
+    const rows = await this.db
+      .select({
+        id: servers.id,
+        runtime: servers.runtime,
+        status: servers.status,
+        lastError: servers.lastError,
+        containerId: servers.containerId,
+        volumeName: servers.volumeName,
+        storageGb: servers.storageGb,
+      })
+      .from(servers);
+    const now = Date.now();
+    let checked = 0;
+    for (const row of rows) {
+      if (checked >= STORAGE_CHECKS_PER_TICK) break;
+      if (!row.volumeName || row.status === 'deleting' || row.status === 'provisioning') continue;
+      if (row.status === 'error' && /storage quota exceeded/i.test(row.lastError ?? '')) continue;
+      if (now - (this.lastStorageCheck.get(row.id) ?? 0) < STORAGE_CHECK_INTERVAL_MS) continue;
+      this.lastStorageCheck.set(row.id, now);
+      checked++;
+      try {
+        const used = await this.provisioner.volumeUsage(row.volumeName, runtimeImage(row.runtime).image);
+        if (used === null) continue;
+        const cap = row.storageGb * 1024 ** 3;
+        if (used > cap) {
+          if (row.containerId) await this.docker.stop(row.containerId).catch(() => undefined);
+          await this.db
+            .update(servers)
+            .set({
+              status: 'error',
+              lastError: `Storage quota exceeded (${(used / 1024 ** 3).toFixed(2)} GB used of ${row.storageGb} GB). Free space or upgrade your plan, then start the server.`,
+            })
+            .where(eq(servers.id, row.id));
+          this.log.warn(`storage fence: server ${row.id} stopped at ${used} bytes (cap ${cap})`);
+        }
+      } catch (e) {
+        this.log.debug(`storage check ${row.id}: ${(e as Error).message}`);
       }
     }
   }

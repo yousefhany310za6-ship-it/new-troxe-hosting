@@ -2,7 +2,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { mkdir, rm, stat } from 'fs/promises';
 import path from 'path';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import { config } from '../../config/env';
 import { AppError, Err } from '../../common/errors';
 import { ReqCtx } from '../../common/request-context';
@@ -11,6 +11,7 @@ import { backups, plans, servers, type Server } from '../../db/schema';
 import { AuditService } from '../audit/audit.module';
 import { DockerService } from './provisioning/docker.service';
 import { ServersService } from './servers.service';
+import { backupDirFor } from './backup-paths';
 
 /**
  * Volume backups: a `tar.gz` of the sandbox's /data, produced by a
@@ -32,7 +33,7 @@ export class BackupsService {
   ) {}
 
   private dirFor(ownerId: string, serverId: string): string {
-    return path.resolve(config.BACKUP_DIR, ownerId, serverId);
+    return backupDirFor(ownerId, serverId);
   }
 
   private fileFor(ownerId: string, serverId: string, backupId: string): string {
@@ -67,6 +68,24 @@ export class BackupsService {
       throw Err.quota('QUOTA_BACKUPS', 'Your plan does not include backup slots. Upgrade to keep backups.');
     if (existing.length >= slots)
       throw Err.quota('QUOTA_BACKUPS', `Your plan allows ${slots} backup(s). Delete one to make room.`);
+
+    // total backup bytes per owner — BACKUP_MAX_TOTAL_MB is a real cap, not
+    // a display value: reject before spending a helper run + disk on tar.
+    const ownedIds = (
+      await this.db.select({ id: servers.id }).from(servers).where(eq(servers.ownerId, ownerId))
+    ).map((r) => r.id);
+    if (ownedIds.length) {
+      const sizes = await this.db
+        .select({ sizeBytes: backups.sizeBytes })
+        .from(backups)
+        .where(inArray(backups.serverId, ownedIds));
+      const usedBytes = sizes.reduce((acc, r) => acc + (r.sizeBytes ?? 0), 0);
+      if (usedBytes >= config.BACKUP_MAX_TOTAL_MB * 1024 * 1024)
+        throw Err.quota(
+          'QUOTA_BACKUP_SPACE',
+          `Backup storage is full (${config.BACKUP_MAX_TOTAL_MB} MB). Delete old backups to make room.`,
+        );
+    }
 
     if (!this.docker.available)
       throw new AppError('DOCKER_UNAVAILABLE', 503, 'Container runtime is not available');
@@ -206,7 +225,8 @@ export class BackupsService {
       } catch (e) {
         const code = e instanceof AppError ? (e.getResponse() as { code?: string }).code : undefined;
         // quota exhaustion is expected — not an error worth waking anyone up
-        if (code !== 'QUOTA_BACKUPS') this.log.warn(`auto backup skipped for ${s.id}: ${(e as Error).message}`);
+        if (code !== 'QUOTA_BACKUPS' && code !== 'QUOTA_BACKUP_SPACE')
+          this.log.warn(`auto backup skipped for ${s.id}: ${(e as Error).message}`);
       }
     }
   }
