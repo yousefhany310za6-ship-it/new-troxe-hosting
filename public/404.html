@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <meta name="robots" content="noindex" />
+        <title>Page not found — Troxe Hosting</title>
+        <style>
+            html,
+            body {
+                margin: 0;
+                height: 100%;
+                background: #000;
+                color: #f4f4f5;
+                font-family: Inter, system-ui, -apple-system, sans-serif;
+            }
+        </style>
+        <script>
+            // Static hosts without rewrite rules serve this file for unknown
+            // paths. Hand the request to the SPA while keeping the clean URL:
+            // bounce the original path back as "/?/path" — the decode script in
+            // index.html restores it before the app boots, so BrowserRouter
+            // renders the right route (or the 404 page for truly missing URLs).
+            //
+            // The site root isn't known here (the browser URL is the *missing*
+            // path, not the folder 404.html lives in), so walk up from the
+            // requested path until index.html is found. That works at a domain
+            // root and inside a subfolder.
+            (function () {
+                var candidates = [];
+                var dir = window.location.pathname.replace(/[^/]*$/, '') || '/';
+
+                for (var i = 0; i < 6; i++) {
+                    candidates.push(dir);
+                    var next = dir.replace(/[^/]+\/?$/, '');
+                    dir = next === dir ? '' : next || '/';
+                }
+
+                var go = function (base) {
+                    var path = window.location.pathname;
+                    var search = window.location.search
+                        ? '&' + window.location.search.slice(1).replace(/&/g, '~and~')
+                        : '';
+                    window.location.replace(
+                        base + '?/' + path.slice(1) + search + window.location.hash
+                    );
+                };
+
+                var probe = function (i) {
+                    if (i >= candidates.length) return go('/');
+
+                    var base = candidates[i];
+                    fetch(base + 'index.html', { cache: 'no-store' })
+                        .then(function (res) {
+                            if (res.ok) go(base);
+                            else probe(i + 1);
+                        })
+                        .catch(function () {
+                            probe(i + 1);
+                        });
+                };
+
+                probe(0);
+            })();
+        </script>
+    </head>
+    <body>
+        <noscript>
+            <p style="text-align: center; padding: 40px">
+                Page not found. <a style="color: #fff" href="/">Back to Troxe Hosting</a>
+            </p>
+        </noscript>
+    </body>
+</html>

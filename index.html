@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Troxe Hosting — Bot &amp; App Hosting</title>
+    <link rel="icon" type="image/png" href="./favicon.png" />
+    <link rel="apple-touch-icon" href="./favicon.png" />
+    <meta name="description" content="Troxe Hosting — Discord, Telegram, Node.js, Bun, Python, PHP and static site hosting. Instant deployment, zero latency, 99.9% uptime." />
+    <meta name="theme-color" content="#000000" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Troxe Hosting" />
+    <meta property="og:title" content="Troxe Hosting — Easy Hosting for Everyone" />
+    <meta
+      property="og:description"
+      content="Discord, Telegram, Node.js, Bun, Python, PHP and static site hosting. Instant deployment, zero latency, 99.9% uptime."
+    />
+    <meta property="og:image" content="./og-image.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Troxe Hosting — Easy Hosting for Everyone" />
+    <meta
+      name="twitter:description"
+      content="Discord, Telegram, Node.js, Bun, Python, PHP and static site hosting. Instant deployment, zero latency, 99.9% uptime."
+    />
+    <meta name="twitter:image" content="./og-image.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      // Restore clean URLs after a static host's 404.html bounces an unknown
+      // path back as "/?/path". Runs before the app boots.
+      (function () {
+        var l = window.location;
+        if (l.search[1] === '/') {
+          var decoded = l.search
+            .slice(1)
+            .split('&')
+            .map(function (s) {
+              return s.replace(/~and~/g, '&');
+            });
+          var path = '/' + decoded.shift();
+          window.history.replaceState(
+            null,
+            '',
+            path + (decoded.length ? '?' + decoded.join('&') : '') + l.hash
+          );
+        }
+      })();
+    </script>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

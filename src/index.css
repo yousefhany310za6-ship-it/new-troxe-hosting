@@ -1,0 +1,257 @@
+/* ============================================================
+   Troxe Hosting — Tailwind v4 + shadcn/ui theme
+   Monochrome: pure black surfaces, hairline borders, white accent.
+   ============================================================ */
+
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+@custom-variant dark (&:is(.dark *));
+
+/* === Design tokens (shadcn/ui contract) === */
+:root {
+    --radius: 0.75rem;
+
+    --background: #000000;
+    --foreground: #f4f4f5;
+
+    --card: #000000;
+    --card-foreground: #f4f4f5;
+
+    --popover: #000000;
+    --popover-foreground: #f4f4f5;
+
+    --primary: #ffffff;
+    --primary-foreground: #000000;
+
+    --secondary: #0c0c0c;
+    --secondary-foreground: #f4f4f5;
+
+    --muted: #0c0c0c;
+    --muted-foreground: #a1a1aa;
+
+    --accent: #ffffff;
+    --accent-foreground: #000000;
+
+    --destructive: #ef4444;
+
+    --border: #1c1c1c;
+    --input: #1c1c1c;
+    --ring: #ffffff;
+
+    /* Site-specific extras */
+    --surface-hover: #0c0c0c;
+    --hairline: #1c1c1c;
+    --hairline-hover: #303030;
+    --ink-secondary: #a1a1aa;
+    --ink-muted: #71717a;
+    --veil: rgba(255, 255, 255, 0.06);
+}
+
+@theme inline {
+    --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+    --color-background: var(--background);
+    --color-foreground: var(--foreground);
+
+    --color-card: var(--card);
+    --color-card-foreground: var(--card-foreground);
+
+    --color-popover: var(--popover);
+    --color-popover-foreground: var(--popover-foreground);
+
+    --color-primary: var(--primary);
+    --color-primary-foreground: var(--primary-foreground);
+
+    --color-secondary: var(--secondary);
+    --color-secondary-foreground: var(--secondary-foreground);
+
+    --color-muted: var(--muted);
+    --color-muted-foreground: var(--muted-foreground);
+
+    --color-accent: var(--accent);
+    --color-accent-foreground: var(--accent-foreground);
+
+    --color-destructive: var(--destructive);
+
+    --color-border: var(--border);
+    --color-input: var(--input);
+    --color-ring: var(--ring);
+
+    --color-surface-hover: var(--surface-hover);
+    --color-hairline: var(--hairline);
+    --color-hairline-hover: var(--hairline-hover);
+    --color-ink-secondary: var(--ink-secondary);
+    --color-ink-muted: var(--ink-muted);
+    --color-veil: var(--veil);
+
+    /* Matches the original --transition on every interactive element */
+    --default-transition-duration: 300ms;
+    --default-transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+
+    /* Original radius scale: 8 / 12 / 16 / 24px */
+    --radius-sm: 0.5rem;
+    --radius-md: 0.75rem;
+    --radius-lg: 1rem;
+    --radius-xl: 1.5rem;
+
+    --animate-float: float 8s ease-in-out infinite;
+    --animate-float-reverse: float 8s ease-in-out infinite reverse;
+    --animate-blink: caret-blink 1s infinite;
+    --animate-beat: beat 2s ease-in-out infinite;
+}
+
+/* === Keyframes === */
+@keyframes float {
+    0%,
+    100% {
+        transform: translate(0, 0);
+    }
+    50% {
+        transform: translate(30px, -30px);
+    }
+}
+
+@keyframes caret-blink {
+    0%,
+    50% {
+        opacity: 1;
+    }
+    51%,
+    100% {
+        opacity: 0;
+    }
+}
+
+@keyframes beat {
+    0%,
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+    50% {
+        opacity: 0.5;
+        transform: scale(0.8);
+    }
+}
+
+/* === Base === */
+@layer base {
+    html {
+        scroll-behavior: smooth;
+        font-size: 16px;
+    }
+
+    body {
+        font-family: var(--font-sans);
+        background-color: var(--background);
+        color: var(--foreground);
+        line-height: 1.7;
+        overflow-x: hidden;
+        -webkit-font-smoothing: antialiased;
+    }
+
+    ::-webkit-scrollbar {
+        width: 8px;
+    }
+    ::-webkit-scrollbar-track {
+        background: var(--background);
+    }
+    ::-webkit-scrollbar-thumb {
+        background: var(--hairline);
+        border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+        background: var(--hairline-hover);
+    }
+}
+
+/* === Site utilities === */
+
+/* Replaces the old `.container` wrapper (max 1200px, 24px gutters) */
+@utility container-page {
+    margin-inline: auto;
+    max-width: 1200px;
+    padding-inline: 24px;
+}
+
+/* Replaces the old `section { padding: 96px 0 }` rule */
+@utility section-shell {
+    padding-block: 96px;
+    @media (max-width: 768px) {
+        padding-block: 64px;
+    }
+}
+
+@layer components {
+    /* White fading to grey — used for depth, never for colour */
+    .gradient-text {
+        color: var(--foreground);
+        font-weight: 900;
+    }
+
+    .grid-pattern {
+        background-image:
+            linear-gradient(rgba(255, 255, 255, 0.028) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(255, 255, 255, 0.028) 1px, transparent 1px);
+        background-size: 60px 60px;
+    }
+
+    /* Fades the decorative hero globe at the edges and keeps the middle band
+       (where the headline sits) readable. */
+    .hero-globe-mask {
+        -webkit-mask-image: radial-gradient(
+            circle at 50% 50%,
+            transparent 0%,
+            rgba(0, 0, 0, 0.25) 24%,
+            #000 46%,
+            #000 72%,
+            transparent 96%
+        );
+        mask-image: radial-gradient(
+            circle at 50% 50%,
+            transparent 0%,
+            rgba(0, 0, 0, 0.25) 24%,
+            #000 46%,
+            #000 72%,
+            transparent 96%
+        );
+    }
+
+    /* Hairline that brightens on hover (service cards, social links) */
+    .hairline-top::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 1px;
+        background: linear-gradient(
+            90deg,
+            transparent,
+            rgba(255, 255, 255, 0.25),
+            transparent
+        );
+        opacity: 0;
+        transition: opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .hairline-top:hover::before {
+        opacity: 1;
+    }
+
+    /* Scroll-in reveal (driven by the useReveal hook) */
+    .reveal {
+        opacity: 0;
+        transform: translateY(30px);
+        transition:
+            opacity 0.6s ease,
+            transform 0.6s ease;
+    }
+
+    .reveal.reveal-visible {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
