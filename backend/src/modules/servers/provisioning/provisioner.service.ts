@@ -49,8 +49,9 @@ const LABELS = (serverId: string, ownerId: string) => ({
  *   own persistent volume (chowned to the unprivileged runtime user)
  *   own container with the hardened policy from sandbox.ts
  *
- * Provisioning is transactional in spirit: any failure rolls back every
- * resource created so far, so no half-made network/volume is ever left behind.
+ * Provisioning is transactional in spirit: any failure rolls back only the
+ * resources THIS call created. A reused network/volume (holding live client
+ * data from a previous provision) is never deleted by rollback.
  */
 @Injectable()
 export class ProvisionerService {
@@ -87,6 +88,9 @@ export class ProvisionerService {
     const names = resourceNames(input.id);
     const labels = LABELS(input.id, input.ownerId);
     const partial: DestroyInput = { containerName: names.containerName, networkName: names.networkName, volumeName: names.volumeName };
+    // ownership flags: rollback may only delete what THIS call created —
+    // never a reused network/volume holding live client data.
+    const created = { network: false, volume: false };
 
     try {
       // 1. image (allowlisted) must exist before we create anything
@@ -94,6 +98,7 @@ export class ProvisionerService {
 
       // 2. private network for this server only (reused if it already exists)
       const network = await this.getOrCreateNetwork(names.networkName, labels);
+      created.network = network.created;
       partial.networkSubnet = network.subnet;
       if (network.created) await this.hardening.apply(network.subnet, names.networkName);
 
@@ -102,7 +107,7 @@ export class ProvisionerService {
       // docker normalizes an EMPTY volume dir to root:root 0755 while
       // preparing WorkingDir (/data) at create time, so the helper must
       // guarantee ownership + a non-empty dir first (see chownVolume).
-      await this.getOrCreateVolume(names.volumeName, labels);
+      await this.getOrCreateVolume(names.volumeName, labels).then((v) => (created.volume = v));
       await this.chownVolume(names.volumeName, runtime.image);
 
       // 4. the sandbox container itself (replaces any previous one)
@@ -139,9 +144,27 @@ export class ProvisionerService {
     } catch (e) {
       const message = e instanceof AppError ? e.message : `Provisioning failed: ${(e as Error).message}`;
       this.log.error(`rollback for ${names.containerName}: ${message}`);
-      const errors = await this.destroy(partial);
+      const errors = await this.rollbackProvision(partial, created);
       throw new AppError('PROVISION_FAILED', 502, errors.length ? `${message} (rollback errors: ${errors.join('; ')})` : message);
     }
+  }
+
+  /**
+   * Rollback for a failed provision: remove the just-created container (if
+   * any) plus ONLY the network/volume this call created. A reused volume
+   * holds live client data and a reused network may still be referenced —
+   * deleting either would be data loss, so they are always kept.
+   */
+  private async rollbackProvision(
+    partial: DestroyInput,
+    created: { network: boolean; volume: boolean },
+  ): Promise<string[]> {
+    return this.destroy({
+      containerId: partial.containerId,
+      containerName: partial.containerName,
+      ...(created.network ? { networkName: partial.networkName, networkSubnet: partial.networkSubnet } : {}),
+      ...(created.volume ? { volumeName: partial.volumeName } : {}),
+    });
   }
 
   /**
