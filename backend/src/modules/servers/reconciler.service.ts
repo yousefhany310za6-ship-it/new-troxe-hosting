@@ -18,6 +18,9 @@ const STUCK_PROVISIONING_MS = 15 * 60 * 1000;
  *    manual docker commands, OOM kills, …)
  *  • containers/networks/volumes labelled `troxe.managed` whose server row no
  *    longer exists are garbage collected (with the matching iptables rules)
+ *  • iptables hardening is converged back: netfilter rules (unlike Docker
+ *    networks) are lost on daemon/host restart, so every live server subnet
+ *    is re-applied every 5th tick and immediately after daemon recovery
  *  • servers stuck in `provisioning` are marked as errors
  *  • daily auto-backups run when due
  *
@@ -29,6 +32,8 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
   private timer: NodeJS.Timeout | null = null;
   private firstRun: NodeJS.Timeout | null = null;
   private busy = false;
+  private tickCount = 0;
+  private lastPingOk = true;
 
   constructor(
     @Inject(DB) private db: Db,
@@ -54,8 +59,17 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
     if (this.busy) return;
     this.busy = true;
     try {
-      if (!(await this.docker.ping())) return;
+      const pingOk = await this.docker.ping();
+      if (!pingOk) {
+        this.lastPingOk = false;
+        return;
+      }
+      // daemon was down and came back: DOCKER-USER was flushed, converge now
+      const recovered = !this.lastPingOk;
+      this.lastPingOk = true;
+      this.tickCount++;
       await this.syncStatuses();
+      if (recovered || this.tickCount % 5 === 0) await this.syncHardening();
       await this.gcOrphans();
       await this.backups.createAutoIfDue();
     } catch (e) {
@@ -111,6 +125,34 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * Convergence for netfilter state: re-apply (idempotent, quiet when
+   * nothing changes) every live server's hardening rules. Docker networks
+   * survive a daemon restart but DOCKER-USER/INPUT rules do not.
+   */
+  private async syncHardening(): Promise<void> {
+    const rows = await this.db
+      .select({ id: servers.id, networkName: servers.networkName, networkSubnet: servers.networkSubnet })
+      .from(servers);
+    for (const row of rows) {
+      try {
+        if (!row.networkName) continue;
+        let subnet = row.networkSubnet;
+        if (!subnet) {
+          const info = await this.docker.networkInfo(row.networkName).catch(() => null);
+          subnet = info?.subnet ?? '';
+        }
+        if (!subnet) {
+          this.log.debug(`hardening sync ${row.id}: subnet unknown, skipping`);
+          continue;
+        }
+        await this.hardening.apply(subnet, row.networkName, { quiet: true });
+      } catch (e) {
+        this.log.debug(`hardening sync ${row.id}: ${(e as Error).message}`);
+      }
+    }
+  }
+
   /** Removes managed docker resources whose server row is gone. */
   private async gcOrphans(): Promise<void> {
     const known = await this.db.select({ id: servers.id }).from(servers);
@@ -144,9 +186,8 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** Force a status refresh (admin/debug endpoint). */
+  /** Force a status refresh (admin/debug endpoint). Single-flight safe. */
   async refreshOnce(): Promise<void> {
-    this.busy = false;
     await this.tick();
   }
 }

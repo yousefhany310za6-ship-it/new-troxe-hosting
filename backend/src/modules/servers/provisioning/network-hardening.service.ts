@@ -30,14 +30,16 @@ const exec = promisify(execFile);
  * Rules are idempotent (`-C` before `-I`) and tagged with a comment so they
  * can be found and deleted when the sandbox is destroyed.
  *
- * Everything is best-effort: if iptables/nft is unavailable the API keeps
- * working and the failure is logged loudly (Docker's default isolation still
- * applies).
+ * Failure policy: this service reports success/failure and never throws —
+ * the CALLER decides. Provisioning fails closed in production (refuses to
+ * start an unhardened sandbox); the reconciler converges rules back after
+ * daemon/host restarts (netfilter state, unlike Docker networks, is lost).
  */
 @Injectable()
 export class NetworkHardeningService {
   private readonly log = new Logger(NetworkHardeningService.name);
   private probe: Promise<boolean> | null = null;
+  private probedAt = 0;
   private warned = false;
 
   private tag(name: string): string {
@@ -63,9 +65,14 @@ export class NetworkHardeningService {
       }));
   }
 
-  /** Lazy one-time check: iptables present + DOCKER-USER chain exists. */
+  /**
+   * Lazy check with a 60s TTL: iptables present + DOCKER-USER chain exists.
+   * A forever-cached probe goes stale in both directions (daemon restart
+   * recreates the chain after a failed probe, or drops it after a pass).
+   */
   private ensureAvailable(): Promise<boolean> {
-    if (!this.probe) {
+    if (!this.probe || Date.now() - this.probedAt > 60_000) {
+      this.probedAt = Date.now();
       this.probe = (async () => {
         if (!config.HARDEN_NETWORK) return false;
         const list = await this.iptables(['-L', 'DOCKER-USER', '-n']);
@@ -80,7 +87,7 @@ export class NetworkHardeningService {
   }
 
   /** Install the isolation rules for a freshly created sandbox network. */
-  async apply(subnet: string, networkName: string): Promise<boolean> {
+  async apply(subnet: string, networkName: string, opts: { quiet?: boolean } = {}): Promise<boolean> {
     if (!subnet) {
       this.log.warn(`no subnet for ${networkName} — skipping hardening`);
       return false;
@@ -89,6 +96,7 @@ export class NetworkHardeningService {
 
     const comment = this.tag(networkName);
     let applied = 0;
+    let inserted = 0;
 
     for (const dest of this.blockedDests) {
       const exists = await this.iptables(['-C', 'DOCKER-USER', '-s', subnet, '-d', dest, '-m', 'comment', '--comment', comment, '-j', 'DROP']);
@@ -97,17 +105,23 @@ export class NetworkHardeningService {
         continue;
       }
       const ins = await this.iptables(['-I', 'DOCKER-USER', '-s', subnet, '-d', dest, '-m', 'comment', '--comment', comment, '-j', 'DROP']);
-      if (ins.ok) applied++;
-      else if (!this.warned) this.log.warn(`could not install DROP ${dest}: ${ins.err}`);
+      if (ins.ok) {
+        applied++;
+        inserted++;
+      } else if (!this.warned) this.log.warn(`could not install DROP ${dest}: ${ins.err}`);
     }
 
     // host's own addresses (public IPs included) — skipped if unsupported
     const localRule = ['-s', subnet, '-m', 'addrtype', '--dst-type', 'LOCAL', '-m', 'comment', '--comment', comment, '-j', 'DROP'];
     const localExists = await this.iptables(['-C', 'DOCKER-USER', ...localRule]);
-    if (!localExists.ok) {
+    if (localExists.ok) {
+      applied++;
+    } else {
       const ins = await this.iptables(['-I', 'DOCKER-USER', ...localRule]);
-      if (ins.ok) applied++;
-      else this.log.warn(`host-local drop rule not installed: ${ins.err}`);
+      if (ins.ok) {
+        applied++;
+        inserted++;
+      } else this.log.warn(`host-local drop rule not installed: ${ins.err}`);
     }
 
     // INPUT chain: container → host traffic never reaches DOCKER-USER (it is
@@ -118,21 +132,29 @@ export class NetworkHardeningService {
       applied++;
     } else {
       const ins = await this.iptables(['-I', 'INPUT', ...inputRule]);
-      if (ins.ok) applied++;
-      else if (!this.warned) this.log.warn(`could not install INPUT drop: ${ins.err}`);
+      if (ins.ok) {
+        applied++;
+        inserted++;
+      } else if (!this.warned) this.log.warn(`could not install INPUT drop: ${ins.err}`);
     }
 
     if (applied === 0 && !this.warned) {
       this.warned = true;
       this.log.warn('network hardening rules could not be installed');
     }
-    this.log.log(`hardened ${networkName} (${subnet}) — ${applied} rules`);
+    // quiet mode (reconciler convergence): log only when rules changed.
+    if (!opts.quiet || inserted > 0) this.log.log(`hardened ${networkName} (${subnet}) — ${applied} rules (${inserted} new)`);
     return applied > 0;
   }
 
-  /** Remove every rule of a sandbox network (idempotent). */
+  /**
+   * Remove every rule of a sandbox network (idempotent). Deletion is
+   * attempted unconditionally — never gated on the availability probe, so a
+   * stale probe can never leak rules.
+   */
   async cleanup(subnet: string, networkName: string): Promise<void> {
-    if (!subnet || !(await this.ensureAvailable())) return;
+    if (!subnet) return;
+    await this.ensureAvailable().catch(() => false);
     const comment = this.tag(networkName);
 
     const targets = [...this.blockedDests.map((dest) => ['-s', subnet, '-d', dest]), ['-s', subnet, '-m', 'addrtype', '--dst-type', 'LOCAL']];

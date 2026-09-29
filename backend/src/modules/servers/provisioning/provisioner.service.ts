@@ -100,7 +100,14 @@ export class ProvisionerService {
       const network = await this.getOrCreateNetwork(names.networkName, labels);
       created.network = network.created;
       partial.networkSubnet = network.subnet;
-      if (network.created) await this.hardening.apply(network.subnet, names.networkName);
+      if (network.created) {
+        const hardened = await this.hardening.apply(network.subnet, names.networkName);
+        // fail closed in production: never start an unhardened sandbox
+        // (dev keeps best-effort so local work without iptables still runs).
+        if (!hardened && config.IS_PROD && config.HARDEN_NETWORK) {
+          throw new AppError('PROVISION_FAILED', 502, 'Network isolation could not be applied');
+        }
+      }
 
       // 3. persistent volume, owned by the unprivileged runtime user — this
       // runs before EVERY container create (not just on first creation):
