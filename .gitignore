@@ -13,6 +13,7 @@ backend/data/
 .env
 .env.*
 !.env.example
+!.env.prod.template
 
 # logs
 *.log

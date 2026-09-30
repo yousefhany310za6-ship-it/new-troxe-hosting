@@ -1,0 +1,98 @@
+version: '3.8'
+
+services:
+  # ---------------------------------------------------------
+  # PostgreSQL 16 — data persists in named volume
+  # ---------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: troxe-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: troxe
+    volumes:
+      - troxe-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d troxe"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - troxe-internal
+
+  # ---------------------------------------------------------
+  # API — host network + NET_ADMIN for iptables hardening
+  # ---------------------------------------------------------
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: troxe-api
+    restart: unless-stopped
+    # host network required: iptables rules must land in host netns
+    network_mode: "host"
+    cap_add:
+      - NET_ADMIN
+    # docker.sock for container management; gid mapped via group_add
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - troxe-backups:/app/data/backups
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@127.0.0.1:5432/troxe
+      - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
+      - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET}
+      - ENV_ENCRYPTION_KEY=${ENV_ENCRYPTION_KEY}
+      - HELPER_IMAGE=alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+      - ALLOWED_ORIGINS=https://${DOMAIN},https://www.${DOMAIN}
+      - FRONTEND_URLS=https://${DOMAIN},https://www.${DOMAIN}
+      - LOG_LEVEL=log
+    # run as uid 1000 (non-root); socket group added at runtime via deploy.sh
+    user: "1000:1000"
+    group_add:
+      - ${SOCK_GID}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3300/api/v1/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    networks:
+      - troxe-internal
+
+  # ---------------------------------------------------------
+  # Caddy — automatic HTTPS (Let's Encrypt), reverse proxy
+  # ---------------------------------------------------------
+  caddy:
+    image: caddy:2-alpine
+    container_name: troxe-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    environment:
+      - DOMAIN=${DOMAIN}
+      - API_DOMAIN=api.${DOMAIN}
+    depends_on:
+      - api
+    networks:
+      - troxe-internal
+
+volumes:
+  troxe-pgdata:
+  troxe-backups:
+  caddy-data:
+  caddy-config:
+
+networks:
+  troxe-internal:
+    driver: bridge
