@@ -50,8 +50,20 @@
 | M | تدقيق الحذف مكسور FK | ✅ مغلق | التسجيل قبل الحذف — صف موجود مثبت — `d04df60` |
 | M | آلة الحالة/انحراف update | ✅ مغلق | تقارب دائم + قفل — `144086c` |
 | M | reconciler متسلسل | ✅ مغلق جزئيًا | تجمع 8-way (كافٍ حتى ~8x؛ انتخاب قائد عند التعدد مستقبلًا) |
-| M | لوحة بلا حراسة (واجهة) | ⚠️ مفتوح | الواجهة ما زالت قالبًا غير مربوط — يُعالج عند الربط |
+| M | لوحة بلا حراسة (واجهة) | ✅ مغلق | React Query + Guards + WS real-time — `02cfb9d` |
 | L (19) | الدفعة كاملة | ✅ مغلق | `f3bbdd2` (TTL/JWT/rounds/uuid-pipe/ready/cookies/daemon-msgs/احتواء/LOG_LEVEL/handlers/dup-env/ملف ميت) |
+
+## إصلاحات إضافية بعد التدقيق (2026-09-30 continued)
+
+| # | العنصر | الحالة | التفاصيل |
+|---|---|---|---|
+| F-1 | WebSocket Gateway | ✅ مكتمل | `@nestjs/websockets` + `socket.io`، namespace `/ws`، ticket auth 30s |
+| F-2 | Real-time channels | ✅ مكتمل | `server:stats:{id}`, `server:logs:{id}`, `server:status:{id}`, `user:audit:{id}` |
+| F-3 | React Query integration | ✅ مكتمل | TanStack Query v5، devtools، cache/invalidation، stale-while-revalidate |
+| F-4 | Frontend Guards | ✅ مكتمل | `RequireAuth` (dashboard) + `GuestOnly` (signin/signup) |
+| F-5 | WebSocket client hook | ✅ مكتمل | `useWebSocket` مع auto-reconnect، channel subscriptions |
+| F-5 | Toast notifications | ✅ مكتمل | `sonner` للنجاح/الخطأ/المعلومات |
+| F-6 | Dashboard pages migrated | ✅ مكتمل | Overview، Servers، ServerDetail، Settings تستخدم React Query + WS |
 
 ## اكتشافات أثناء التنفيذ (لم تكن في التدقيق الأصلي — كلها مُصلحة)
 
@@ -67,6 +79,7 @@
 - **Security Status:** كان `Needs Significant Hardening` → الآن **Solid for current scale, harden-before-growth**: لا ثغرات تبعيات، العزل متقارب، الإبطال فوري، والمسارات المدمرة محمية. الباقي: أوراكل/اضمحلال القفل (تصميم)، IPv6 على مضيف الإنتاج (تحقق ميداني)، egress-allowlist (قرار منتج).
 - **Production Status:** كان `Not Ready` → الآن **Ready for controlled production** (نسخة واحدة موثقة، Dockerfile مثبت، 88/88، صفر ثغرات): يُطلق لمستخدمين حقيقيين مع مراقبة، وتُعالج بنود النمو (انتخاب قائد، Redis throttle، بروكسي egress) قبل التوسع الكبير.
 - **Maintainability:** تحسنت (توحيد التجزئة، `PlanPolicy` جزئيًا عبر الخطة الحية، حذف ملفين ميتين، أرقام مجمعة أكثر) — بقي: الخدمة الإلهية (`ServersService` ما زالت كبيرة) وصفر unit tests (التكاملية 88 تغطي، لكن منطقًا خالصًا يستحق وحدات).
+- **Frontend Integration:** ✅ **مكتملة** — React Query (caching/invalidation)، WebSocket real-time (stats/logs/status/audit)، Guards، Toast notifications. اللوحة مربوطة بالكامل بالـ API.
 
 ---
 
