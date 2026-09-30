@@ -1,7 +1,10 @@
-import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
+import { CanActivate, ExecutionContext, Inject, Injectable } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { eq } from 'drizzle-orm';
 import { config } from '../../config/env';
 import { Err } from '../../common/errors';
+import { DB, Db } from '../../db/db.module';
+import { users } from '../../db/schema';
 
 export interface ReqUser {
   sub: string;
@@ -16,9 +19,21 @@ export interface ReqUser {
  *  - `typ: 'access'` claim required so a refresh token can never be replayed
  *    as an access token even if someone mixes the secrets up
  */
+/**
+ * Validates the short-lived access token (Bearer header).
+ *  - dedicated secret (never the refresh one)
+ *  - `typ: 'access'` claim required so a refresh token can never be replayed
+ *    as an access token even if someone mixes the secrets up
+ *  - `v` (token version) must match the account: any explicit revocation
+ *    (password change, logout, logout-all) instantly kills outstanding
+ *    access tokens; intact refresh sessions transparently re-issue.
+ */
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
-  constructor(private jwt: JwtService) {}
+  constructor(
+    private jwt: JwtService,
+    @Inject(DB) private db: Db,
+  ) {}
 
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
     const req = ctx.switchToHttp().getRequest();
@@ -32,6 +47,14 @@ export class JwtAuthGuard implements CanActivate {
         algorithms: ['HS256'],
       });
       if (payload?.typ !== 'access' || typeof payload.sub !== 'string') throw new Error('bad typ');
+      // single indexed PK lookup: revocation + deleted-account containment.
+      const [u] = await this.db
+        .select({ id: users.id, tokenVersion: users.tokenVersion })
+        .from(users)
+        .where(eq(users.id, payload.sub))
+        .limit(1);
+      if (!u) throw new Error('user gone');
+      if (typeof payload.v !== 'number' || payload.v !== u.tokenVersion) throw new Error('revoked');
       req.user = {
         sub: payload.sub,
         sid: payload.sid ?? '',

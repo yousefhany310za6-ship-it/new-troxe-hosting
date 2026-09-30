@@ -9,6 +9,11 @@ export class UpdateProfileDto {
   @IsEmail({}, { message: 'EMAIL_INVALID' })
   @MaxLength(255)
   email!: string;
+
+  /** Required when (and only when) the email address changes. */
+  @IsOptional()
+  @MaxLength(128)
+  current?: string;
 }
 
 export class UpdatePasswordDto {
@@ -31,4 +36,11 @@ export class UpdateNotificationsDto {
   @IsOptional() @IsBoolean() restarts?: boolean;
   @IsOptional() @IsBoolean() invoices?: boolean;
   @IsOptional() @IsBoolean() marketing?: boolean;
+}
+
+export class DeleteAccountDto {
+  /** Destructive action: the current password must confirm it. */
+  @MinLength(1)
+  @MaxLength(128)
+  current!: string;
 }

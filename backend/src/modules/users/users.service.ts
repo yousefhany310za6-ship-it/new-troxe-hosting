@@ -7,7 +7,7 @@ import { users } from '../../db/schema';
 import { AuditService } from '../audit/audit.module';
 import { AuthService } from '../auth/auth.service';
 import { ServersService } from '../servers/servers.service';
-import { UpdateNotificationsDto, UpdatePasswordDto, UpdateProfileDto } from './dto';
+import { UpdateNotificationsDto, UpdatePasswordDto, UpdateProfileDto, DeleteAccountDto } from './dto';
 
 @Injectable()
 export class UsersService {
@@ -21,7 +21,7 @@ export class UsersService {
   ) {}
 
   private strip(u: typeof users.$inferSelect) {
-    const { passwordHash: _ph, failedLogins: _fl, lockedUntil: _lu, ...safe } = u;
+    const { passwordHash: _ph, failedLogins: _fl, lockedUntil: _lu, tokenVersion: _tv, ...safe } = u;
     return safe;
   }
 
@@ -33,6 +33,23 @@ export class UsersService {
 
   async updateProfile(userId: string, dto: UpdateProfileDto) {
     const email = dto.email.toLowerCase().trim();
+    const [existing] = await this.db.select().from(users).where(eq(users.id, userId)).limit(1);
+    if (!existing) throw Err.unauthorized('USER_GONE');
+
+    // an email change re-points recovery: it must be confirmed with the
+    // password (a stolen short-lived token alone cannot persist a hijack).
+    if (email !== existing.email) {
+      if (!dto.current || !(await verifyPassword(dto.current, existing.passwordHash))) {
+        await this.audit.record({
+          actorId: userId,
+          actorEmail: existing.email,
+          action: 'user.email.fail',
+          targetType: 'user',
+          targetId: userId,
+        });
+        throw new BadRequestException('WRONG_CURRENT_PASSWORD');
+      }
+    }
     try {
       const [u] = await this.db
         .update(users)
@@ -40,6 +57,16 @@ export class UsersService {
         .where(eq(users.id, userId))
         .returning();
       if (!u) throw Err.unauthorized('USER_GONE');
+      if (email !== existing.email) {
+        await this.audit.record({
+          actorId: userId,
+          actorEmail: email,
+          action: 'user.email.change',
+          targetType: 'user',
+          targetId: userId,
+          meta: { from: existing.email },
+        });
+      }
       return this.strip(u);
     } catch (e) {
       if ((e as { code?: string }).code === '23505') {
@@ -68,10 +95,16 @@ export class UsersService {
 
     await this.db
       .update(users)
-      .set({ passwordHash: await hashPassword(dto.next), passwordChangedAt: new Date(), failedLogins: 0, lockedUntil: null })
+      .set({
+        passwordHash: await hashPassword(dto.next),
+        passwordChangedAt: new Date(),
+        failedLogins: 0,
+        lockedUntil: null,
+      })
       .where(eq(users.id, userId));
 
-    // every existing refresh token becomes invalid immediately
+    // every existing session dies immediately: refresh rows are deleted AND
+    // the token generation is bumped (outstanding access tokens fail guard).
     const revoked = await this.auth.revokeAllForUser(userId);
     await this.audit.record({
       actorId: userId,
@@ -103,18 +136,31 @@ export class UsersService {
   /**
    * Full account deletion: destroy every sandbox first (a DB cascade would
    * otherwise orphan live containers/networks/volumes), then remove the row.
+   * Requires the current password: a transient stolen token must never be
+   * enough for the most destructive action.
    */
-  async deleteAccount(userId: string, ctx: { ip: string; userAgent?: string }) {
+  async deleteAccount(userId: string, dto: DeleteAccountDto, ctx: { ip: string; userAgent?: string }) {
     const [u] = await this.db.select().from(users).where(eq(users.id, userId)).limit(1);
     if (!u) throw Err.unauthorized('USER_GONE');
+    if (!(await verifyPassword(dto.current, u.passwordHash))) {
+      await this.audit.record({
+        actorId: userId,
+        actorEmail: u.email,
+        action: 'user.delete.fail',
+        targetType: 'user',
+        targetId: userId,
+        ip: ctx.ip,
+      });
+      throw new BadRequestException('WRONG_CURRENT_PASSWORD');
+    }
 
     // 1. stop & remove docker resources of every owned server
     const destroyed = await this.servers.purgeAllForUser(userId);
     // 2. revoke refresh sessions (also cascades login history)
     const revoked = await this.auth.revokeAllForUser(userId);
-    // 3. delete the account → cascades servers/backups/events rows
-    await this.db.delete(users).where(eq(users.id, userId));
-
+    // 3. audit BEFORE the row disappears: actor_id has ON DELETE SET NULL,
+    //    so recording after the delete violates the FK and is lost. Email
+    //    is preserved in actorEmail for forensics.
     await this.audit.record({
       actorId: userId,
       actorEmail: u.email,
@@ -124,6 +170,9 @@ export class UsersService {
       ip: ctx.ip,
       meta: { revokedSessions: revoked, destroyedServers: destroyed },
     });
+    // 4. delete the account → cascades servers/backups/events rows
+    await this.db.delete(users).where(eq(users.id, userId));
+
     this.log.log(`account ${u.email} deleted (${destroyed} sandboxes destroyed)`);
     return { ok: true };
   }

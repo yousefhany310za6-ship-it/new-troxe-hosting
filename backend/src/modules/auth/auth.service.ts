@@ -59,9 +59,12 @@ export class AuthService {
     return verifyPassword(plain, hash);
   }
 
-  private accessToken(user: { id: string; email: string; role: string }, sid: string): string {
+  private accessToken(
+    user: { id: string; email: string; role: string; tokenVersion: number },
+    sid: string,
+  ): string {
     return this.jwt.sign(
-      { sub: user.id, sid, email: user.email, role: user.role, typ: 'access' },
+      { sub: user.id, sid, email: user.email, role: user.role, typ: 'access', v: user.tokenVersion },
       { secret: config.JWT_ACCESS_SECRET, expiresIn: config.JWT_ACCESS_TTL, algorithm: 'HS256' },
     );
   }
@@ -86,7 +89,7 @@ export class AuthService {
     const [user] = await this.db
       .insert(users)
       .values({ name: dto.name.trim(), email, passwordHash: await this.hashPassword(dto.password) })
-      .returning({ id: users.id, name: users.name, email: users.email, role: users.role, passwordHash: users.passwordHash })
+      .returning({ id: users.id, name: users.name, email: users.email, role: users.role, passwordHash: users.passwordHash, tokenVersion: users.tokenVersion })
       .catch((e: { code?: string }) => {
         if (e?.code === '23505') throw Err.conflict('EMAIL_TAKEN', 'An account with this email already exists');
         throw e;
@@ -226,7 +229,10 @@ export class AuthService {
 
       return {
         kind: 'ok',
-        accessToken: this.accessToken({ id: user.id, email: user.email, role: user.role }, row.id),
+        accessToken: this.accessToken(
+          { id: user.id, email: user.email, role: user.role, tokenVersion: user.tokenVersion },
+          row.id,
+        ),
         refreshToken: `${row.id}.${secret}`,
         sessionId: row.id,
         expiresAt,
@@ -266,6 +272,12 @@ export class AuthService {
     const [row] = await this.db.select().from(authSessions).where(eq(authSessions.id, parsed.sid)).limit(1);
     if (!row) return;
     await this.db.delete(authSessions).where(eq(authSessions.familyId, row.familyId));
+    // kill outstanding access tokens too — other sessions transparently
+    // re-issue via their intact refresh tokens on next 401.
+    await this.db
+      .update(users)
+      .set({ tokenVersion: sql`token_version + 1` })
+      .where(eq(users.id, row.userId));
     await this.audit.record({
       actorId: row.userId,
       action: 'auth.logout',
@@ -278,6 +290,12 @@ export class AuthService {
 
   /** Used after a password change / "sign out everywhere". */
   async revokeAllForUser(userId: string): Promise<number> {
+    // bump the token generation first: outstanding access tokens die
+    // immediately, even before the rows below are gone.
+    await this.db
+      .update(users)
+      .set({ tokenVersion: sql`token_version + 1` })
+      .where(eq(users.id, userId));
     const rows = await this.db
       .delete(authSessions)
       .where(eq(authSessions.userId, userId))
@@ -288,7 +306,7 @@ export class AuthService {
   // ---- helpers --------------------------------------------------------------
 
   private async newRefreshSession(
-    user: { id: string; email: string; role: string },
+    user: { id: string; email: string; role: string; tokenVersion: number },
     ctx: ReqCtx,
   ): Promise<IssuedSession> {
     const secret = randomToken(32);

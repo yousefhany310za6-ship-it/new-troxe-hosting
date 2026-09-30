@@ -15,6 +15,13 @@
       "when": 1790726262482,
       "tag": "0001_fixed_silver_centurion",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790727155610,
+      "tag": "0002_tricky_jack_power",
+      "breakpoints": true
     }
   ]
 }

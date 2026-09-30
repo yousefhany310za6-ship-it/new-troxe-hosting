@@ -30,6 +30,13 @@ export const users = pgTable('users', {
   failedLogins: integer('failed_logins').default(0).notNull(),
   lockedUntil: timestamp('locked_until'),
   passwordChangedAt: timestamp('password_changed_at').defaultNow().notNull(),
+  /**
+   * Access-token generation. Embedded as `v` in every access JWT and checked
+   * by the guard: any explicit revocation (password change, logout,
+   * logout-all) bumps it, instantly killing all outstanding access tokens
+   * (clients transparently recover via their intact refresh sessions).
+   */
+  tokenVersion: integer('token_version').default(0).notNull(),
   notifyRestarts: boolean('notify_restarts').default(true).notNull(),
   notifyInvoices: boolean('notify_invoices').default(true).notNull(),
   notifyMarketing: boolean('notify_marketing').default(false).notNull(),
