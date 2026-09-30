@@ -7,12 +7,13 @@ import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './jwt.guard';
 import { WsTicketService } from './ws-ticket.service';
 import { WsAuthGuard } from './ws-auth.guard';
+import { AdminGuard } from './admin.guard';
 import { RealtimeGateway } from './realtime.gateway';
 
 @Module({
   imports: [JwtModule.register({ global: true, secret: config.JWT_ACCESS_SECRET }), AuditModule],
   controllers: [AuthController],
-  providers: [AuthService, JwtAuthGuard, WsTicketService, WsAuthGuard, RealtimeGateway],
-  exports: [AuthService, JwtAuthGuard, WsTicketService, RealtimeGateway],
+  providers: [AuthService, JwtAuthGuard, WsTicketService, WsAuthGuard, AdminGuard, RealtimeGateway],
+  exports: [AuthService, JwtAuthGuard, WsTicketService, AdminGuard, RealtimeGateway],
 })
 export class AuthModule {}

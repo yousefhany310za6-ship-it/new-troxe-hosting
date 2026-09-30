@@ -78,11 +78,11 @@ export class ServersService {
   }
 
   async requireOwned(ownerId: string, id: string): Promise<Server> {
-    const rows = await this.db
-      .select()
-      .from(servers)
-      .where(and(eq(servers.id, id), eq(servers.ownerId, ownerId)))
-      .limit(1);
+    // Admin bypass: 'admin' ownerId skips ownership check
+    const where = ownerId === 'admin'
+      ? eq(servers.id, id)
+      : and(eq(servers.id, id), eq(servers.ownerId, ownerId));
+    const rows = await this.db.select().from(servers).where(where).limit(1);
     if (!rows.length) throw Err.notFound('SERVER_NOT_FOUND');
     return rows[0];
   }
@@ -185,67 +185,82 @@ export class ServersService {
 
   // ---- update ---------------------------------------------------------------
 
-  async update(ownerId: string, id: string, dto: UpdateServerDto, ctx: ReqCtx) {
+  async update(
+    ownerId: string,
+    id: string,
+    dto: UpdateServerDto,
+    ctx: ReqCtx,
+    opts?: { actorId?: string; actorEmail?: string | null; isAdmin?: boolean },
+  ) {
     const row = await this.requireOwned(ownerId, id);
+    const isAdmin = opts?.isAdmin ?? ownerId === 'admin';
+    const actorId = opts?.actorId ?? ownerId;
     const release = await this.acquire(id);
     try {
-    if (row.status === 'deleting') throw Err.conflict('SERVER_DELETING', 'Server is being deleted');
-    const patch: Partial<typeof servers.$inferInsert> = {};
-    let rebuild = false;
+      if (row.status === 'deleting') throw Err.conflict('SERVER_DELETING', 'Server is being deleted');
+      const patch: Partial<typeof servers.$inferInsert> = {};
+      let rebuild = false;
 
-    if (dto.name !== undefined && dto.name !== row.name) patch.name = dto.name;
-    if (dto.startup !== undefined && dto.startup !== row.startup) {
-      patch.startup = this.cleanStartup(dto.startup);
-      rebuild = true;
-    }
-    if (dto.env !== undefined) {
-      const env = this.cleanEnv(dto.env);
-      patch.envEncrypted = env.length ? encryptEnv(env) : null;
-      rebuild = true;
-    }
-    if (dto.autoRestart !== undefined && dto.autoRestart !== row.autoRestart) {
-      patch.autoRestart = dto.autoRestart;
-      rebuild = true; // restart policy is baked into the container config
-    }
-    if (dto.autoBackup !== undefined) patch.autoBackup = dto.autoBackup;
+      if (dto.name !== undefined && dto.name !== row.name) patch.name = dto.name;
+      if (dto.startup !== undefined && dto.startup !== row.startup) {
+        patch.startup = this.cleanStartup(dto.startup);
+        rebuild = true;
+      }
+      if (dto.env !== undefined) {
+        const env = this.cleanEnv(dto.env);
+        // toPublic masks values (••••) — a masked value sent back means
+        // "keep the stored one", never "store bullets". Without this, any
+        // settings save would silently destroy all secrets.
+        const prev = row.envEncrypted ? this.safeDecrypt(row.envEncrypted) : [];
+        const prevMap = new Map(prev.map((e) => [e.k, e.v]));
+        for (const e of env) {
+          if (/^•+$/.test(e.v) && prevMap.has(e.k)) e.v = prevMap.get(e.k)!;
+        }
+        patch.envEncrypted = env.length ? encryptEnv(env) : null;
+        rebuild = true;
+      }
+      if (dto.autoRestart !== undefined && dto.autoRestart !== row.autoRestart) {
+        patch.autoRestart = dto.autoRestart;
+        rebuild = true; // restart policy is baked into the container config
+      }
+      if (dto.autoBackup !== undefined) patch.autoBackup = dto.autoBackup;
 
-    if (!Object.keys(patch).length) return this.toPublic(row);
+      if (!Object.keys(patch).length) return this.toPublic(row);
 
-    const [updated] = await this.db
-      .update(servers)
-      .set({ ...patch, updatedAt: new Date() })
-      .where(and(eq(servers.id, id), eq(servers.ownerId, ownerId)))
-      .returning()
-      .catch((e: { code?: string }) => {
-        if (e?.code === '23505') throw Err.conflict('SERVER_NAME_TAKEN', 'You already have a server with this name');
-        throw e;
+      const where = isAdmin ? eq(servers.id, id) : and(eq(servers.id, id), eq(servers.ownerId, ownerId));
+      const [updated] = await this.db
+        .update(servers)
+        .set({ ...patch, updatedAt: new Date() })
+        .where(where)
+        .returning()
+        .catch((e: { code?: string }) => {
+          if (e?.code === '23505') throw Err.conflict('SERVER_NAME_TAKEN', 'You already have a server with this name');
+          throw e;
+        });
+
+      if (rebuild) {
+        const wasRunning = updated.containerId ? (await this.docker.inspect(updated.containerId))?.running ?? false : false;
+        await this.rebuild(updated, wasRunning).catch(async (e: Error) => {
+          await this.markError(updated.id, e.message);
+          throw e;
+        });
+      }
+
+      await this.event(updated.id, ownerId, 'update', {
+        fields: Object.keys(patch),
+        rebuilt: rebuild,
       });
-
-    if (rebuild) {
-      // env/startup/restart-policy changes require a fresh container. Always
-      // converge (even with no containerId: record-only or vanished
-      // containers get provisioned now instead of silently diverging).
-      const wasRunning = updated.containerId ? (await this.docker.inspect(updated.containerId))?.running ?? false : false;
-      await this.rebuild(updated, wasRunning).catch(async (e: Error) => {
-        await this.markError(updated.id, e.message);
-        throw e;
+      await this.audit.record({
+        actorId,
+        actorEmail: opts?.actorEmail ?? null,
+        action: 'server.update',
+        targetType: 'server',
+        targetId: updated.id,
+        ip: ctx.ip,
+        userAgent: ctx.device,
+        meta: { fields: Object.keys(patch), isAdmin },
       });
-    }
-
-    await this.event(updated.id, ownerId, 'update', {
-      fields: Object.keys(patch),
-      rebuilt: rebuild,
-    });
-    await this.audit.record({
-      actorId: ownerId,
-      action: 'server.update',
-      targetType: 'server',
-      targetId: updated.id,
-      ip: ctx.ip,
-      userAgent: ctx.device,
-      meta: { fields: Object.keys(patch) },
-    });
-    return this.toPublic(await this.requireOwned(ownerId, id));
+      return this.toPublic(await this.requireOwned(ownerId, id));
     } finally {
       release();
     }
@@ -255,36 +270,39 @@ export class ServersService {
 
   async remove(ownerId: string, id: string, ctx: ReqCtx) {
     const row = await this.requireOwned(ownerId, id);
+    const isAdmin = ownerId === 'admin';
     const release = await this.acquire(id);
     try {
-    await this.db.update(servers).set({ status: 'deleting' }).where(eq(servers.id, id)).catch(() => undefined);
+      await this.db.update(servers).set({ status: 'deleting' }).where(eq(servers.id, id)).catch(() => undefined);
 
-    const errors = await this.provisioner.destroy({
-      containerId: row.containerId,
-      containerName: row.containerName,
-      networkName: row.networkName,
-      networkSubnet: row.networkSubnet,
-      volumeName: row.volumeName,
-    });
+      const errors = await this.provisioner.destroy({
+        containerId: row.containerId,
+        containerName: row.containerName,
+        networkName: row.networkName,
+        networkSubnet: row.networkSubnet,
+        volumeName: row.volumeName,
+      });
 
-    // backup rows cascade with the server row, but archive files on disk do
-    // not — remove them so deleted servers (and their PII) leave nothing.
-    await rm(backupDirFor(ownerId, id), { recursive: true, force: true }).catch(() => undefined);
+      // backup rows cascade with the server row, but archive files on disk do
+      // not — remove them so deleted servers (and their PII) leave nothing.
+      const backupOwner = isAdmin ? row.ownerId : ownerId;
+      await rm(backupDirFor(backupOwner, id), { recursive: true, force: true }).catch(() => undefined);
 
-    // rows go away regardless; the reconciler GCs any resource that failed
-    await this.db.delete(servers).where(and(eq(servers.id, id), eq(servers.ownerId, ownerId)));
+      // rows go away regardless; the reconciler GCs any resource that failed
+      const where = isAdmin ? eq(servers.id, id) : and(eq(servers.id, id), eq(servers.ownerId, ownerId));
+      await this.db.delete(servers).where(where);
 
-    await this.audit.record({
-      actorId: ownerId,
-      action: 'server.delete',
-      targetType: 'server',
-      targetId: id,
-      ip: ctx.ip,
-      userAgent: ctx.device,
-      meta: { name: row.name, cleanupErrors: errors.length },
-    });
-    this.log.log(`server ${row.name} (${id}) deleted by ${ownerId}; cleanup errors: ${errors.length}`);
-    return { ok: true, cleanupErrors: errors };
+      await this.audit.record({
+        actorId: ownerId,
+        action: 'server.delete',
+        targetType: 'server',
+        targetId: id,
+        ip: ctx.ip,
+        userAgent: ctx.device,
+        meta: { name: row.name, cleanupErrors: errors.length, isAdmin },
+      });
+      this.log.log(`server ${row.name} (${id}) deleted by ${ownerId}; cleanup errors: ${errors.length}`);
+      return { ok: true, cleanupErrors: errors };
     } finally {
       release();
     }

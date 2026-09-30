@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Check, Loader2, Server as ServerIcon } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
-import { apiPost } from '@/lib/api.js';
+import { apiGet, apiPost } from '@/lib/api.js';
 
 const RUNTIME_OPTS = [
     { value: 'Node.js', label: 'Node.js', hint: 'LTS (20.x)' },
@@ -18,7 +18,7 @@ const inputClass =
 const actionBtn =
     'inline-flex items-center gap-1.5 rounded-md border border-hairline bg-veil px-3 py-1.5 text-[0.8rem] font-semibold text-ink-secondary transition hover:border-hairline-hover hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40';
 
-export default function CreateServer() {
+export default function CreateServer({ adminMode = false }) {
     const navigate = useNavigate();
     const [name, setName] = useState('');
     const [runtime, setRuntime] = useState('Node.js');
@@ -28,6 +28,19 @@ export default function CreateServer() {
     const [autoBackup, setAutoBackup] = useState(true);
     const [msg, setMsg] = useState({ text: '', ok: true });
     const [creating, setCreating] = useState(false);
+    // admin mode: the owner is required and explicit — never silently the admin
+    const [ownerSearch, setOwnerSearch] = useState('');
+    const [ownerOptions, setOwnerOptions] = useState([]);
+    const [ownerId, setOwnerId] = useState('');
+
+    const searchOwners = async (term) => {
+        setOwnerSearch(term);
+        if (term.trim().length < 2) { setOwnerOptions([]); return; }
+        try {
+            const res = await apiGet(`/admin/users?search=${encodeURIComponent(term.trim())}&limit=5`);
+            setOwnerOptions(res.data ?? []);
+        } catch { setOwnerOptions([]); }
+    };
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -43,20 +56,27 @@ export default function CreateServer() {
             setMsg({ text: 'Startup command is required.', ok: false });
             return;
         }
+        if (adminMode && !ownerId) {
+            setMsg({ text: 'Please select the owning user first.', ok: false });
+            return;
+        }
         setCreating(true);
         setMsg({ text: '', ok: true });
         try {
             const filteredEnv = env.filter(r => r.k.trim() && r.v.trim());
-            const res = await apiPost('/servers', {
+            const payload = {
                 name: name.trim(),
                 runtime,
                 startup: startup.trim(),
                 env: filteredEnv,
                 autoRestart,
                 autoBackup,
-            });
+            };
+            const res = adminMode
+                ? await apiPost('/admin/servers', { ...payload, ownerId })
+                : await apiPost('/servers', payload);
             setMsg({ text: 'Server created. Provisioning…', ok: true });
-            setTimeout(() => navigate(`/dashboard/servers/${res.id}`), 1000);
+            setTimeout(() => navigate(adminMode ? '/admin/servers' : `/dashboard/servers/${res.id}`), 1000);
         } catch (err) {
             setMsg({ text: err.message, ok: false });
         } finally {
@@ -64,19 +84,21 @@ export default function CreateServer() {
         }
     };
 
+    const backTo = adminMode ? '/admin/servers' : '/dashboard/servers';
+
     return (
         <div className="flex flex-col gap-6">
             <Link
-                to="/dashboard/servers"
+                to={backTo}
                 className="inline-flex w-fit items-center gap-1.5 text-[0.85rem] font-semibold text-ink-secondary transition hover:text-foreground"
             >
-                <ArrowLeft className="size-4" /> All servers
+                <ArrowLeft className="size-4" /> {adminMode ? 'All servers' : 'All servers'}
             </Link>
 
             <div>
-                <h1 className="text-[1.6rem] font-extrabold tracking-tight">New server</h1>
+                <h1 className="text-[1.6rem] font-extrabold tracking-tight">{adminMode ? 'New server for user' : 'New server'}</h1>
                 <p className="mt-1 text-[0.92rem] text-ink-secondary">
-                    Configure and provision a new sandbox.
+                    {adminMode ? 'Quotas apply to the owner\u2019s plan, not yours.' : 'Configure and provision a new sandbox.'}
                 </p>
             </div>
 
@@ -85,6 +107,33 @@ export default function CreateServer() {
             )}
 
             <form onSubmit={handleSubmit} className="rounded-xl border border-hairline bg-card p-6 space-y-6">
+                {adminMode && (
+                    <label className="flex flex-col gap-1.5 text-[0.85rem] font-semibold">
+                        Owning user (required)
+                        <input
+                            value={ownerSearch}
+                            onChange={(e) => searchOwners(e.target.value)}
+                            placeholder="Type 2+ letters of name or email…"
+                            className={inputClass}
+                            disabled={creating}
+                        />
+                        {ownerOptions.length > 0 && (
+                            <div className="overflow-hidden rounded-xl border border-hairline">
+                                {ownerOptions.map((o) => (
+                                    <button
+                                        key={o.id}
+                                        type="button"
+                                        onClick={() => { setOwnerId(o.id); setOwnerSearch(`${o.name} <${o.email}>`); setOwnerOptions([]); }}
+                                        className={cn('block w-full px-4 py-2 text-left font-mono text-[0.82rem] transition hover:bg-veil', ownerId === o.id && 'bg-veil')}
+                                    >
+                                        {o.name} &lt;{o.email}&gt;
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                        {ownerId && <p className="font-mono text-[0.72rem] text-emerald-400">owner: {ownerId}</p>}
+                    </label>
+                )}
                 <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
                     <label className="flex flex-col gap-1.5 text-[0.85rem] font-semibold">
                         Server name
@@ -208,7 +257,7 @@ export default function CreateServer() {
                         {creating ? 'Provisioning…' : 'Create server'}
                     </button>
                     <Link
-                        to="/dashboard/servers"
+                        to={backTo}
                         className="text-[0.88rem] font-semibold text-ink-secondary hover:text-foreground hover:underline hover:underline-offset-4"
                     >
                         Cancel

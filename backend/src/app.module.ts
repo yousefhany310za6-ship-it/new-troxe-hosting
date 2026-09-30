@@ -5,6 +5,7 @@ import { config } from './config/env';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { RequestContextInterceptor } from './common/interceptors/request-context.interceptor';
 import { DbModule } from './db/db.module';
+import { AdminModule } from './modules/admin/admin.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { HealthModule } from './modules/health/health.module';
@@ -27,6 +28,7 @@ import { UsersModule } from './modules/users/users.module';
     ServersModule,
     PlansModule,
     HealthModule,
+    AdminModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

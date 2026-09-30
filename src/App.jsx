@@ -29,6 +29,16 @@ const ServerDetail = lazy(() => import('./pages/dashboard/ServerDetail.jsx'));
 const CreateServer = lazy(() => import('./pages/dashboard/CreateServer.jsx'));
 const Settings = lazy(() => import('./pages/dashboard/Settings.jsx'));
 
+// Admin console (role === 'admin', guarded by AdminGuard).
+const AdminGuard = lazy(() => import('./components/AdminGuard.jsx'));
+const AdminLayout = lazy(() => import('./pages/admin/AdminLayout.jsx'));
+const AdminOverview = lazy(() => import('./pages/admin/Overview.jsx'));
+const AdminUsers = lazy(() => import('./pages/admin/Users.jsx'));
+const AdminUserDetail = lazy(() => import('./pages/admin/UserDetail.jsx'));
+const AdminServers = lazy(() => import('./pages/admin/Servers.jsx'));
+const AdminPlans = lazy(() => import('./pages/admin/Plans.jsx'));
+const AdminAudit = lazy(() => import('./pages/admin/Audit.jsx'));
+
 // The WebGL globe (cobe) is only needed on the 404 route, so it stays out of
 // the landing page bundle.
 const NotFoundPage = lazy(() => import('./pages/NotFoundPage.jsx'));
@@ -58,6 +68,17 @@ export default function App() {
                             <Route path="servers/new" element={<CreateServer />} />
                             <Route path="servers/:id" element={<ServerDetail />} />
                             <Route path="settings" element={<Settings />} />
+                        </Route>
+                        <Route element={<AdminGuard />}>
+                            <Route path="/admin" element={<AdminLayout />}>
+                                <Route index element={<AdminOverview />} />
+                                <Route path="users" element={<AdminUsers />} />
+                                <Route path="users/:id" element={<AdminUserDetail />} />
+                                <Route path="servers" element={<AdminServers />} />
+                                <Route path="servers/new" element={<CreateServer adminMode />} />
+                                <Route path="plans" element={<AdminPlans />} />
+                                <Route path="audit" element={<AdminAudit />} />
+                            </Route>
                         </Route>
                     </Route>
                     {/* Any unknown URL renders the Cosmic 404 page */}
