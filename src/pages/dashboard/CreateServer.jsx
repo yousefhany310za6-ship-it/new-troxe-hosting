@@ -1,15 +1,15 @@
-import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Check, Loader2, Server as ServerIcon } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { apiGet, apiPost } from '@/lib/api.js';
 
 const RUNTIME_OPTS = [
-    { value: 'Node.js', label: 'Node.js', hint: 'LTS (20.x)' },
-    { value: 'Python', label: 'Python', hint: '3.11 slim' },
-    { value: 'Bun', label: 'Bun', hint: '1.2.x' },
-    { value: 'PHP', label: 'PHP', hint: '8.3 CLI' },
+    { value: 'Node.js', label: 'Node.js', hint: 'LTS (20.x)', defaultStartup: 'node index.js' },
+    { value: 'Python', label: 'Python', hint: '3.11 slim', defaultStartup: 'python main.py' },
+    { value: 'Bun', label: 'Bun', hint: '1.2.x', defaultStartup: 'bun run index.js' },
+    { value: 'PHP', label: 'PHP', hint: '8.3 CLI', defaultStartup: 'php index.php' },
 ];
 
 const inputClass =
@@ -20,6 +20,7 @@ const actionBtn =
 
 export default function CreateServer({ adminMode = false }) {
     const navigate = useNavigate();
+    const [searchParams] = useSearchParams();
     const [name, setName] = useState('');
     const [runtime, setRuntime] = useState('Node.js');
     const [startup, setStartup] = useState('');
@@ -32,6 +33,22 @@ export default function CreateServer({ adminMode = false }) {
     const [ownerSearch, setOwnerSearch] = useState('');
     const [ownerOptions, setOwnerOptions] = useState([]);
     const [ownerId, setOwnerId] = useState('');
+
+    const runtimeDefault = RUNTIME_OPTS.find((o) => o.value === runtime)?.defaultStartup ?? '';
+
+    // ?owner=<id> e.g. from the user-detail page — skip the picker entirely
+    useEffect(() => {
+        if (!adminMode) return;
+        const preset = searchParams.get('owner');
+        if (!preset) return;
+        (async () => {
+            try {
+                const u = await apiGet(`/admin/users/${preset}`);
+                setOwnerId(u.id);
+                setOwnerSearch(`${u.name} <${u.email}>`);
+            } catch { /* invalid id — fall back to picker */ }
+        })();
+    }, []);
 
     const searchOwners = async (term) => {
         setOwnerSearch(term);
@@ -52,10 +69,7 @@ export default function CreateServer({ adminMode = false }) {
             setMsg({ text: 'Name must be 3-32 lowercase letters, digits, or dashes.', ok: false });
             return;
         }
-        if (!startup.trim()) {
-            setMsg({ text: 'Startup command is required.', ok: false });
-            return;
-        }
+        // startup is optional — the backend falls back to the runtime default
         if (adminMode && !ownerId) {
             setMsg({ text: 'Please select the owning user first.', ok: false });
             return;
@@ -67,11 +81,11 @@ export default function CreateServer({ adminMode = false }) {
             const payload = {
                 name: name.trim(),
                 runtime,
-                startup: startup.trim(),
                 env: filteredEnv,
                 autoRestart,
                 autoBackup,
             };
+            if (startup.trim()) payload.startup = startup.trim();
             const res = adminMode
                 ? await apiPost('/admin/servers', { ...payload, ownerId })
                 : await apiPost('/servers', payload);
@@ -168,12 +182,12 @@ export default function CreateServer({ adminMode = false }) {
                     <input
                         value={startup}
                         onChange={(e) => setStartup(e.target.value)}
-                        placeholder="node server.js"
+                        placeholder={runtimeDefault}
                         className={cn(inputClass, 'font-mono')}
                         disabled={creating}
                     />
                     <p className="text-[0.75rem] text-ink-muted">
-                        The command that starts your application. Must stay in foreground.
+                        Optional — defaults to <span className="font-mono">{runtimeDefault}</span>. Must stay in foreground.
                     </p>
                 </label>
 

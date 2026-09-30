@@ -109,7 +109,15 @@ export default function AdminUserDetail() {
             </div>
 
             <div className="rounded-xl border border-hairline bg-card p-6">
-                <h2 className="text-[1.05rem] font-bold">Servers ({servers?.pagination.total ?? '—'})</h2>
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                    <h2 className="text-[1.05rem] font-bold">Servers ({servers?.pagination.total ?? '—'})</h2>
+                    <Link
+                        to={`/admin/servers/new?owner=${user.id}`}
+                        className="inline-flex items-center gap-2 rounded-full bg-white px-5 py-2 text-[0.83rem] font-bold text-black transition hover:bg-gray-200"
+                    >
+                        + New server for this user
+                    </Link>
+                </div>
                 <div className="mt-3 flex flex-col divide-y divide-hairline">
                     {(servers?.data ?? []).map((s) => (
                         <div key={s.id} className="flex items-center gap-3 py-2.5">

@@ -212,7 +212,7 @@ function SignUp1({
               </div>
             )}
             {success && !error && (
-              <div className="text-sm text-emerald-400">Account created! (Demo)</div>
+              <div className="text-sm text-emerald-400">Account created!</div>
             )}
             <button
               type="submit"

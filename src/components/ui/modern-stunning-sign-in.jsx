@@ -60,7 +60,7 @@ function SignIn1({ className, onSignIn, onGoogleSignIn, onDiscordSignIn, brandNa
     if (onSignIn) {
       onSignIn({ email, password });
     }
-    // Demo auth — head to the dashboard after a beat so the success shows.
+    // Head to the dashboard after a beat so the success shows.
     setTimeout(() => navigate("/dashboard"), 900);
   };
 
@@ -133,7 +133,7 @@ function SignIn1({ className, onSignIn, onGoogleSignIn, onDiscordSignIn, brandNa
               </div>
             )}
             {success && !error && (
-              <div className="text-sm text-emerald-400">Sign in successful! (Demo)</div>
+              <div className="text-sm text-emerald-400">Sign in successful!</div>
             )}
             <button
               type="submit"
