@@ -19,6 +19,7 @@ const CONTROL_CHARS = /[\u0000-\u0008\u000B-\u001F\u007F]/g;
 @Injectable()
 export class ServersService {
   private readonly log = new Logger(ServersService.name);
+  private readonly locks = new Map<string, Promise<void>>();
 
   constructor(
     @Inject(DB) private db: Db,
@@ -26,6 +27,35 @@ export class ServersService {
     private docker: DockerService,
     private audit: AuditService,
   ) {}
+
+  /**
+   * Per-server async mutex (single instance owns Docker + iptables, so an
+   * in-process lock is sufficient). Lifecycle / update / remove / restore
+   * on the SAME server serialize; different servers proceed in parallel.
+   * Without this, double-click reinstall races destroy-then-provision and
+   * the loser's persist overwrites the winner's containerId (orphans +
+   * phantom `error` state), or one flow deletes a volume mid-chown.
+   *
+   * Usage: `const release = await this.acquire(id); try { ... } finally { release(); }`
+   * Public so BackupsService.restore (stop + rewrite /data) joins the lock.
+   */
+  async acquire(serverId: string): Promise<() => void> {
+    const prev = this.locks.get(serverId) ?? Promise.resolve();
+    let done!: () => void;
+    const gate = new Promise<void>((resolve) => (done = resolve));
+    const chained = prev.catch(() => undefined).then(() => gate);
+    this.locks.set(serverId, chained);
+    await prev.catch(() => undefined);
+    return () => {
+      done();
+      if (this.locks.get(serverId) === chained) this.locks.delete(serverId);
+    };
+  }
+
+  /** Owner-scoped status write for sibling services (restore fencing). */
+  async setStatus(id: string, patch: Partial<typeof servers.$inferInsert>): Promise<void> {
+    await this.setField(id, patch);
+  }
 
   // ---- reads ----------------------------------------------------------------
 
@@ -151,6 +181,9 @@ export class ServersService {
 
   async update(ownerId: string, id: string, dto: UpdateServerDto, ctx: ReqCtx) {
     const row = await this.requireOwned(ownerId, id);
+    const release = await this.acquire(id);
+    try {
+    if (row.status === 'deleting') throw Err.conflict('SERVER_DELETING', 'Server is being deleted');
     const patch: Partial<typeof servers.$inferInsert> = {};
     let rebuild = false;
 
@@ -182,9 +215,11 @@ export class ServersService {
         throw e;
       });
 
-    if (rebuild && updated.containerId) {
-      // env/startup/restart-policy changes require a fresh container
-      const wasRunning = (await this.docker.inspect(updated.containerId))?.running ?? false;
+    if (rebuild) {
+      // env/startup/restart-policy changes require a fresh container. Always
+      // converge (even with no containerId: record-only or vanished
+      // containers get provisioned now instead of silently diverging).
+      const wasRunning = updated.containerId ? (await this.docker.inspect(updated.containerId))?.running ?? false : false;
       await this.rebuild(updated, wasRunning).catch(async (e: Error) => {
         await this.markError(updated.id, e.message);
         throw e;
@@ -205,12 +240,17 @@ export class ServersService {
       meta: { fields: Object.keys(patch) },
     });
     return this.toPublic(await this.requireOwned(ownerId, id));
+    } finally {
+      release();
+    }
   }
 
   // ---- delete ---------------------------------------------------------------
 
   async remove(ownerId: string, id: string, ctx: ReqCtx) {
     const row = await this.requireOwned(ownerId, id);
+    const release = await this.acquire(id);
+    try {
     await this.db.update(servers).set({ status: 'deleting' }).where(eq(servers.id, id)).catch(() => undefined);
 
     const errors = await this.provisioner.destroy({
@@ -239,6 +279,9 @@ export class ServersService {
     });
     this.log.log(`server ${row.name} (${id}) deleted by ${ownerId}; cleanup errors: ${errors.length}`);
     return { ok: true, cleanupErrors: errors };
+    } finally {
+      release();
+    }
   }
 
   // ---- lifecycle ------------------------------------------------------------
@@ -246,6 +289,9 @@ export class ServersService {
   async lifecycle(ownerId: string, id: string, action: 'start' | 'stop' | 'restart' | 'reinstall', ctx: ReqCtx) {
     let row = await this.requireOwned(ownerId, id);
     const actor = { actorId: ownerId, targetType: 'server', targetId: id, ip: ctx.ip, userAgent: ctx.device };
+    const release = await this.acquire(id);
+    try {
+    if (row.status === 'deleting') throw Err.conflict('SERVER_DELETING', 'Server is being deleted');
 
     if (action === 'reinstall') {
       await this.db.update(servers).set({ status: 'restarting', lastError: null }).where(eq(servers.id, id));
@@ -311,6 +357,9 @@ export class ServersService {
       await this.markError(id, (e as Error).message);
       await this.event(id, ownerId, `${action}_error`, { error: (e as Error).message.slice(0, 300) });
       throw Err.unavailable('DOCKER_ERROR', `Could not ${action} the server`);
+    }
+    } finally {
+      release();
     }
   }
 

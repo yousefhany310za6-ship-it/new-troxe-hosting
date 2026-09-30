@@ -311,6 +311,12 @@ export class DockerService {
    * Runs a short-lived container with `NetworkMode: none` and tight limits.
    * Used for volume maintenance only — never for client code.
    */
+  /**
+   * Runs a short-lived helper. `captureLogs` switches the log driver from
+   * `none` to a tiny capped json-file — REQUIRED whenever the caller parses
+   * `out` (log-driver `none` containers expose no stdout at all, so without
+   * this flag `out` is always empty and parsers silently see nothing).
+   */
   async runHelper(opts: {
     image: string;
     cmd: string[];
@@ -318,6 +324,7 @@ export class DockerService {
     user?: string;
     timeoutMs?: number;
     memoryMb?: number;
+    captureLogs?: boolean;
   }): Promise<HelperResult> {
     const d = this.d();
     const timeout = opts.timeoutMs ?? 60_000;
@@ -344,15 +351,18 @@ export class DockerService {
           NanoCpus: 1_000_000_000,
           PidsLimit: 64,
           RestartPolicy: { Name: 'no' },
-          LogConfig: { Type: 'none', Config: {} },
+          LogConfig: opts.captureLogs
+            ? { Type: 'json-file', Config: { 'max-size': '1m', 'max-file': '1' } }
+            : { Type: 'none', Config: {} },
         },
       };
       container = await d.createContainer(createOpts as any);
       await withTimeout(container.start(), 15_000, 'helper start');
       const res: any = await withTimeout(container.wait(), timeout, 'helper wait');
-      const logs: any = await container
-        .logs({ stdout: true, stderr: true, tail: 500 })
-        .catch(() => Buffer.alloc(0));
+      // NOTE: with LogConfig `none` the daemon keeps no stdout — out is ''.
+      const logs: any = opts.captureLogs
+        ? await container.logs({ stdout: true, stderr: true, tail: 500 }).catch(() => Buffer.alloc(0))
+        : Buffer.alloc(0);
       const out = logs ? decodeDockerLogs(Buffer.isBuffer(logs) ? logs : Buffer.from(logs)) : '';
       return { code: res?.StatusCode ?? 1, out };
     } finally {

@@ -247,6 +247,7 @@ export class ProvisionerService {
         binds: [`${volumeName}:/data`],
         user: '0:0',
         timeoutMs: 30_000,
+        captureLogs: true, // out is parsed below — log-driver `none` yields ''
       });
       const n = Number.parseInt(res.out.trim().split('\n').pop() ?? '', 10);
       return Number.isFinite(n) ? n : null;

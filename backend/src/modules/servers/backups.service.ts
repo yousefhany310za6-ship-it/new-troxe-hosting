@@ -7,9 +7,11 @@ import { config } from '../../config/env';
 import { AppError, Err } from '../../common/errors';
 import { ReqCtx } from '../../common/request-context';
 import { DB, Db } from '../../db/db.module';
-import { backups, plans, servers, type Server } from '../../db/schema';
+import { backups, plans, servers, users, type Server } from '../../db/schema';
 import { AuditService } from '../audit/audit.module';
 import { DockerService } from './provisioning/docker.service';
+import { ProvisionerService } from './provisioning/provisioner.service';
+import { runtimeImage } from './provisioning/images';
 import { ServersService } from './servers.service';
 import { backupDirFor } from './backup-paths';
 
@@ -28,6 +30,7 @@ export class BackupsService {
   constructor(
     @Inject(DB) private db: Db,
     private docker: DockerService,
+    private provisioner: ProvisionerService,
     private serversSvc: ServersService,
     private audit: AuditService,
   ) {}
@@ -123,6 +126,7 @@ export class BackupsService {
         user: '0:0',
         timeoutMs: 120_000,
         memoryMb: 512,
+        captureLogs: true, // failure diagnostics come from out
       });
       if (res.code !== 0) throw new Error(res.out.slice(0, 300) || `tar exited ${res.code}`);
 
@@ -168,7 +172,17 @@ export class BackupsService {
     return { ok: true };
   }
 
-  /** Restore stops the sandbox, unpacks the archive and leaves it stopped. */
+  /**
+   * Restore stops the sandbox, unpacks the archive and restores the prior
+   * running state. Guardrails (all learned from incident-class bugs):
+   *  - runs inside the per-server lock: no lifecycle/update can interleave
+   *  - best-effort pre-restore safety backup (rollback net for a bad archive)
+   *  - storage check: archive size + current usage must fit the plan cap
+   *  - tar runs `--no-same-owner --no-same-permissions` and every symlink is
+   *    purged after unpack (a hostile archive's `x -> /etc` + `x/passwd`
+   *    would otherwise write outside /data as root)
+   *  - prior online state is restored (was: always left offline + DB drift)
+   */
   async restore(ownerId: string, serverId: string, backupId: string, ctx?: ReqCtx) {
     const server = await this.serversSvc.requireOwned(ownerId, serverId);
     const [row] = await this.db
@@ -180,33 +194,93 @@ export class BackupsService {
     if (row.status !== 'ready') throw Err.invalid('BACKUP_NOT_READY', 'Backup is not ready');
     if (!this.docker.available) throw new AppError('DOCKER_UNAVAILABLE', 503, 'Container runtime is not available');
 
-    if (server.containerId) await this.docker.stop(server.containerId);
+    const release = await this.serversSvc.acquire(serverId);
+    try {
+      const wasOnline = server.containerId
+        ? (await this.docker.inspect(server.containerId).catch(() => null))?.running ?? false
+        : false;
 
-    await this.docker.ensureImage(config.HELPER_IMAGE);
-    const res = await this.docker.runHelper({
-      image: config.HELPER_IMAGE,
-      cmd: [`tar -xzf /backup/${path.basename(row.storageKey)} -C /data && chown -R 1000:1000 /data && chmod 750 /data`],
-      binds: [`${server.volumeName}:/data`, `${path.dirname(row.storageKey)}:/backup:ro`],
-      user: '0:0',
-      timeoutMs: 120_000,
-      memoryMb: 512,
-    });
-    if (res.code !== 0) throw new AppError('RESTORE_FAILED', 502, `Restore failed: ${res.out.slice(0, 300)}`);
+      // safety net first (best effort: quota-full accounts still restore)
+      let safetyBackupId: string | null = null;
+      try {
+        const existing = await this.db.select({ id: backups.id }).from(backups).where(eq(backups.serverId, serverId));
+        if ((await this.backupSlots(server)) > existing.length) {
+          const sb = await this.create(ownerId, serverId, { name: `pre-restore-${new Date().toISOString().slice(0, 19)}` });
+          safetyBackupId = sb.id;
+        }
+      } catch {
+        safetyBackupId = null;
+      }
 
-    await this.audit.record({
-      actorId: ownerId,
-      action: 'server.backup.restore',
-      targetType: 'server',
-      targetId: serverId,
-      ip: ctx?.ip,
-      meta: { backupId },
-    });
-    return { ok: true, status: 'offline' };
+      // storage check: current usage + archive bytes must fit the plan cap
+      const used = await this.provisioner.volumeUsage(server.volumeName ?? '', runtimeImage(server.runtime).image);
+      const cap = server.storageGb * 1024 ** 3;
+      if (used !== null && used + (row.sizeBytes ?? 0) > cap)
+        throw Err.quota('QUOTA_STORAGE', 'Not enough storage headroom to unpack this backup. Free space or upgrade.');
+
+      if (server.containerId) await this.docker.stop(server.containerId);
+
+      await this.docker.ensureImage(config.HELPER_IMAGE);
+      const res = await this.docker.runHelper({
+        image: config.HELPER_IMAGE,
+        cmd: [
+          [
+            'set -e',
+            `tar --no-same-owner --no-same-permissions -xzf /backup/${path.basename(row.storageKey)} -C /data`,
+            'SYMS=$(find /data -type l | wc -l)',
+            'if [ "$SYMS" -gt 0 ]; then find /data -type l -delete; fi',
+            'echo "symlinks_removed=$SYMS"',
+            'chown -R 1000:1000 /data && chmod 750 /data',
+          ].join('\n'),
+        ],
+        binds: [`${server.volumeName}:/data`, `${path.dirname(row.storageKey)}:/backup:ro`],
+        user: '0:0',
+        timeoutMs: 120_000,
+        memoryMb: 512,
+        captureLogs: true, // symlinks_removed count + failure diagnostics
+      });
+      if (res.code !== 0) {
+        await this.serversSvc.setStatus(serverId, { status: 'error', lastError: 'Restore failed — data may be partial' });
+        throw new AppError('RESTORE_FAILED', 502, `Restore failed: ${res.out.slice(0, 300)}`);
+      }
+      const symlinksRemoved = Number(/symlinks_removed=(\d+)/.exec(res.out)?.[1] ?? 0);
+
+      let status: 'online' | 'offline' = 'offline';
+      if (wasOnline && server.containerId) {
+        await this.docker.start(server.containerId).catch(() => undefined);
+        const state = await this.docker.inspect(server.containerId).catch(() => null);
+        status = state?.running ? 'online' : 'offline';
+      }
+      await this.serversSvc.setStatus(serverId, { status, lastError: null });
+
+      await this.audit.record({
+        actorId: ownerId,
+        action: 'server.backup.restore',
+        targetType: 'server',
+        targetId: serverId,
+        ip: ctx?.ip,
+        meta: { backupId, wasOnline, status, safetyBackupId, symlinksRemoved },
+      });
+      return { ok: true, status, safetyBackupId, symlinksRemoved };
+    } finally {
+      release();
+    }
   }
 
+  /**
+   * Backup slots come from the owner's LIVE account plan — same source as
+   * server creation. The snapshot `servers.plan_id` records provisioned
+   * resources (display), but authorization must follow the account: otherwise
+   * a downgraded user keeps pro backup slots on old servers forever.
+   */
   private async backupSlots(server: Server): Promise<number> {
-    if (!server.planId) return 0;
-    const [plan] = await this.db.select().from(plans).where(eq(plans.id, server.planId)).limit(1);
+    const [owner] = await this.db
+      .select({ planId: users.planId })
+      .from(users)
+      .where(eq(users.id, server.ownerId))
+      .limit(1);
+    if (!owner?.planId) return 0;
+    const [plan] = await this.db.select().from(plans).where(eq(plans.id, owner.planId)).limit(1);
     return plan?.maxBackupSlots ?? 0;
   }
 
