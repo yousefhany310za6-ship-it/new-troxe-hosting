@@ -1,4 +1,4 @@
-import { Logger, ValidationPipe, VersioningType } from '@nestjs/common';
+import { Logger, ValidationPipe, VersioningType, type LogLevel as NestLogLevel } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
@@ -6,8 +6,25 @@ import { AppModule } from './app.module';
 import { config } from './config/env';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 
+/** Nest log levels at/above the configured LOG_LEVEL. */
+const LOG_LEVELS: NestLogLevel[] = (() => {
+  const order: NestLogLevel[] = ['verbose', 'debug', 'log', 'warn', 'error', 'fatal'];
+  return order.slice(order.indexOf(config.LOG_LEVEL as NestLogLevel));
+})();
+
+// last-resort crash handlers: Node 22 throws on unhandled rejections, so
+// without these a single missed `await` kills the process with no log line.
+process.on('unhandledRejection', (reason) => {
+  new Logger('UnhandledRejection').error(reason instanceof Error ? reason.stack : String(reason));
+});
+process.on('uncaughtException', (err) => {
+  new Logger('UncaughtException').fatal(err instanceof Error ? err.stack : String(err));
+  process.exit(1);
+});
+
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, { abortOnError: false });
+  // fail fast when a provider cannot initialize (never serve "healthy" deaf)
+  const app = await NestFactory.create(AppModule, { abortOnError: true, logger: LOG_LEVELS });
 
   app.setGlobalPrefix('api');
   app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });

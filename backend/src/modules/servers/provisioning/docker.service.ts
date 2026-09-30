@@ -294,7 +294,7 @@ export class DockerService {
     if (!this.docker) return '';
     try {
       const buf: Buffer = await withTimeout(
-        this.d().getContainer(id).logs({ stdout: true, stderr: true, tail: Math.min(tail, 2000), timestamps: false }),
+        this.d().getContainer(id).logs({ stdout: true, stderr: true, tail: Math.min(Math.max(tail || 200, 1), 2000), timestamps: false }),
         10_000,
         'container logs',
       );

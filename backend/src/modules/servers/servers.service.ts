@@ -166,13 +166,16 @@ export class ServersService {
       });
       return this.toPublic(updated);
     } catch (e) {
-      const message = (e as Error).message.slice(0, 500);
+      // client-facing state stays generic (daemon internals aid recon);
+      // the raw error is in server logs + requestId-correlated access line.
+      const detail = (e as Error).message;
+      this.log.error(`provision ${row.id} failed: ${detail.slice(0, 500)}`);
       await this.db
         .update(servers)
-        .set({ status: 'error', lastError: message })
+        .set({ status: 'error', lastError: 'Provisioning failed' })
         .where(eq(servers.id, row.id))
         .catch(() => undefined);
-      await this.event(row.id, ownerId, 'provision_error', { error: message });
+      await this.event(row.id, ownerId, 'provision_error', { error: 'Provisioning failed' });
       throw e;
     }
   }
@@ -492,13 +495,16 @@ export class ServersService {
     const seen = new Set<string>();
     for (const { k, v } of env) {
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(k)) throw Err.invalid('ENV_KEY_INVALID', `Invalid variable name: ${k}`);
+      // duplicates are rejected, not silently first-wins: a typo'd second
+      // entry otherwise vanishes and the client debugs a phantom value.
+      if (seen.has(k)) throw Err.invalid('ENV_DUP_KEY', `Duplicate variable: ${k}`);
       const value = String(v).slice(0, 5000);
       total += k.length + value.length;
       if (total > 64 * 1024) throw Err.invalid('ENV_TOO_LARGE', 'Combined environment size exceeds 64KB');
       seen.add(k);
       out.push({ k, v: value });
     }
-    return [...seen].map((k) => out.find((e) => e.k === k)!);
+    return out;
   }
 
   private safeDecrypt(payload: string): EnvVar[] {

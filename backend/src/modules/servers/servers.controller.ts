@@ -5,6 +5,7 @@ import { ctxOf } from '../../common/request-context';
 import { CurrentUser } from '../auth/current-user';
 import { JwtAuthGuard, type ReqUser } from '../auth/jwt.guard';
 import { BackupsService } from './backups.service';
+import { ParseUuidPipe } from '../../common/pipes/uuid.pipe';
 import { CreateServerDto, UpdateServerDto } from './dto';
 import { ServerOwnerGuard } from './server-owner.guard';
 import { ServersService } from './servers.service';
@@ -33,40 +34,40 @@ export class ServersController {
 
   @Get(':id')
   @UseGuards(ServerOwnerGuard)
-  getOne(@Param('id') id: string, @CurrentUser() u: ReqUser) {
+  getOne(@Param('id', ParseUuidPipe) id: string, @CurrentUser() u: ReqUser) {
     return this.svc.getOne(u.sub, id);
   }
 
   @Patch(':id')
   @UseGuards(ServerOwnerGuard)
-  update(@Param('id') id: string, @Body() dto: UpdateServerDto, @CurrentUser() u: ReqUser, @Req() req: Request) {
+  update(@Param('id', ParseUuidPipe) id: string, @Body() dto: UpdateServerDto, @CurrentUser() u: ReqUser, @Req() req: Request) {
     return this.svc.update(u.sub, id, dto, ctxOf(req));
   }
 
   @Delete(':id')
   @UseGuards(ServerOwnerGuard)
-  remove(@Param('id') id: string, @CurrentUser() u: ReqUser, @Req() req: Request) {
+  remove(@Param('id', ParseUuidPipe) id: string, @CurrentUser() u: ReqUser, @Req() req: Request) {
     return this.svc.remove(u.sub, id, ctxOf(req));
   }
 
   @Post(':id/start')
   @HttpCode(202)
   @UseGuards(ServerOwnerGuard)
-  start(@Param('id') id: string, @CurrentUser() u: ReqUser, @Req() req: Request) {
+  start(@Param('id', ParseUuidPipe) id: string, @CurrentUser() u: ReqUser, @Req() req: Request) {
     return this.svc.lifecycle(u.sub, id, 'start', ctxOf(req));
   }
 
   @Post(':id/stop')
   @HttpCode(202)
   @UseGuards(ServerOwnerGuard)
-  stop(@Param('id') id: string, @CurrentUser() u: ReqUser, @Req() req: Request) {
+  stop(@Param('id', ParseUuidPipe) id: string, @CurrentUser() u: ReqUser, @Req() req: Request) {
     return this.svc.lifecycle(u.sub, id, 'stop', ctxOf(req));
   }
 
   @Post(':id/restart')
   @HttpCode(202)
   @UseGuards(ServerOwnerGuard)
-  restart(@Param('id') id: string, @CurrentUser() u: ReqUser, @Req() req: Request) {
+  restart(@Param('id', ParseUuidPipe) id: string, @CurrentUser() u: ReqUser, @Req() req: Request) {
     return this.svc.lifecycle(u.sub, id, 'restart', ctxOf(req));
   }
 
@@ -75,7 +76,7 @@ export class ServersController {
   @HttpCode(202)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @UseGuards(ServerOwnerGuard)
-  reinstall(@Param('id') id: string, @CurrentUser() u: ReqUser, @Req() req: Request) {
+  reinstall(@Param('id', ParseUuidPipe) id: string, @CurrentUser() u: ReqUser, @Req() req: Request) {
     return this.svc.lifecycle(u.sub, id, 'reinstall', ctxOf(req));
   }
 
@@ -83,20 +84,20 @@ export class ServersController {
 
   @Get(':id/stats')
   @UseGuards(ServerOwnerGuard)
-  stats(@Param('id') id: string, @CurrentUser() u: ReqUser) {
+  stats(@Param('id', ParseUuidPipe) id: string, @CurrentUser() u: ReqUser) {
     return this.svc.stats(u.sub, id);
   }
 
   @Get(':id/usage')
   @UseGuards(ServerOwnerGuard)
-  usage(@Param('id') id: string, @CurrentUser() u: ReqUser) {
+  usage(@Param('id', ParseUuidPipe) id: string, @CurrentUser() u: ReqUser) {
     return this.svc.usage(u.sub, id);
   }
 
   @Get(':id/logs')
   @UseGuards(ServerOwnerGuard)
   logs(
-    @Param('id') id: string,
+    @Param('id', ParseUuidPipe) id: string,
     @CurrentUser() u: ReqUser,
     @Query('tail', new DefaultValuePipe(200), ParseIntPipe) tail: number,
   ) {
@@ -107,7 +108,7 @@ export class ServersController {
 
   @Get(':id/backups')
   @UseGuards(ServerOwnerGuard)
-  listBackups(@Param('id') id: string, @CurrentUser() u: ReqUser) {
+  listBackups(@Param('id', ParseUuidPipe) id: string, @CurrentUser() u: ReqUser) {
     return this.backups.list(u.sub, id);
   }
 
@@ -115,15 +116,15 @@ export class ServersController {
   @HttpCode(201)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @UseGuards(ServerOwnerGuard)
-  createBackup(@Param('id') id: string, @CurrentUser() u: ReqUser, @Req() req: Request) {
+  createBackup(@Param('id', ParseUuidPipe) id: string, @CurrentUser() u: ReqUser, @Req() req: Request) {
     return this.backups.create(u.sub, id, { type: 'manual' }, ctxOf(req));
   }
 
   @Delete(':id/backups/:backupId')
   @UseGuards(ServerOwnerGuard)
   deleteBackup(
-    @Param('id') id: string,
-    @Param('backupId') backupId: string,
+    @Param('id', ParseUuidPipe) id: string,
+    @Param('backupId', ParseUuidPipe) backupId: string,
     @CurrentUser() u: ReqUser,
     @Req() req: Request,
   ) {
@@ -135,8 +136,8 @@ export class ServersController {
   @Throttle({ default: { limit: 3, ttl: 60_000 } })
   @UseGuards(ServerOwnerGuard)
   restoreBackup(
-    @Param('id') id: string,
-    @Param('backupId') backupId: string,
+    @Param('id', ParseUuidPipe) id: string,
+    @Param('backupId', ParseUuidPipe) backupId: string,
     @CurrentUser() u: ReqUser,
     @Req() req: Request,
   ) {

@@ -39,6 +39,19 @@ export class BackupsService {
     return backupDirFor(ownerId, serverId);
   }
 
+  /**
+   * Defense in depth: storageKey/dir come from OUR rows (parameterized
+   * queries), but a corrupted/migrated row must never turn into an
+   * arbitrary host delete or container bind. Assert containment under
+   * BACKUP_DIR/<owner>/<server>/ before any rm/mount.
+   */
+  private assertContained(ownerId: string, serverId: string, p: string, what: string): void {
+    const base = backupDirFor(ownerId, serverId) + path.sep;
+    const resolved = path.resolve(p);
+    if (resolved !== base.slice(0, -1) && !resolved.startsWith(base))
+      throw Err.invalid('BACKUP_PATH', `${what} is outside backup storage`);
+  }
+
   private fileFor(ownerId: string, serverId: string, backupId: string): string {
     return path.join(this.dirFor(ownerId, serverId), `${backupId}.tar.gz`);
   }
@@ -144,9 +157,10 @@ export class BackupsService {
       return { id, name: row.name, sizeBytes: size, status: 'ready', createdAt: row.createdAt };
     } catch (e) {
       const message = (e as Error).message.slice(0, 500);
-      await this.db.update(backups).set({ status: 'failed', error: message }).where(eq(backups.id, id));
+      this.log.warn(`backup ${id} for server ${serverId} failed: ${message}`);
+      await this.db.update(backups).set({ status: 'failed', error: 'Backup failed' }).where(eq(backups.id, id));
       await rm(file, { force: true }).catch(() => undefined);
-      throw new AppError('BACKUP_FAILED', 502, `Backup failed: ${message}`);
+      throw new AppError('BACKUP_FAILED', 502, 'Backup failed');
     }
   }
 
@@ -159,6 +173,7 @@ export class BackupsService {
       .limit(1);
     if (!row) throw Err.notFound('BACKUP_NOT_FOUND');
 
+    this.assertContained(ownerId, serverId, row.storageKey, 'backup archive');
     await rm(row.storageKey, { force: true }).catch(() => undefined);
     await this.db.delete(backups).where(eq(backups.id, backupId));
     await this.audit.record({
@@ -193,6 +208,7 @@ export class BackupsService {
     if (!row) throw Err.notFound('BACKUP_NOT_FOUND');
     if (row.status !== 'ready') throw Err.invalid('BACKUP_NOT_READY', 'Backup is not ready');
     if (!this.docker.available) throw new AppError('DOCKER_UNAVAILABLE', 503, 'Container runtime is not available');
+    this.assertContained(ownerId, serverId, path.dirname(row.storageKey), 'backup directory');
 
     const release = await this.serversSvc.acquire(serverId);
     try {
@@ -241,7 +257,8 @@ export class BackupsService {
       });
       if (res.code !== 0) {
         await this.serversSvc.setStatus(serverId, { status: 'error', lastError: 'Restore failed — data may be partial' });
-        throw new AppError('RESTORE_FAILED', 502, `Restore failed: ${res.out.slice(0, 300)}`);
+        this.log.warn(`restore ${backupId} for server ${serverId} failed: ${res.out.slice(0, 300)}`);
+        throw new AppError('RESTORE_FAILED', 502, 'Restore failed');
       }
       const symlinksRemoved = Number(/symlinks_removed=(\d+)/.exec(res.out)?.[1] ?? 0);
 

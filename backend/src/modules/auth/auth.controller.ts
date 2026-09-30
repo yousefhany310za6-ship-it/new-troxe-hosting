@@ -19,6 +19,8 @@ const cookieOpts = {
   maxAge: config.JWT_REFRESH_TTL_SEC * 1000,
 };
 
+const clearOpts = { path: '/', httpOnly: true, secure: config.IS_PROD, sameSite: 'lax' as const };
+
 const authThrottle = {
   default: { limit: config.AUTH_RATE_LIMIT_MAX, ttl: config.RATE_LIMIT_WINDOW_MS },
 };
@@ -61,7 +63,7 @@ export class AuthController {
       res.cookie(COOKIE, out.refreshToken, cookieOpts);
       return { accessToken: out.accessToken, expiresAt: out.expiresAt };
     } catch (e) {
-      res.clearCookie(COOKIE, { path: '/' });
+      res.clearCookie(COOKIE, clearOpts);
       throw e;
     }
   }
@@ -70,7 +72,7 @@ export class AuthController {
   @HttpCode(204)
   async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     await this.auth.logout(req.cookies?.[COOKIE], ctxOf(req));
-    res.clearCookie(COOKIE, { path: '/' });
+    res.clearCookie(COOKIE, clearOpts);
   }
 
   /** Kills every refresh session of the authenticated user. */

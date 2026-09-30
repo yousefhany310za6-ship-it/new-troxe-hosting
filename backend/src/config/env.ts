@@ -60,6 +60,17 @@ function ephemeralSecret(): string {
   return randomBytes(48).toString('base64url');
 }
 
+const LOG_LEVELS = ['verbose', 'debug', 'log', 'warn', 'error'] as const;
+type LogLevel = (typeof LOG_LEVELS)[number];
+
+/** Unknown levels fall back to `log` (validated, never a crash). */
+function logLevel(v: string | undefined): LogLevel {
+  const level = (v ?? 'log').trim().toLowerCase();
+  if ((LOG_LEVELS as readonly string[]).includes(level)) return level as LogLevel;
+  errors.push(`LOG_LEVEL must be one of ${LOG_LEVELS.join(', ')}.`);
+  return 'log';
+}
+
 /**
  * Volume-maintenance image (chown/tar/du helpers run as root): must be a
  * digest ref. A mutable tag here would hand root-execution to whoever
@@ -174,7 +185,7 @@ export interface AppConfig {
   readonly RATE_LIMIT_MAX: number;
   readonly AUTH_RATE_LIMIT_MAX: number;
   readonly LOCKOUT_THRESHOLD: number;
-  readonly LOG_LEVEL: string;
+  readonly LOG_LEVEL: LogLevel;
 }
 
 export const config: AppConfig = Object.freeze({
@@ -216,7 +227,7 @@ export const config: AppConfig = Object.freeze({
   AUTH_RATE_LIMIT_MAX: num('AUTH_RATE_LIMIT_MAX', 8, 3, 1000),
   LOCKOUT_THRESHOLD: num('LOCKOUT_THRESHOLD', 6, 3, 100),
 
-  LOG_LEVEL: raw.LOG_LEVEL ?? 'log',
+  LOG_LEVEL: logLevel(raw.LOG_LEVEL),
 });
 
 // Authoritative gate: the early check above only sees secret errors — every

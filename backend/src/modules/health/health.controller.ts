@@ -1,5 +1,5 @@
 import { Controller, Get, Inject, ServiceUnavailableException } from '@nestjs/common';
-import { SkipThrottle } from '@nestjs/throttler';
+import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import type { Pool } from 'pg';
 import { PG_POOL } from '../../db/db.module';
 import { DockerService } from '../servers/provisioning/docker.service';
@@ -16,9 +16,11 @@ interface Probe {
  * should only route traffic when this returns 200.
  */
 @Controller({ path: 'health', version: '1' })
-@SkipThrottle()
 export class HealthController {
   private startedAt = Date.now();
+  // readiness does a live DB round-trip per call: throttle + short cache so
+  // anonymous floods cannot churn the pool, and never leak driver text.
+  private readyCache: { at: number; body: { status: string; checks: Probe[] } } | null = null;
 
   constructor(
     @Inject(PG_POOL) private pool: Pool,
@@ -26,6 +28,7 @@ export class HealthController {
   ) {}
 
   @Get()
+  @SkipThrottle()
   liveness() {
     return {
       status: 'ok',
@@ -35,14 +38,17 @@ export class HealthController {
   }
 
   @Get('ready')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   async readiness(): Promise<{ status: string; checks: Probe[] }> {
+    if (this.readyCache && Date.now() - this.readyCache.at < 3000) return this.readyCache.body;
     const checks: Probe[] = [];
 
     try {
       await this.pool.query('select 1');
       checks.push({ name: 'postgres', ok: true });
-    } catch (e) {
-      checks.push({ name: 'postgres', ok: false, detail: (e as Error).message.slice(0, 120) });
+    } catch {
+      // static detail: driver messages carry host/db/user strings (recon aid)
+      checks.push({ name: 'postgres', ok: false, detail: 'unavailable' });
     }
 
     const dockerOk = await this.docker.ping();
@@ -56,6 +62,8 @@ export class HealthController {
     // so only the database is a hard readiness requirement.
     const ready = checks.find((c) => c.name === 'postgres')?.ok;
     if (!ready) throw new ServiceUnavailableException({ status: 'degraded', checks });
-    return { status: checks.every((c) => c.ok) ? 'ok' : 'degraded', checks };
+    const body = { status: checks.every((c) => c.ok) ? 'ok' : 'degraded', checks };
+    this.readyCache = { at: Date.now(), body };
+    return body;
   }
 }
