@@ -22,6 +22,13 @@ export default defineConfig({
         changeOrigin: true,
         secure: false,
       },
+      // socket.io namespaces (/ws, /ws/exec) live outside /api
+      '/socket.io': {
+        target: API_URL,
+        changeOrigin: true,
+        secure: false,
+        ws: true,
+      },
     },
   },
   build: {

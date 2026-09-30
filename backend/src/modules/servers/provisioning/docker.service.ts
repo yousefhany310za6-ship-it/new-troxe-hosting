@@ -25,6 +25,19 @@ export interface ContainerStats {
   netTxBytes: number;
 }
 
+/**
+ * Interactive shell inside a running sandbox (`docker exec -it /bin/sh`).
+ * Runs as the container's own (unprivileged) user with its WorkingDir —
+ * no new privileges, no new mounts, container cgroup limits still apply.
+ */
+export interface ShellHandle {
+  write(data: Buffer): boolean;
+  resize(cols: number, rows: number): Promise<void>;
+  onOutput(cb: (data: Buffer) => void): void;
+  onEnd(cb: (code: number | null) => void): void;
+  close(): void;
+}
+
 const isStatus = (e: unknown, code: number) => (e as { statusCode?: number })?.statusCode === code;
 
 /** Docker frames logs as `type(1) | zero(3) | len(4 BE) | payload`. */
@@ -370,6 +383,77 @@ export class DockerService {
     } finally {
       if (container) await container.remove({ force: true }).catch(() => undefined);
     }
+  }
+
+  // ---- interactive shells (exec gateway) --------------------------------------
+
+  /**
+   * Opens `/bin/sh` in a RUNNING container with a pty. Caller must verify
+   * ownership + running state first. With `Tty: true` the hijacked stream
+   * is raw bytes (no multiplex headers).
+   */
+  async openShell(containerId: string): Promise<ShellHandle> {
+    const container = this.d().getContainer(containerId);
+    const exec = await container.exec({
+      Cmd: ['/bin/sh'],
+      AttachStdin: true,
+      AttachStdout: true,
+      AttachStderr: true,
+      Tty: true,
+      WorkingDir: '/data',
+    });
+    const stream = (await exec.start({ hijack: true, stdin: true })) as unknown as {
+      write(d: Buffer): boolean;
+      destroy(): void;
+      on(event: 'data', cb: (d: Buffer) => void): unknown;
+      on(event: 'end' | 'close' | 'error', cb: () => void): unknown;
+    };
+    const outCbs: Array<(data: Buffer) => void> = [];
+    const endCbs: Array<(code: number | null) => void> = [];
+    let ended = false;
+    const finish = async () => {
+      if (ended) return;
+      ended = true;
+      let code: number | null = null;
+      try {
+        const info = await exec.inspect();
+        code = typeof info?.ExitCode === 'number' ? info.ExitCode : null;
+      } catch {
+        /* daemon gone — code stays null */
+      }
+      for (const cb of endCbs) cb(code);
+    };
+    stream.on('data', (d: Buffer) => {
+      const buf = Buffer.isBuffer(d) ? d : Buffer.from(d);
+      for (const cb of outCbs) cb(buf);
+    });
+    stream.on('end', () => void finish());
+    stream.on('error', () => void finish());
+    // `close` (not just `end`) fires when the daemon tears the socket down
+    stream.on('close', () => void finish());
+    return {
+      write: (data: Buffer) => {
+        if (ended) return false;
+        try {
+          return stream.write(data);
+        } catch {
+          return false;
+        }
+      },
+      resize: async (cols: number, rows: number) => {
+        await exec.resize({ h: rows, w: cols }).catch(() => undefined);
+      },
+      onOutput: (cb) => void outCbs.push(cb),
+      onEnd: (cb) => void endCbs.push(cb),
+      close: () => {
+        try {
+          stream.destroy();
+        } catch {
+          /* already gone */
+        }
+        void finish();
+      },
+    };
   }
 
   // ---- inventory (reconciler / GC) ------------------------------------------

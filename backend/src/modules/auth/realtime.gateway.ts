@@ -52,7 +52,11 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
 
   async handleConnection(client: AuthenticatedSocket) {
     try {
-      const ticket = client.handshake.query.ticket as string | undefined;
+      // socket.io v4 clients send credentials via handshake.auth; the raw
+      // query form is kept for non-socket.io transports.
+      const ticket =
+        (client.handshake.auth as { ticket?: string } | undefined)?.ticket ??
+        (client.handshake.query.ticket as string | undefined);
       const { userId } = this.authGuard.validate(ticket);
       client.userId = userId;
       client.subscriptions = new Set();

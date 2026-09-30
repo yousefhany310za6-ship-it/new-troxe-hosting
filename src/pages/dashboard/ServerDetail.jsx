@@ -23,6 +23,7 @@ import { apiGet, apiPost, apiPatch, apiDelete } from '@/lib/api.js';
 import { STATUS_STYLE } from './Overview.jsx';
 import { RUNTIME_ICONS } from './Servers.jsx';
 import ServerFiles from './ServerFiles.jsx';
+import ExecTerminal from './ExecTerminal.jsx';
 
 const TABS = [
     { id: 'overview', label: 'Overview', Icon: LayoutDashboard },
@@ -38,12 +39,6 @@ const inputClass =
 const actionBtn =
     'inline-flex items-center gap-1.5 rounded-md border border-hairline bg-veil px-3 py-1.5 text-[0.8rem] font-semibold text-ink-secondary transition hover:border-hairline-hover hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40';
 
-function timeNow() {
-    const d = new Date();
-    const pad = (n) => String(n).padStart(2, '0');
-    return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-}
-
 export default function ServerDetail() {
     const { id } = useParams();
     const navigate = useNavigate();
@@ -57,7 +52,6 @@ export default function ServerDetail() {
     const [status, setStatus] = useState('offline');
     const [msg, setMsg] = useState({ text: '', ok: true });
 
-    const [lines, setLines] = useState([]);
     const logRef = useRef(null);
 
     const [name, setName] = useState('');
@@ -157,37 +151,29 @@ export default function ServerDetail() {
 
     const start = async () => {
         setStatus('restarting');
-        setLines((prev) => [...prev, `[${timeNow()}] Starting server…`]);
         try {
             await apiPost(`/servers/${id}/start`);
             await fetchServer();
         } catch (e) {
-            setLines((prev) => [...prev, `[${timeNow()}] Error: ${e.message}`]);
+            setMsg({ text: e.message, ok: false });
         }
     };
     const stop = async () => {
-        setLines((prev) => [...prev, `[${timeNow()}] Stopping server…`]);
         try {
             await apiPost(`/servers/${id}/stop`);
             await fetchServer();
         } catch (e) {
-            setLines((prev) => [...prev, `[${timeNow()}] Error: ${e.message}`]);
+            setMsg({ text: e.message, ok: false });
         }
     };
     const restart = async () => {
         setStatus('restarting');
-        setLines((prev) => [...prev, `[${timeNow()}] Restarting server…`]);
         try {
             await apiPost(`/servers/${id}/restart`);
             await fetchServer();
         } catch (e) {
-            setLines((prev) => [...prev, `[${timeNow()}] Error: ${e.message}`]);
+            setMsg({ text: e.message, ok: false });
         }
-    };
-
-    const sendCommand = (e) => {
-        e.preventDefault();
-        setLines((prev) => [...prev, `[${timeNow()}] Interactive exec is not exposed via the API. Use SSH/port-forward if enabled.`]);
     };
 
     const createBackup = async () => {
@@ -389,25 +375,27 @@ export default function ServerDetail() {
                 <div className="overflow-hidden rounded-xl border border-hairline bg-card">
                     <div className="flex items-center gap-2 border-b border-hairline px-5 py-3">
                         <Terminal className="size-4 text-ink-muted" />
-                        <span className="font-mono text-[0.85rem] font-semibold">Live output</span>
+                        <span className="font-mono text-[0.85rem] font-semibold">
+                            {online ? 'Interactive shell' : 'Live output'}
+                        </span>
                         <span className={cn('ml-2 size-2 rounded-full', online ? 'animate-beat bg-emerald-500' : 'bg-zinc-600')} />
                     </div>
-                    <div ref={logRef} className="flex h-[320px] flex-col gap-1.5 overflow-y-auto p-5 font-mono text-[0.8rem] leading-relaxed text-ink-secondary">
-                        {logs
-                            ? logs.split('\n').filter(Boolean).map((line, i) => (
-                                <p key={i} className={cn(line.startsWith('$') && 'text-foreground')}>{line}</p>
-                            ))
-                            : <p className="text-ink-muted">No output yet.</p>
-                        }
+                    <div className="p-5">
+                        {online ? (
+                            <ExecTerminal key={server.id} server={server} />
+                        ) : (
+                            <>
+                                <div ref={logRef} className="flex h-[320px] flex-col gap-1.5 overflow-y-auto font-mono text-[0.8rem] leading-relaxed text-ink-secondary">
+                                    {logs
+                                        ? logs.split('\n').filter(Boolean).map((line, i) => (
+                                            <p key={i} className={cn(line.startsWith('$') && 'text-foreground')}>{line}</p>
+                                        ))
+                                        : <p className="text-ink-muted">Start the server to open an interactive shell.</p>
+                                    }
+                                </div>
+                            </>
+                        )}
                     </div>
-                    <form onSubmit={sendCommand} className="flex items-center gap-2 border-t border-hairline px-5 py-3">
-                        <span className="font-mono text-[0.85rem] text-emerald-400">$</span>
-                        <input
-                            placeholder={online ? 'Interactive exec not available via API' : 'Start the server to view logs'}
-                            disabled={!online}
-                            className="w-full bg-transparent font-mono text-[0.85rem] text-foreground placeholder-ink-muted focus:outline-none disabled:opacity-50"
-                        />
-                    </form>
                 </div>
             )}
 

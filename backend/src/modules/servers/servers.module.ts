@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { BackupsService } from './backups.service';
+import { ExecGateway } from './exec.gateway';
 import { FilesService } from './files.service';
 import { DockerService } from './provisioning/docker.service';
 import { NetworkHardeningService } from './provisioning/network-hardening.service';
@@ -17,6 +18,7 @@ import { ServersService } from './servers.service';
     ServersService,
     BackupsService,
     FilesService,
+    ExecGateway,
     ServerOwnerGuard,
     DockerService,
     NetworkHardeningService,
