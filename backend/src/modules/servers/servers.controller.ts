@@ -8,7 +8,7 @@ import { BackupsService } from './backups.service';
 import { FilesService } from './files.service';
 import { ParseUuidPipe } from '../../common/pipes/uuid.pipe';
 import { CreateServerDto, UpdateServerDto } from './dto';
-import { MkdirDto, RenameDto, WriteFileDto, FilesQuery } from './files.dto';
+import { MkdirDto, RenameDto, WriteFileDto, FilesQuery, ArchiveDto, ExtractDto } from './files.dto';
 import { ServerOwnerGuard } from './server-owner.guard';
 import { ServersService } from './servers.service';
 
@@ -213,6 +213,30 @@ export class ServersController {
     @Body() dto: RenameDto,
   ) {
     return this.files.rename(u.sub, id, dto.from, dto.to);
+  }
+
+  @Post(':id/files/archive')
+  @HttpCode(200)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @UseGuards(ServerOwnerGuard)
+  archiveFiles(
+    @Param('id', ParseUuidPipe) id: string,
+    @CurrentUser() u: ReqUser,
+    @Body() dto: ArchiveDto,
+  ) {
+    return this.files.archive(u.sub, id, dto.sources, dto.dest);
+  }
+
+  @Post(':id/files/extract')
+  @HttpCode(200)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @UseGuards(ServerOwnerGuard)
+  extractFiles(
+    @Param('id', ParseUuidPipe) id: string,
+    @CurrentUser() u: ReqUser,
+    @Body() dto: ExtractDto,
+  ) {
+    return this.files.extract(u.sub, id, dto.file, dto.dest);
   }
 
   @Get(':id/files/download')

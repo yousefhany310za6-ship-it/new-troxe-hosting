@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import {
+    Archive,
     ChevronRight,
     Download,
+    FileArchive,
     FileText,
     Folder,
     Pencil,
@@ -16,7 +18,9 @@ import { useToast } from '@/hooks/useToast.jsx';
 import {
     blobToBase64,
     downloadServerFile,
+    useArchiveFiles,
     useDeleteFile,
+    useExtractFiles,
     useFileContent,
     useMkdir,
     useRenameFile,
@@ -46,6 +50,7 @@ export default function ServerFiles({ server }) {
     const [draft, setDraft] = useState('');
     const [showNew, setShowNew] = useState(null); // 'file' | 'dir' | null
     const [newName, setNewName] = useState('');
+    const [selected, setSelected] = useState([]); // entry names for bulk archive
     const uploadRef = useRef(null);
 
     const dirPath = join(dir);
@@ -57,12 +62,51 @@ export default function ServerFiles({ server }) {
     const mkdir = useMkdir(server.id);
     const remove = useDeleteFile(server.id);
     const rename = useRenameFile(server.id);
+    const archive = useArchiveFiles(server.id);
+    const extract = useExtractFiles(server.id);
 
     useEffect(() => {
         if (fileData) setDraft(fileData.content ?? '');
     }, [fileData]);
 
+    useEffect(() => { setSelected([]); }, [dirPath]);
+
     const fail = (e) => toast.error(e.message);
+
+    const toggleSelect = (name) =>
+        setSelected((s) => (s.includes(name) ? s.filter((n) => n !== name) : [...s, name]));
+
+    const compressSelected = async () => {
+        const def = selected.length === 1 ? `${selected[0]}.tar.gz` : `${dir.length ? dir[dir.length - 1] : server.name}.tar.gz`;
+        const name = window.prompt('Archive name:', def);
+        if (!name) return;
+        if (!/\.tar\.gz$/.test(name) && !/\.tgz$/.test(name)) { toast.error('Name must end in .tar.gz or .tgz.'); return; }
+        try {
+            await archive.mutateAsync({
+                sources: selected.map((n) => join([...dir, n])),
+                dest: join([...dir, name.replace(/[/\\]/g, '')]),
+            });
+            toast.success(`Archived to ${name}.`);
+            setSelected([]);
+            refetch();
+        } catch (e) { fail(e); }
+    };
+
+    const extractHere = async (entry) => {
+        const rel = join([...dir, entry.name]);
+        const dest = window.prompt('Extract into folder:', entry.name.replace(/\.(zip|tar\.gz|tgz|tar)$/, ''));
+        if (dest === null) return;
+        try {
+            await extract.mutateAsync({
+                file: rel,
+                dest: join([...dir, (dest.trim() || '.').replace(/[/\\]/g, '') || '.']),
+            });
+            toast.success('Extracted.');
+            refetch();
+        } catch (e) { fail(e); }
+    };
+
+    const isArchive = (name) => /\.(zip|tar\.gz|tgz|tar)$/.test(name);
 
     const openEntry = (entry) => {
         const rel = join([...dir, entry.name]);
@@ -187,6 +231,18 @@ export default function ServerFiles({ server }) {
                 </form>
             )}
 
+            {selected.length > 0 && (
+                <div className="flex items-center gap-3 border-b border-hairline bg-veil/60 px-5 py-2.5">
+                    <span className="font-mono text-[0.78rem] text-ink-secondary">{selected.length} selected</span>
+                    <button type="button" onClick={compressSelected} disabled={archive.isPending} className={actionBtn}>
+                        <Archive className="size-3.5" /> Compress to .tar.gz
+                    </button>
+                    <button type="button" onClick={() => setSelected([])} className="font-mono text-[0.78rem] text-ink-secondary hover:text-foreground">
+                        Clear
+                    </button>
+                </div>
+            )}
+
             <div className="flex flex-col divide-y divide-hairline">
                 {isLoading && <p className="px-5 py-8 text-center text-[0.88rem] text-ink-muted">Loading…</p>}
                 {error && <p className="px-5 py-8 text-center text-[0.88rem] text-red-400">Failed to load: {error.message}</p>}
@@ -195,9 +251,18 @@ export default function ServerFiles({ server }) {
                 )}
                 {entries.map((entry) => (
                     <div key={entry.name} className="group flex items-center gap-3 px-5 py-3">
+                        <input
+                            type="checkbox"
+                            checked={selected.includes(entry.name)}
+                            onChange={() => toggleSelect(entry.name)}
+                            aria-label={`Select ${entry.name}`}
+                            className="size-4 shrink-0 accent-white"
+                        />
                         <button type="button" onClick={() => openEntry(entry)} className="flex min-w-0 flex-1 items-center gap-3 text-left">
                             {entry.type === 'dir' ? (
                                 <Folder className="size-[18px] shrink-0 text-ink-muted" />
+                            ) : isArchive(entry.name) ? (
+                                <FileArchive className="size-[18px] shrink-0 text-ink-muted" />
                             ) : (
                                 <FileText className="size-[18px] shrink-0 text-ink-muted" />
                             )}
@@ -210,9 +275,14 @@ export default function ServerFiles({ server }) {
                             </span>
                         </button>
                         <span className="flex shrink-0 items-center gap-1 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100">
-                            {entry.type === 'file' && (
+                            {entry.type === 'file' && !isArchive(entry.name) && (
                                 <button type="button" aria-label={`Edit ${entry.name}`} onClick={() => openEntry(entry)} className={actionBtn}>
                                     <Pencil className="size-3.5" />
+                                </button>
+                            )}
+                            {entry.type === 'file' && isArchive(entry.name) && (
+                                <button type="button" aria-label={`Extract ${entry.name}`} onClick={() => extractHere(entry)} className={actionBtn}>
+                                    <Archive className="size-3.5" />
                                 </button>
                             )}
                             <button type="button" aria-label={`Download ${entry.name}`} onClick={() => onDownload(entry)} className={actionBtn}>

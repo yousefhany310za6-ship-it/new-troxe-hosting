@@ -201,6 +201,12 @@ export function useDeleteFile(id) {
 export function useRenameFile(id) {
   return useFilesMutation(id, ({ from, to }) => apiPost(`/servers/${id}/files/rename`, { from, to }));
 }
+export function useArchiveFiles(id) {
+  return useFilesMutation(id, ({ sources, dest }) => apiPost(`/servers/${id}/files/archive`, { sources, dest }));
+}
+export function useExtractFiles(id) {
+  return useFilesMutation(id, ({ file, dest }) => apiPost(`/servers/${id}/files/extract`, { file, dest }));
+}
 export async function downloadServerFile(id, path) {
   const { blob, filename } = await apiDownload(`/servers/${id}/files/download?path=${encodeURIComponent(path)}`);
   const url = URL.createObjectURL(blob);

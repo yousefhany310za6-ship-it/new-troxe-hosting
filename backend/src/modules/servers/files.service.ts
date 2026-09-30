@@ -41,6 +41,8 @@ export class FilesService {
   static readonly WRITE_MAX = 512 * 1024;
   static readonly UPLOAD_MAX = 2 * 1024 * 1024;
   static readonly DOWNLOAD_MAX = 8 * 1024 * 1024;
+  /** archive input / extraction output bounds (helper time + tarbomb safety) */
+  static readonly ARCHIVE_MAX = 200 * 1024 * 1024;
 
   // ---- public API --------------------------------------------------------
 
@@ -131,7 +133,7 @@ export class FilesService {
         // mv replaces a symlink itself instead of following it
         `mv -f "$f.tmp.$$" "$f" || { echo TROXE_ERR=WRITE; exit 5; }`,
       ];
-      const res = await this.helper(volume, lines.join('\n'), { timeoutMs: 60_000 });
+      const res = await this.helper(volume, lines.join('\n'), { capture: true, timeoutMs: 60_000 });
       this.throwIfErr(res.out, res.code);
       return { path: file, size: buf.length };
     } finally {
@@ -152,7 +154,7 @@ export class FilesService {
         `mkdir -p "$p" || { echo TROXE_ERR=WRITE; exit 5; }`,
         `r=$(realpath "$p"); case "$r" in /data|/data/*) ;; *) echo TROXE_ERR=ESCAPE; exit 4;; esac`,
       ].join('\n');
-      const res = await this.helper(volume, script, { timeoutMs: 60_000 });
+      const res = await this.helper(volume, script, { capture: true, timeoutMs: 60_000 });
       this.throwIfErr(res.out, res.code);
       return { path: dir };
     } finally {
@@ -171,7 +173,7 @@ export class FilesService {
         `r=$(realpath "$f"); case "$r" in /data/*) ;; *) echo TROXE_ERR=ESCAPE; exit 4;; esac`,
         `rm -rf "$r" || { echo TROXE_ERR=WRITE; exit 5; }`,
       ].join('\n');
-      const res = await this.helper(volume, script, { timeoutMs: 60_000 });
+      const res = await this.helper(volume, script, { capture: true, timeoutMs: 60_000 });
       this.throwIfErr(res.out, res.code);
       return { ok: true, path: target };
     } finally {
@@ -198,7 +200,7 @@ export class FilesService {
         `rd=$(realpath "$d"); case "$rd" in /data|/data/*) ;; *) echo TROXE_ERR=ESCAPE; exit 4;; esac`,
         `mv -f "$s" "$t" || { echo TROXE_ERR=WRITE; exit 5; }`,
       ].join('\n');
-      const res = await this.helper(volume, script, { timeoutMs: 60_000 });
+      const res = await this.helper(volume, script, { capture: true, timeoutMs: 60_000 });
       this.throwIfErr(res.out, res.code);
       return { from: src, to: dst };
     } finally {
@@ -206,8 +208,7 @@ export class FilesService {
     }
   }
 
-  async download(ownerId: string, serverId: string, rel: string | undefined): Promise<{ filename: string; data: Buffer }> {
-    const { volume } = await this.volumeOf(ownerId, serverId);
+  async download(ownerId: string, serverId: string, rel: string | undefined): Promise<{ filename: string; data: Buffer }> {    const { volume } = await this.volumeOf(ownerId, serverId);
     const target = this.sanitizeFile(rel ?? '');
     const base = target.split('/').pop()!;
     const script = [
@@ -225,6 +226,117 @@ export class FilesService {
     // `tar -cz` of a directory vs raw file: sniff gzip magic to name it right
     const isDir = data.length > 2 && data[0] === 0x1f && data[1] === 0x8b && (await this.isDir(volume, target));
     return { filename: isDir ? `${base}.tar.gz` : base, data };
+  }
+
+  /**
+   * Create a .tar.gz from up to 50 sibling paths. All sources and the
+   * destination must share one parent dir (keeps `tar -C` exact, no
+   * surprises). Symlinks are stored as links, never followed.
+   */
+  async archive(ownerId: string, serverId: string, sources: string[], dest: string) {
+    const release = await this.serversSvc.acquire(serverId);
+    try {
+      const { volume } = await this.volumeOf(ownerId, serverId);
+      const srcs = sources.map((s) => this.sanitizeFile(s));
+      const dst = this.sanitizeFile(dest);
+      if (!/\.tar\.gz$/.test(dst) && !/\.tgz$/.test(dst))
+        throw Err.invalid('FILE_FORMAT', 'Destination must end in .tar.gz or .tgz');
+      const parents = new Set([...srcs, dst].map((p) => posix.dirname(p)));
+      if (parents.size !== 1)
+        throw Err.invalid('FILE_SPLIT', 'All paths must share the same parent directory');
+      if (srcs.includes(dst)) throw Err.invalid('FILE_SAME', 'Destination overlaps a source');
+      const parent = [...parents][0];
+      const bases = srcs.map((s) => posix.basename(s));
+      const destBase = posix.basename(dst);
+      const script = [
+        `p=${this.q(`/data/${parent}`)}`,
+        `[ -d "$p" ] || { echo TROXE_ERR=NOTDIR; exit 3; }`,
+        `r=$(realpath "$p"); case "$r" in /data|/data/*) ;; *) echo TROXE_ERR=ESCAPE; exit 4;; esac`,
+        // every source must exist (tar's own error would be a blind 502)
+        ...bases.map((b) => `[ -e "$r"/${this.q(b)} ] || [ -L "$r"/${this.q(b)} ] || { echo TROXE_ERR=NOTFOUND; exit 3; }`),
+        // bound helper time: refuse absurd inputs up front
+        `total=$(du -sb ${bases.map((b) => this.q(`$r/${b}`)).join(' ')} 2>/dev/null | awk '{s+=$1} END {print s+0}');`,
+        `if [ "$total" -gt ${FilesService.ARCHIVE_MAX} ]; then echo TROXE_ERR=TOOBIG:$total; exit 6; fi`,
+        `cd "$r" || exit 5;`,
+        `tar -czf ${this.q(destBase)} ${bases.map((b) => this.q(b)).join(' ')} || { echo TROXE_ERR=WRITE; exit 5; }`,
+      ].join('\n');
+      const res = await this.helper(volume, script, { capture: true, timeoutMs: 120_000 });
+      this.throwIfErr(res.out, res.code);
+      return { path: dst };
+    } finally {
+      release();
+    }
+  }
+
+  /**
+   * Extract a .zip / .tar.gz / .tgz / .tar into the volume. Every entry is
+   * listed and validated FIRST (no absolute paths, no `..`) — tarbomb-proof.
+   */
+  async extract(ownerId: string, serverId: string, file: string, dest: string | undefined) {
+    const release = await this.serversSvc.acquire(serverId);
+    try {
+      const { volume } = await this.volumeOf(ownerId, serverId);
+      const arc = this.sanitizeFile(file);
+      const kind = /\.zip$/.test(arc) ? 'zip' : /(\.tar\.gz|\.tgz)$/.test(arc) ? 'targz' : /\.tar$/.test(arc) ? 'tar' : null;
+      if (!kind) throw Err.invalid('FILE_FORMAT', 'Only .zip, .tar.gz, .tgz and .tar can be extracted');
+      const outDir = dest !== undefined ? this.sanitizeFile(dest) : posix.dirname(arc);
+      const script = [
+        `f=${this.q(`/data/${arc}`)}`,
+        `d=${this.q(`/data/${outDir}`)}`,
+        `[ -f "$f" ] || { echo TROXE_ERR=NOTFOUND; exit 3; }`,
+        `r=$(realpath "$f"); case "$r" in /data/*) ;; *) echo TROXE_ERR=ESCAPE; exit 4;; esac`,
+        `sz=$(stat -c %s "$r");`,
+        `if [ "$sz" -gt ${FilesService.ARCHIVE_MAX} ]; then echo TROXE_ERR=TOOBIG:$sz; exit 6; fi`,
+        // list + validate every entry BEFORE creating anything (refused
+        // extracts leave zero trace).
+        // NOTE: the tools themselves sanitize listings AND payloads
+        // (busybox tar strips leading '/' and '../'), so this pre-check is
+        // defense-in-depth for raw listings; the post-extract sweep below is
+        // the real guarantee. Symlink/hardlink members are refused outright
+        // (visible as ^l/^h only in verbose tar listings).
+        ...(kind === 'zip'
+          ? [
+              `unzip -l "$r" | sed -n 's/^ *[0-9][0-9]*  *[0-9-]*  *[0-9:]*  //p' > /tmp/troxe_list.txt || { echo TROXE_ERR=WRITE; exit 5; }`,
+            ]
+          : [
+              `tar -t${kind === 'targz' ? 'z' : ''}vf "$r" > /tmp/troxe_verbose.txt || { echo TROXE_ERR=WRITE; exit 5; }`,
+              `if grep -q '^[lh]' /tmp/troxe_verbose.txt; then echo TROXE_ERR=ESCAPE; exit 4; fi`,
+              `sed -n 's/^\\([^ ][^ ]* *\\)\\{5\\}//p' /tmp/troxe_verbose.txt > /tmp/troxe_list.txt || { echo TROXE_ERR=WRITE; exit 5; }`,
+            ]),
+        `bad=0; while IFS= read -r e || [ -n "$e" ]; do`,
+        `  case "$e" in ""|./|./*) ;; *)`,
+        `    case "$e" in /*) bad=1;; esac;`,
+        `    case "$e" in */../*|../*|*/..|..) bad=1;; esac;;`,
+        `  esac;`,
+        `done < /tmp/troxe_list.txt;`,
+        `if [ "$bad" -ne 0 ]; then echo TROXE_ERR=ESCAPE; exit 4; fi`,
+        // destination must exist without creating through symlinks
+        `c="$d"; while [ "$c" != /data ] && [ "$c" != / ] && [ "$c" != . ]; do`,
+        `  [ -L "$c" ] && { echo TROXE_ERR=ESCAPE; exit 4; }; c=$(dirname "$c");`,
+        `done;`,
+        `newdir=0; [ -e "$d" ] || newdir=1;`,
+        `mkdir -p "$d";`,
+        `rd=$(realpath "$d"); case "$rd" in /data|/data/*) ;; *) echo TROXE_ERR=ESCAPE; exit 4;; esac`,
+        ...(kind === 'zip'
+          ? [`unzip -o -q "$r" -d "$rd" || { echo TROXE_ERR=WRITE; exit 5; }`]
+          : [`tar -x${kind === 'targz' ? 'z' : ''}f "$r" -C "$rd" || { echo TROXE_ERR=WRITE; exit 5; }`]),
+        // post-extract sweep: some tools sanitize listings but not payloads —
+        // every extracted path must resolve inside the destination
+        `total=$(find "$rd" -mindepth 1 2>/dev/null | wc -l);`,
+        `ok=$(find "$rd" -mindepth 1 -exec realpath {} + 2>/dev/null | grep -cF "$rd/");`,
+        `exact=$(find "$rd" -mindepth 1 -exec realpath {} + 2>/dev/null | grep -cFx "$rd");`,
+        `ok=$((ok + exact));`,
+        `if [ "$ok" -ne "$total" ]; then`,
+        `  if [ "$newdir" -eq 1 ]; then rm -rf "$rd"; fi;`,
+        `  echo TROXE_ERR=ESCAPE; exit 4;`,
+        `fi`,
+      ].join('\n');
+      const res = await this.helper(volume, script, { capture: true, timeoutMs: 120_000 });
+      this.throwIfErr(res.out, res.code);
+      return { dest: outDir };
+    } finally {
+      release();
+    }
   }
 
   // ---- internals ----------------------------------------------------------
