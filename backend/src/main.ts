@@ -1,6 +1,7 @@
 import { Logger, ValidationPipe, VersioningType, type LogLevel as NestLogLevel } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import cookieParser from 'cookie-parser';
+import { json } from 'express';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { config } from './config/env';
@@ -41,6 +42,11 @@ async function bootstrap() {
     }),
   );
   app.use(cookieParser());
+
+  // file editor/upload payloads are JSON base64 (no multipart): raise the
+  // default 100kb express limit once, and enforce tighter per-endpoint byte
+  // caps in FilesService (512KB text, 2MB binary, 8MB download).
+  app.use(json({ limit: '4mb' }));
 
   // ---- CORS: explicit allowlist, never "*" with credentials -----------------
   app.enableCors({

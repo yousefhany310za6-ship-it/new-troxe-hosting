@@ -1,12 +1,14 @@
-import { Body, Controller, DefaultValuePipe, Delete, Get, HttpCode, Param, ParseIntPipe, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
-import type { Request } from 'express';
+import { Body, Controller, DefaultValuePipe, Delete, Get, HttpCode, Param, ParseIntPipe, Patch, Post, Put, Query, Req, Res, UseGuards } from '@nestjs/common';
+import type { Request, Response } from 'express';
 import { Throttle } from '@nestjs/throttler';
 import { ctxOf } from '../../common/request-context';
 import { CurrentUser } from '../auth/current-user';
 import { JwtAuthGuard, type ReqUser } from '../auth/jwt.guard';
 import { BackupsService } from './backups.service';
+import { FilesService } from './files.service';
 import { ParseUuidPipe } from '../../common/pipes/uuid.pipe';
 import { CreateServerDto, UpdateServerDto } from './dto';
+import { MkdirDto, RenameDto, WriteFileDto, FilesQuery } from './files.dto';
 import { ServerOwnerGuard } from './server-owner.guard';
 import { ServersService } from './servers.service';
 
@@ -17,6 +19,7 @@ export class ServersController {
   constructor(
     private svc: ServersService,
     private backups: BackupsService,
+    private files: FilesService,
   ) {}
 
   @Get()
@@ -142,5 +145,91 @@ export class ServersController {
     @Req() req: Request,
   ) {
     return this.backups.restore(u.sub, id, backupId, ctxOf(req));
+  }
+
+  // ---- files (volume browser; helper-container backed) -----------------------
+
+  @Get(':id/files')
+  @UseGuards(ServerOwnerGuard)
+  listFiles(
+    @Param('id', ParseUuidPipe) id: string,
+    @CurrentUser() u: ReqUser,
+    @Query() q: FilesQuery,
+  ) {
+    return this.files.list(u.sub, id, q.path);
+  }
+
+  @Get(':id/files/content')
+  @UseGuards(ServerOwnerGuard)
+  readFile(
+    @Param('id', ParseUuidPipe) id: string,
+    @CurrentUser() u: ReqUser,
+    @Query() q: FilesQuery,
+  ) {
+    return this.files.read(u.sub, id, q.path);
+  }
+
+  @Put(':id/files/content')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @UseGuards(ServerOwnerGuard)
+  writeFile(
+    @Param('id', ParseUuidPipe) id: string,
+    @CurrentUser() u: ReqUser,
+    @Body() dto: WriteFileDto,
+  ) {
+    return this.files.write(u.sub, id, dto.path, dto.content, dto.contentBase64);
+  }
+
+  @Post(':id/files/mkdir')
+  @HttpCode(200)
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @UseGuards(ServerOwnerGuard)
+  mkdir(
+    @Param('id', ParseUuidPipe) id: string,
+    @CurrentUser() u: ReqUser,
+    @Body() dto: MkdirDto,
+  ) {
+    return this.files.mkdir(u.sub, id, dto.path);
+  }
+
+  @Delete(':id/files')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @UseGuards(ServerOwnerGuard)
+  deleteFile(
+    @Param('id', ParseUuidPipe) id: string,
+    @CurrentUser() u: ReqUser,
+    @Query() q: FilesQuery,
+  ) {
+    return this.files.remove(u.sub, id, q.path);
+  }
+
+  @Post(':id/files/rename')
+  @HttpCode(200)
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @UseGuards(ServerOwnerGuard)
+  renameFile(
+    @Param('id', ParseUuidPipe) id: string,
+    @CurrentUser() u: ReqUser,
+    @Body() dto: RenameDto,
+  ) {
+    return this.files.rename(u.sub, id, dto.from, dto.to);
+  }
+
+  @Get(':id/files/download')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @UseGuards(ServerOwnerGuard)
+  async downloadFile(
+    @Param('id', ParseUuidPipe) id: string,
+    @CurrentUser() u: ReqUser,
+    @Query() q: FilesQuery,
+    @Res() res: Response,
+  ) {
+    const { filename, data } = await this.files.download(u.sub, id, q.path);
+    res.set({
+      'Content-Type': 'application/octet-stream',
+      'Content-Disposition': `attachment; filename="${filename.replace(/["\r\n]/g, '_')}"`,
+      'Content-Length': String(data.length),
+    });
+    res.send(data);
   }
 }

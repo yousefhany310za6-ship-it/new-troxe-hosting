@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { apiGet, apiPost, apiPatch, apiDelete } from '@/lib/api.js';
+import { apiGet, apiPost, apiPatch, apiPut, apiDelete, apiDownload } from '@/lib/api.js';
 
 // Query keys
 export const keys = {
@@ -162,6 +162,62 @@ export function useRestoreBackup(serverId, backupId) {
       qc.invalidateQueries({ queryKey: keys.serverBackups(serverId) });
       qc.invalidateQueries({ queryKey: keys.server(serverId) });
     },
+  });
+}
+
+// Files
+const fkey = (id, path) => ['servers', id, 'files', path || ''];
+export function useServerFiles(id, path) {
+  return useQuery({
+    queryKey: fkey(id, path),
+    queryFn: () => apiGet(`/servers/${id}/files?path=${encodeURIComponent(path || '')}`),
+    enabled: !!id,
+  });
+}
+export function useFileContent(id, path, enabled) {
+  return useQuery({
+    queryKey: [...fkey(id, path), 'content'],
+    queryFn: () => apiGet(`/servers/${id}/files/content?path=${encodeURIComponent(path)}`),
+    enabled: !!id && !!path && enabled !== false,
+  });
+}
+function useFilesMutation(id, fn) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['servers', id, 'files'] }),
+  });
+}
+export function useWriteFile(id) {
+  return useFilesMutation(id, ({ path, content, contentBase64 }) =>
+    apiPut(`/servers/${id}/files/content`, { path, content, contentBase64 }));
+}
+export function useMkdir(id) {
+  return useFilesMutation(id, (path) => apiPost(`/servers/${id}/files/mkdir`, { path }));
+}
+export function useDeleteFile(id) {
+  return useFilesMutation(id, (path) => apiDelete(`/servers/${id}/files?path=${encodeURIComponent(path)}`));
+}
+export function useRenameFile(id) {
+  return useFilesMutation(id, ({ from, to }) => apiPost(`/servers/${id}/files/rename`, { from, to }));
+}
+export async function downloadServerFile(id, path) {
+  const { blob, filename } = await apiDownload(`/servers/${id}/files/download?path=${encodeURIComponent(path)}`);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+export function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(',')[1]);
+    r.onerror = reject;
+    r.readAsDataURL(blob);
   });
 }
 

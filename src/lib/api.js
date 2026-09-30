@@ -90,7 +90,27 @@ async function apiFetch(path, { method = 'GET', body, auth = true, retry = true,
 export const apiGet = (path, options) => apiFetch(path, { ...options, method: 'GET' });
 export const apiPost = (path, body, options) => apiFetch(path, { ...options, method: 'POST', body });
 export const apiPatch = (path, body, options) => apiFetch(path, { ...options, method: 'PATCH', body });
+export const apiPut = (path, body, options) => apiFetch(path, { ...options, method: 'PUT', body });
 export const apiDelete = (path, options) => apiFetch(path, { ...options, method: 'DELETE' });
 
 // Convenience helpers for auth endpoints (no auth header, no retry)
 export const authPost = (path, body) => apiFetch(path, { method: 'POST', body, auth: false, retry: false });
+
+// Raw binary download (blob) with the same 401→refresh→retry behavior.
+export async function apiDownload(path) {
+  const headers = {};
+  if (getAccessToken()) headers.Authorization = `Bearer ${getAccessToken()}`;
+  let res = await fetch(BASE + path, { credentials: 'include', headers });
+  if (res.status === 401 && !path.startsWith('/auth/')) {
+    try { await refreshAccess(); } catch {
+      throw new ApiError(401, 'SESSION_EXPIRED', 'Your session has expired. Please sign in again.');
+    }
+    if (getAccessToken()) headers.Authorization = `Bearer ${getAccessToken()}`;
+    res = await fetch(BASE + path, { credentials: 'include', headers });
+  }
+  if (!res.ok) throw await toError(res);
+  const blob = await res.blob();
+  const cd = res.headers.get('Content-Disposition') || '';
+  const m = cd.match(/filename="([^"]+)"/);
+  return { blob, filename: m ? m[1] : 'download' };
+}

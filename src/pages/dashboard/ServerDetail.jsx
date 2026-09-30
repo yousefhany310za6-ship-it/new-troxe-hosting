@@ -3,7 +3,6 @@ import { Link, useParams, useNavigate } from 'react-router-dom';
 import {
     ArrowLeft,
     Check,
-    ChevronRight,
     Database,
     Download,
     FileText,
@@ -17,13 +16,13 @@ import {
     Square,
     Terminal,
     Trash2,
-    Upload,
 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { apiGet, apiPost, apiPatch, apiDelete } from '@/lib/api.js';
 import { STATUS_STYLE } from './Overview.jsx';
 import { RUNTIME_ICONS } from './Servers.jsx';
+import ServerFiles from './ServerFiles.jsx';
 
 const TABS = [
     { id: 'overview', label: 'Overview', Icon: LayoutDashboard },
@@ -60,8 +59,6 @@ export default function ServerDetail() {
 
     const [lines, setLines] = useState([]);
     const logRef = useRef(null);
-
-    const [path, setPath] = useState([]);
 
     const [name, setName] = useState('');
     const [startup, setStartup] = useState('');
@@ -414,40 +411,7 @@ export default function ServerDetail() {
                 </div>
             )}
 
-            {tab === 'files' && (
-                <div className="overflow-hidden rounded-xl border border-hairline bg-card">
-                    <div className="flex flex-wrap items-center gap-2 border-b border-hairline px-5 py-3">
-                        <button type="button" onClick={() => setPath([])} className="font-mono text-[0.85rem] font-bold hover:underline hover:underline-offset-4">
-                            {server.name}
-                        </button>
-                        {path.map((seg, i) => (
-                            <span key={i} className="flex items-center gap-2">
-                                <ChevronRight className="size-3.5 text-ink-muted" />
-                                <button
-                                    type="button"
-                                    onClick={() => setPath(path.slice(0, i + 1))}
-                                    className="font-mono text-[0.85rem] text-ink-secondary hover:text-foreground hover:underline hover:underline-offset-4"
-                                >
-                                    {seg}
-                                </button>
-                            </span>
-                        ))}
-                        <div className="ml-auto flex items-center gap-2">
-                            <button type="button" onClick={() => setMsg({ text: 'File API not available yet.', ok: false })} className={actionBtn}>
-                                <Upload className="size-3.5" /> Upload
-                            </button>
-                            <button type="button" onClick={() => setMsg({ text: 'File API not available yet.', ok: false })} className={actionBtn}>
-                                <Plus className="size-3.5" /> New file
-                            </button>
-                        </div>
-                    </div>
-                    <div className="flex flex-col divide-y divide-hairline">
-                        <p className="px-5 py-8 text-center text-[0.88rem] text-ink-muted">
-                            The file manager API isn't available yet.
-                        </p>
-                    </div>
-                </div>
-            )}
+            {tab === 'files' && <ServerFiles server={server} />}
 
             {tab === 'backups' && (
                 <div className="flex flex-col gap-4">

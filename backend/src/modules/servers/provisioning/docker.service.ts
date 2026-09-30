@@ -325,6 +325,8 @@ export class DockerService {
     timeoutMs?: number;
     memoryMb?: number;
     captureLogs?: boolean;
+    /** json-file max-size (default '1m'); raise only for bounded bulk reads */
+    logMaxSize?: string;
   }): Promise<HelperResult> {
     const d = this.d();
     const timeout = opts.timeoutMs ?? 60_000;
@@ -352,7 +354,7 @@ export class DockerService {
           PidsLimit: 64,
           RestartPolicy: { Name: 'no' },
           LogConfig: opts.captureLogs
-            ? { Type: 'json-file', Config: { 'max-size': '1m', 'max-file': '1' } }
+            ? { Type: 'json-file', Config: { 'max-size': opts.logMaxSize ?? '1m', 'max-file': '1' } }
             : { Type: 'none', Config: {} },
         },
       };

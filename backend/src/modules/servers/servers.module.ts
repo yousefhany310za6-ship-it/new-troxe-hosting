@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { BackupsService } from './backups.service';
+import { FilesService } from './files.service';
 import { DockerService } from './provisioning/docker.service';
 import { NetworkHardeningService } from './provisioning/network-hardening.service';
 import { ProvisionerService } from './provisioning/provisioner.service';
@@ -15,6 +16,7 @@ import { ServersService } from './servers.service';
   providers: [
     ServersService,
     BackupsService,
+    FilesService,
     ServerOwnerGuard,
     DockerService,
     NetworkHardeningService,
