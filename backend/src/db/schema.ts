@@ -105,7 +105,7 @@ export const servers = pgTable('servers', {
   ownerId: uuid('owner_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
   name: varchar('name', { length: 32 }).notNull(),
   runtime: serverRuntime('runtime').notNull(),
-  runtimeVersion: varchar('runtime_version', { length: 64 }),
+  runtimeVersion: varchar('runtime_version', { length: 128 }),
   status: serverStatus('status').default('provisioning').notNull(),
   lastError: text('last_error'),
   region: varchar('region', { length: 32 }).default('fra-de').notNull(),
@@ -153,14 +153,6 @@ export const backups = pgTable('backups', {
 }, (t) => [index('backups_server_idx').on(t.serverId)]);
 
 // ---- Metrics rollup ---------------------------------------------------------
-export const serverMetrics = pgTable('server_metrics', {
-  id: uuid('id').defaultRandom().primaryKey(),
-  serverId: uuid('server_id').references(() => servers.id, { onDelete: 'cascade' }).notNull(),
-  cpu: integer('cpu').notNull(),
-  ram: integer('ram').notNull(),
-  at: timestamp('at').defaultNow().notNull(),
-}, (t) => [index('server_metrics_server_at_idx').on(t.serverId, t.at)]);
-
 // ---- Server lifecycle events (per-server audit trail) -----------------------
 export const serverEvents = pgTable('server_events', {
   id: uuid('id').defaultRandom().primaryKey(),

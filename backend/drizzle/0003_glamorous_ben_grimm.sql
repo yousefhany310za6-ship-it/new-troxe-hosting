@@ -1,0 +1,1 @@
+ALTER TABLE "servers" ALTER COLUMN "runtime_version" SET DATA TYPE varchar(128);

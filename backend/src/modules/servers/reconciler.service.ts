@@ -1,8 +1,8 @@
 import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
-import { eq } from 'drizzle-orm';
+import { eq, lt } from 'drizzle-orm';
 import { config } from '../../config/env';
 import { DB, Db } from '../../db/db.module';
-import { servers } from '../../db/schema';
+import { auditLogs, authSessions, serverEvents, servers, sessions } from '../../db/schema';
 import { DockerService } from './provisioning/docker.service';
 import { NetworkHardeningService } from './provisioning/network-hardening.service';
 import { ProvisionerService } from './provisioning/provisioner.service';
@@ -11,6 +11,11 @@ import { BackupsService } from './backups.service';
 
 const GRACE_MS = 5 * 60 * 1000; // never GC a resource that is seconds old
 const STUCK_PROVISIONING_MS = 15 * 60 * 1000;
+// retention: telemetry tables grow with every login/action — prune daily
+const PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const SESSIONS_TTL_MS = 90 * 24 * 60 * 60 * 1000; // login history
+const EVENTS_TTL_MS = 90 * 24 * 60 * 60 * 1000; // per-server events
+const AUDIT_TTL_MS = 180 * 24 * 60 * 60 * 1000; // compliance trail (longer)
 // storage fence: re-check a server's disk usage at most once per hour, and
 // bound the work per tick so a large fleet never stalls the reconciler.
 const STORAGE_CHECK_INTERVAL_MS = 60 * 60 * 1000;
@@ -41,6 +46,7 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
   private tickCount = 0;
   private lastPingOk = true;
   private lastStorageCheck = new Map<string, number>();
+  private lastPrune = 0;
 
   constructor(
     @Inject(DB) private db: Db,
@@ -80,6 +86,10 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
       if (recovered || this.tickCount % 5 === 0) await this.syncHardening();
       await this.enforceStorage();
       await this.gcOrphans();
+      if (Date.now() - this.lastPrune > PRUNE_INTERVAL_MS) {
+        this.lastPrune = Date.now();
+        await this.pruneHistory();
+      }
       await this.backups.createAutoIfDue();
     } catch (e) {
       this.log.warn(`reconcile failed: ${(e as Error).message}`);
@@ -92,7 +102,13 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
     const rows = await this.db.select().from(servers);
     const now = Date.now();
 
-    for (const row of rows) {
+    // bounded worker pool: sequential inspects stall the tick at fleet
+    // scale (1k servers ≈ 1k serial daemon round-trips); 8-way keeps the
+    // daemon socket and the PG pool healthy while converging ~8x faster.
+    const queue = [...rows];
+    const workers = Array.from({ length: Math.min(8, Math.max(queue.length, 1)) }, async () => {
+      while (queue.length) {
+        const row = queue.shift()!;
       try {
         if (!row.containerId) {
           if (row.status === 'provisioning' && now - row.createdAt.getTime() > STUCK_PROVISIONING_MS) {
@@ -131,7 +147,9 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
       } catch (e) {
         this.log.debug(`sync ${row.id}: ${(e as Error).message}`);
       }
-    }
+      }
+    });
+    await Promise.all(workers);
   }
 
   /**
@@ -210,6 +228,27 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
       } catch (e) {
         this.log.debug(`storage check ${row.id}: ${(e as Error).message}`);
       }
+    }
+  }
+
+  /**
+   * Retention enforcement: login history, per-server events and the audit
+   * trail grow with every action — delete rows older than their TTL, plus
+   * refresh sessions already past expiry (logout-all/login rows stay).
+   * Runs at most daily; each delete is a single indexed range statement.
+   */
+  private async pruneHistory(): Promise<void> {
+    const now = Date.now();
+    try {
+      const cut = (ttl: number) => new Date(now - ttl);
+      const s = await this.db.delete(sessions).where(lt(sessions.createdAt, cut(SESSIONS_TTL_MS))).returning({ id: sessions.id });
+      const e = await this.db.delete(serverEvents).where(lt(serverEvents.createdAt, cut(EVENTS_TTL_MS))).returning({ id: serverEvents.id });
+      const a = await this.db.delete(auditLogs).where(lt(auditLogs.createdAt, cut(AUDIT_TTL_MS))).returning({ id: auditLogs.id });
+      const x = await this.db.delete(authSessions).where(lt(authSessions.expiresAt, new Date(now))).returning({ id: authSessions.id });
+      const total = s.length + e.length + a.length + x.length;
+      if (total) this.log.log(`pruned history: ${s.length} sessions, ${e.length} events, ${a.length} audit, ${x.length} expired refresh`);
+    } catch (e) {
+      this.log.debug(`prune ${(e as Error).message}`);
     }
   }
 

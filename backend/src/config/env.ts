@@ -61,6 +61,20 @@ function ephemeralSecret(): string {
 }
 
 /**
+ * Volume-maintenance image (chown/tar/du helpers run as root): must be a
+ * digest ref. A mutable tag here would hand root-execution to whoever
+ * republishes the tag — fail the prod boot instead of running it.
+ */
+function helperImage(v: string): string {
+  const image = v.trim();
+  if (IS_PROD && !image.includes('@sha256:')) {
+    errors.push('HELPER_IMAGE must be a digest ref (name@sha256:...) in production.');
+    return 'alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc';
+  }
+  return image;
+}
+
+/**
  * Access-token lifetime: must look like `90s`, `15m` or `1h` and land in
  * 60s..1h. An operator typo (e.g. `100y`) must fail the boot, never mint
  * forever-tokens. Returns an `ms` StringValue so jsonwebtoken's
@@ -190,7 +204,7 @@ export const config: AppConfig = Object.freeze({
 
   DOCKER_ENABLED: bool('DOCKER_ENABLED', true),
   DOCKER_SOCKET: raw.DOCKER_SOCKET ?? '/var/run/docker.sock',
-  HELPER_IMAGE: raw.HELPER_IMAGE ?? 'alpine:3.20',
+  HELPER_IMAGE: helperImage(raw.HELPER_IMAGE ?? 'alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc'), // alpine:3.20
   HARDEN_NETWORK: bool('HARDEN_NETWORK', true),
   CONTAINER_PIDS_LIMIT: num('CONTAINER_PIDS_LIMIT', 512, 32, 8192),
 

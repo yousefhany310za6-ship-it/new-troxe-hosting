@@ -284,24 +284,29 @@ export class BackupsService {
     return plan?.maxBackupSlots ?? 0;
   }
 
-  /** One auto-backup per day (called by the reconciler). */
+  /**
+   * One auto-backup per server per day (called by the reconciler).
+   * Due-ness is evaluated PER SERVER (last auto backup of that server):
+   * the old global "any auto backup in 24h" check starved every server
+   * but one. Deterministic oldest-first order, bounded per tick.
+   */
   async createAutoIfDue(): Promise<void> {
-    const [last] = await this.db
-      .select({ at: backups.createdAt })
-      .from(backups)
-      .where(eq(backups.type, 'auto'))
-      .orderBy(desc(backups.createdAt))
-      .limit(1);
-    if (last && Date.now() - last.at.getTime() < 24 * 3600 * 1000) return;
-
     const rows = await this.db
-      .select({ id: servers.id, ownerId: servers.ownerId })
+      .select({ id: servers.id, ownerId: servers.ownerId, createdAt: servers.createdAt })
       .from(servers)
       .where(eq(servers.autoBackup, true))
-      .limit(50);
+      .orderBy(servers.createdAt)
+      .limit(200);
 
     for (const s of rows) {
       try {
+        const [last] = await this.db
+          .select({ at: backups.createdAt })
+          .from(backups)
+          .where(and(eq(backups.serverId, s.id), eq(backups.type, 'auto')))
+          .orderBy(desc(backups.createdAt))
+          .limit(1);
+        if (last && Date.now() - last.at.getTime() < 24 * 3600 * 1000) continue;
         await this.create(s.ownerId, s.id, { type: 'auto' });
       } catch (e) {
         const code = e instanceof AppError ? (e.getResponse() as { code?: string }).code : undefined;

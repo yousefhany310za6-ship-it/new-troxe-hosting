@@ -42,6 +42,41 @@ Prerequisites: PostgreSQL ≥ 15, Docker Engine (socket access for the API user)
 | `npm run db:seed` | seed plans |
 | `npm run db:studio` | Drizzle studio |
 
+### Production deployment (Docker)
+
+The API is host infrastructure (drives dockerd, owns host iptables), so the
+container runs with host-network visibility. **Exactly one replica** —
+reconciler GC, in-memory throttle and auto-backups assume single ownership.
+
+```bash
+docker build -t troxe-api:latest ./backend
+SOCK_GID=$(stat -c %g /var/run/docker.sock)
+docker run -d --name troxe-api --restart unless-stopped \
+  --network host --cap-add=NET_ADMIN \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  --user 1000 --group-add "$SOCK_GID" \
+  -v troxe-backups:/app/data/backups \
+  --env-file /root/troxe-api.env \
+  troxe-api:latest
+```
+
+Why these flags:
+
+- `--network host` — iptables rules must land in the **host** netns
+  (`DOCKER-USER`/`INPUT` live there, not in a container netns).
+- `--cap-add=NET_ADMIN` — minimum capability for iptables (never `--privileged`).
+- `--user 1000` + `--group-add $SOCK_GID` — the process is unprivileged;
+  only the socket group grants daemon access.
+- `troxe-backups` volume — archives under `/app/data/backups` must survive
+  restarts (set `BACKUP_DIR=/app/data/backups`).
+- Env file must set `NODE_ENV=production` (boot refuses weak secrets),
+  real `DATABASE_URL`, and distinct 48-byte secrets; `HELPER_IMAGE` must be
+  a digest ref (enforced at boot).
+- Health: load balancer → `GET /api/v1/health/ready` (liveness is `/health`).
+
+Alternative: run `node dist/main.js` directly on the host as a restricted
+user in the `docker` group (how development runs) + a systemd unit.
+
 ---
 
 ## Architecture
