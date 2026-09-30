@@ -59,49 +59,57 @@ export class ServersService {
   async create(ownerId: string, dto: CreateServerDto, ctx: ReqCtx) {
     // The plan comes from the account, never from the request body: otherwise
     // any client could claim "enterprise" and escalate its quotas (CVE-class).
-    const owner = await this.db
-      .select({ planId: users.planId })
-      .from(users)
-      .where(eq(users.id, ownerId))
-      .limit(1);
-    if (!owner.length) throw Err.notFound('USER_NOT_FOUND');
-    const plan = await this.resolvePlan(owner[0].planId);
     const region = dto.region ?? config.REGIONS[0];
     if (!config.REGIONS.includes(region)) throw Err.invalid('REGION_UNSUPPORTED', `Allowed regions: ${config.REGIONS.join(', ')}`);
 
     const env = this.cleanEnv(dto.env);
     const startup = this.cleanStartup(dto.startup) || runtimeImage(dto.runtime).defaultStartup;
 
-    // quota: plan limit + hard account cap
-    const owned = await this.db.select({ id: servers.id }).from(servers).where(eq(servers.ownerId, ownerId));
-    if (owned.length >= plan.maxServers)
-      throw Err.quota('QUOTA_SERVERS', `Your "${plan.name}" plan allows ${plan.maxServers} server(s). Upgrade to add more.`);
-    if (owned.length >= config.MAX_SERVERS_PER_USER)
-      throw Err.quota('QUOTA_SERVERS', `Account limit of ${config.MAX_SERVERS_PER_USER} servers reached.`);
+    // quota + insert are ONE transaction holding a row lock on the owner:
+    // two concurrent creates cannot both pass the count check (TOCTOU).
+    // Docker provisioning stays outside (saga: reconciler heals orphans).
+    const { plan, row } = await this.db.transaction(async (tx) => {
+      const [owner] = await tx
+        .select({ planId: users.planId })
+        .from(users)
+        .where(eq(users.id, ownerId))
+        .for('update')
+        .limit(1);
+      if (!owner) throw Err.notFound('USER_NOT_FOUND');
+      const [plan] = await tx.select().from(plans).where(eq(plans.id, owner.planId)).limit(1);
+      if (!plan) throw Err.invalid('PLAN_INVALID', 'Unknown plan');
 
-    const [row] = await this.db
-      .insert(servers)
-      .values({
-        ownerId,
-        name: dto.name,
-        runtime: dto.runtime,
-        runtimeVersion: runtimeImage(dto.runtime).image,
-        status: 'provisioning',
-        region,
-        planId: plan.id,
-        cpuMilli: plan.cpuMilli,
-        ramMb: plan.ramMb,
-        storageGb: plan.storageGb,
-        startup,
-        envEncrypted: env.length ? encryptEnv(env) : null,
-        autoRestart: dto.autoRestart ?? true,
-        autoBackup: dto.autoBackup ?? true,
-      } as never)
-      .returning()
-      .catch((e: { code?: string }) => {
-        if (e?.code === '23505') throw Err.conflict('SERVER_NAME_TAKEN', 'You already have a server with this name');
-        throw e;
-      });
+      const owned = await tx.select({ id: servers.id }).from(servers).where(eq(servers.ownerId, ownerId));
+      if (owned.length >= plan.maxServers)
+        throw Err.quota('QUOTA_SERVERS', `Your "${plan.name}" plan allows ${plan.maxServers} server(s). Upgrade to add more.`);
+      if (owned.length >= config.MAX_SERVERS_PER_USER)
+        throw Err.quota('QUOTA_SERVERS', `Account limit of ${config.MAX_SERVERS_PER_USER} servers reached.`);
+
+      const [row] = await tx
+        .insert(servers)
+        .values({
+          ownerId,
+          name: dto.name,
+          runtime: dto.runtime,
+          runtimeVersion: runtimeImage(dto.runtime).image,
+          status: 'provisioning',
+          region,
+          planId: plan.id,
+          cpuMilli: plan.cpuMilli,
+          ramMb: plan.ramMb,
+          storageGb: plan.storageGb,
+          startup,
+          envEncrypted: env.length ? encryptEnv(env) : null,
+          autoRestart: dto.autoRestart ?? true,
+          autoBackup: dto.autoBackup ?? true,
+        } as never)
+        .returning()
+        .catch((e: { code?: string }) => {
+          if (e?.code === '23505') throw Err.conflict('SERVER_NAME_TAKEN', 'You already have a server with this name');
+          throw e;
+        });
+      return { plan, row };
+    });
 
     await this.event(row.id, ownerId, 'create', { plan: plan.id, runtime: dto.runtime, region });
 

@@ -8,6 +8,13 @@
       "when": 1790714830038,
       "tag": "0000_elite_veda",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1790726262482,
+      "tag": "0001_fixed_silver_centurion",
+      "breakpoints": true
     }
   ]
 }

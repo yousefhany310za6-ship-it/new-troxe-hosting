@@ -57,6 +57,14 @@ export const authSessions = pgTable('auth_sessions', {
   userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
   /** sha256(refresh secret) — never the token itself */
   refreshTokenHash: varchar('refresh_token_hash', { length: 64 }).notNull(),
+  /**
+   * Previous secret's hash + when it was superseded. A retry presenting the
+   * just-rotated secret inside the grace window is treated as a duplicate
+   * request (re-issued, never a family wipe) — only a DISTINCT second reuse
+   * kills the family (theft detection).
+   */
+  prevRefreshTokenHash: varchar('prev_refresh_token_hash', { length: 64 }),
+  prevRotatedAt: timestamp('prev_rotated_at'),
   ip: varchar('ip', { length: 45 }),
   device: varchar('device', { length: 255 }),
   expiresAt: timestamp('expires_at').notNull(),

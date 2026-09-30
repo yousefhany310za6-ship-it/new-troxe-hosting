@@ -63,49 +63,56 @@ export class BackupsService {
     const server = await this.serversSvc.requireOwned(ownerId, serverId);
     const slots = await this.backupSlots(server);
 
-    const existing = await this.db.select({ id: backups.id }).from(backups).where(eq(backups.serverId, serverId));
-    if (slots <= 0)
-      throw Err.quota('QUOTA_BACKUPS', 'Your plan does not include backup slots. Upgrade to keep backups.');
-    if (existing.length >= slots)
-      throw Err.quota('QUOTA_BACKUPS', `Your plan allows ${slots} backup(s). Delete one to make room.`);
-
-    // total backup bytes per owner — BACKUP_MAX_TOTAL_MB is a real cap, not
-    // a display value: reject before spending a helper run + disk on tar.
-    const ownedIds = (
-      await this.db.select({ id: servers.id }).from(servers).where(eq(servers.ownerId, ownerId))
-    ).map((r) => r.id);
-    if (ownedIds.length) {
-      const sizes = await this.db
-        .select({ sizeBytes: backups.sizeBytes })
-        .from(backups)
-        .where(inArray(backups.serverId, ownedIds));
-      const usedBytes = sizes.reduce((acc, r) => acc + (r.sizeBytes ?? 0), 0);
-      if (usedBytes >= config.BACKUP_MAX_TOTAL_MB * 1024 * 1024)
-        throw Err.quota(
-          'QUOTA_BACKUP_SPACE',
-          `Backup storage is full (${config.BACKUP_MAX_TOTAL_MB} MB). Delete old backups to make room.`,
-        );
-    }
-
     if (!this.docker.available)
       throw new AppError('DOCKER_UNAVAILABLE', 503, 'Container runtime is not available');
 
+    // slot count + space cap + insert are ONE transaction holding a row lock
+    // on the server: concurrent creates cannot both pass the checks (TOCTOU).
+    // The tar run stays outside (saga: failed rows are marked, files rm'd).
     const id = randomUUID();
     const dir = this.dirFor(ownerId, serverId);
     const file = this.fileFor(ownerId, serverId, id);
-    await mkdir(dir, { recursive: true, mode: 0o700 });
+    const [row] = await this.db.transaction(async (tx) => {
+      const locked = await tx.select({ id: servers.id }).from(servers).where(eq(servers.id, serverId)).for('update').limit(1);
+      if (!locked.length) throw Err.notFound('SERVER_NOT_FOUND');
 
-    const [row] = await this.db
-      .insert(backups)
-      .values({
-        id,
-        serverId,
-        name: (opts.name ?? `backup-${new Date().toISOString().slice(0, 19)}`).replace(/[^\w. -]/g, '').slice(0, 128),
-        storageKey: file,
-        status: 'pending',
-        type: opts.type ?? 'manual',
-      } as never)
-      .returning();
+      const existing = await tx.select({ id: backups.id }).from(backups).where(eq(backups.serverId, serverId));
+      if (slots <= 0)
+        throw Err.quota('QUOTA_BACKUPS', 'Your plan does not include backup slots. Upgrade to keep backups.');
+      if (existing.length >= slots)
+        throw Err.quota('QUOTA_BACKUPS', `Your plan allows ${slots} backup(s). Delete one to make room.`);
+
+      // total backup bytes per owner — BACKUP_MAX_TOTAL_MB is a real cap, not
+      // a display value: reject before spending a helper run + disk on tar.
+      const ownedIds = (await tx.select({ id: servers.id }).from(servers).where(eq(servers.ownerId, ownerId))).map(
+        (r) => r.id,
+      );
+      if (ownedIds.length) {
+        const sizes = await tx
+          .select({ sizeBytes: backups.sizeBytes })
+          .from(backups)
+          .where(inArray(backups.serverId, ownedIds));
+        const usedBytes = sizes.reduce((acc, r) => acc + (r.sizeBytes ?? 0), 0);
+        if (usedBytes >= config.BACKUP_MAX_TOTAL_MB * 1024 * 1024)
+          throw Err.quota(
+            'QUOTA_BACKUP_SPACE',
+            `Backup storage is full (${config.BACKUP_MAX_TOTAL_MB} MB). Delete old backups to make room.`,
+          );
+      }
+
+      return tx
+        .insert(backups)
+        .values({
+          id,
+          serverId,
+          name: (opts.name ?? `backup-${new Date().toISOString().slice(0, 19)}`).replace(/[^\w. -]/g, '').slice(0, 128),
+          storageKey: file,
+          status: 'pending',
+          type: opts.type ?? 'manual',
+        } as never)
+        .returning();
+    });
+    await mkdir(dir, { recursive: true, mode: 0o700 });
 
     try {
       await this.docker.ensureImage(config.HELPER_IMAGE);

@@ -2,7 +2,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import bcrypt from 'bcrypt';
 import { randomUUID } from 'crypto';
-import { and, desc, eq, gt, isNull } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull, sql } from 'drizzle-orm';
 import { config } from '../../config/env';
 import { randomToken, safeEqual, sha256 } from '../../common/crypto';
 import { hashPassword, verifyPassword } from '../../common/password';
@@ -173,48 +173,90 @@ export class AuthService {
   async refresh(token: string | undefined, ctx: ReqCtx): Promise<IssuedSession> {
     const parsed = this.parseRefresh(token);
     if (!parsed) throw Err.unauthorized('INVALID_REFRESH');
-
-    const [row] = await this.db.select().from(authSessions).where(eq(authSessions.id, parsed.sid)).limit(1);
     const presented = sha256(parsed.secret);
 
-    if (!row) throw Err.unauthorized('INVALID_REFRESH');
+    // Whole rotation is ONE transaction holding a row lock on the session:
+    // concurrent uses of the same token serialize here, so theft detection
+    // can never be bypassed by a race (TOCTOU), and a duplicate request can
+    // never corrupt the stored secret.
+    //
+    // NOTE: family wipes happen OUTSIDE the transaction below. A throw
+    // inside `transaction()` rolls everything back — including the wipe —
+    // which would silently resurrect a compromised family.
+    const decision = await this.db.transaction(async (tx) => {
+      const [row] = await tx.select().from(authSessions).where(eq(authSessions.id, parsed.sid)).for('update').limit(1);
+      if (!row) return { kind: 'invalid' } as const;
 
-    // replay of an already-rotated token → assume theft, kill the whole family
-    if (!safeEqual(presented, row.refreshTokenHash)) {
-      await this.db.delete(authSessions).where(eq(authSessions.familyId, row.familyId));
+      const current = safeEqual(presented, row.refreshTokenHash);
+      const inGrace =
+        !!row.prevRefreshTokenHash &&
+        !!row.prevRotatedAt &&
+        safeEqual(presented, row.prevRefreshTokenHash) &&
+        Date.now() - row.prevRotatedAt.getTime() < 60_000;
+
+      if (!current && !inGrace) {
+        // replay of a superseded secret outside grace (or a forged one) →
+        // assume theft, kill the whole family (outside, see NOTE).
+        return { kind: 'reuse', familyId: row.familyId, userId: row.userId } as const;
+      }
+
+      if (row.revokedAt || row.expiresAt.getTime() <= Date.now()) {
+        return { kind: 'expired', familyId: row.familyId } as const;
+      }
+
+      const [user] = await tx.select().from(users).where(eq(users.id, row.userId)).limit(1);
+      if (!user) return { kind: 'gone' } as const;
+
+      // rotate: same row/family, brand new secret; the superseded hash stays
+      // valid for 60s so a retried request re-issues instead of wiping.
+      const secret = randomToken(32);
+      const expiresAt = new Date(Date.now() + config.JWT_REFRESH_TTL_SEC * 1000);
+      await tx
+        .update(authSessions)
+        .set({
+          prevRefreshTokenHash: row.refreshTokenHash,
+          prevRotatedAt: new Date(),
+          refreshTokenHash: sha256(secret),
+          expiresAt,
+          lastUsedAt: new Date(),
+          ip: ctx.ip,
+          device: ctx.device,
+        })
+        .where(eq(authSessions.id, row.id));
+
+      return {
+        kind: 'ok',
+        accessToken: this.accessToken({ id: user.id, email: user.email, role: user.role }, row.id),
+        refreshToken: `${row.id}.${secret}`,
+        sessionId: row.id,
+        expiresAt,
+      } as const;
+    });
+
+    if (decision.kind === 'invalid') throw Err.unauthorized('INVALID_REFRESH');
+    if (decision.kind === 'gone') throw Err.unauthorized('USER_GONE');
+    if (decision.kind === 'expired') {
+      await this.db.delete(authSessions).where(eq(authSessions.familyId, decision.familyId));
+      throw Err.unauthorized('REFRESH_EXPIRED');
+    }
+    if (decision.kind === 'reuse') {
+      await this.db.delete(authSessions).where(eq(authSessions.familyId, decision.familyId));
       await this.audit.record({
-        actorId: row.userId,
+        actorId: decision.userId,
         action: 'auth.refresh.reuse',
         targetType: 'auth_session',
-        targetId: row.familyId,
+        targetId: decision.familyId,
         ip: ctx.ip,
         userAgent: ctx.device,
       });
-      this.log.warn(`refresh-token reuse detected for family ${row.familyId}`);
+      this.log.warn(`refresh-token reuse detected for family ${decision.familyId}`);
       throw Err.unauthorized('REFRESH_REUSED');
     }
-
-    if (row.revokedAt || row.expiresAt.getTime() <= Date.now()) {
-      await this.db.delete(authSessions).where(eq(authSessions.familyId, row.familyId));
-      throw Err.unauthorized('REFRESH_EXPIRED');
-    }
-
-    const [user] = await this.db.select().from(users).where(eq(users.id, row.userId)).limit(1);
-    if (!user) throw Err.unauthorized('USER_GONE');
-
-    // rotate: same row/family, brand new secret
-    const secret = randomToken(32);
-    const expiresAt = new Date(Date.now() + config.JWT_REFRESH_TTL_SEC * 1000);
-    await this.db
-      .update(authSessions)
-      .set({ refreshTokenHash: sha256(secret), expiresAt, lastUsedAt: new Date(), ip: ctx.ip, device: ctx.device })
-      .where(eq(authSessions.id, row.id));
-
     return {
-      accessToken: this.accessToken({ id: user.id, email: user.email, role: user.role }, row.id),
-      refreshToken: `${row.id}.${secret}`,
-      sessionId: row.id,
-      expiresAt,
+      accessToken: decision.accessToken,
+      refreshToken: decision.refreshToken,
+      sessionId: decision.sessionId,
+      expiresAt: decision.expiresAt,
     };
   }
 
@@ -272,19 +314,25 @@ export class AuthService {
   }
 
   private async registerFailure(user: User): Promise<number> {
-    const count = user.failedLogins + 1;
+    // atomic increment + RETURNING: concurrent failures cannot overwrite
+    // each other and dodge the lockout threshold (lost update).
+    const [updated] = await this.db
+      .update(users)
+      .set({ failedLogins: sql`failed_logins + 1` })
+      .where(eq(users.id, user.id))
+      .returning({ failedLogins: users.failedLogins, lockedUntil: users.lockedUntil });
+    const count = updated?.failedLogins ?? user.failedLogins + 1;
     let lockedSeconds = 0;
     if (count >= config.LOCKOUT_THRESHOLD) {
       const step = count - config.LOCKOUT_THRESHOLD; // 0,1,2,...
       lockedSeconds = Math.min(30 * 2 ** step, 900); // 30s → 15m cap
     }
-    await this.db
-      .update(users)
-      .set({
-        failedLogins: count,
-        lockedUntil: lockedSeconds ? new Date(Date.now() + lockedSeconds * 1000) : user.lockedUntil,
-      })
-      .where(eq(users.id, user.id));
+    if (lockedSeconds) {
+      await this.db
+        .update(users)
+        .set({ lockedUntil: new Date(Date.now() + lockedSeconds * 1000) })
+        .where(eq(users.id, user.id));
+    }
     return lockedSeconds;
   }
 
