@@ -111,6 +111,10 @@ let ENV_KEY = need('ENV_ENCRYPTION_KEY', {
   hint: 'AES-256 key, 64 hex chars. Generate with: openssl rand -hex 32',
 });
 
+let WS_TICKET_SECRET = raw.WS_TICKET_SECRET?.trim();
+if (!WS_TICKET_SECRET) WS_TICKET_SECRET = ACCESS_SECRET ?? raw.JWT_ACCESS_SECRET?.trim();
+if (!WS_TICKET_SECRET) WS_TICKET_SECRET = ephemeralSecret();
+
 if (IS_PROD) {
   if (ACCESS_SECRET && REFRESH_SECRET && ACCESS_SECRET === REFRESH_SECRET)
     errors.push('JWT_ACCESS_SECRET and JWT_REFRESH_SECRET must be different.');
@@ -167,6 +171,7 @@ export interface AppConfig {
   readonly JWT_REFRESH_TTL_SEC: number;
   readonly BCRYPT_ROUNDS: number;
   readonly ENV_ENCRYPTION_KEY: string;
+  readonly WS_TICKET_SECRET: string;
   readonly REFRESH_COOKIE: string;
   readonly ALLOWED_ORIGINS: readonly string[];
   readonly TRUST_PROXY: boolean;
@@ -203,6 +208,7 @@ export const config: AppConfig = Object.freeze({
   JWT_REFRESH_TTL_SEC: num('JWT_REFRESH_TTL_SEC', 7 * 24 * 3600, 600, 30 * 24 * 3600),
   BCRYPT_ROUNDS: num('BCRYPT_ROUNDS', IS_PROD ? 12 : 10, IS_PROD ? 10 : 4, 15),
   ENV_ENCRYPTION_KEY: ENV_KEY,
+  WS_TICKET_SECRET: WS_TICKET_SECRET,
   REFRESH_COOKIE: IS_PROD ? '__Host-troxe_refresh' : 'troxe_refresh',
 
   ALLOWED_ORIGINS: Object.freeze(ALLOWED_ORIGINS),

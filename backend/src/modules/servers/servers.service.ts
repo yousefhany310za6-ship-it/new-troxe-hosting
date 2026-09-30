@@ -13,6 +13,7 @@ import { ProvisionerService, type ProvisionResult } from './provisioning/provisi
 import { runtimeImage, type Runtime } from './provisioning/images';
 import { CreateServerDto, UpdateServerDto } from './dto';
 import { backupDirFor, backupOwnerDir } from './backup-paths';
+import { RealtimeGateway } from '@auth/realtime.gateway';
 
 const CONTROL_CHARS = /[\u0000-\u0008\u000B-\u001F\u007F]/g;
 
@@ -26,6 +27,7 @@ export class ServersService {
     private provisioner: ProvisionerService,
     private docker: DockerService,
     private audit: AuditService,
+    private realtime: RealtimeGateway,
   ) {}
 
   /**
@@ -55,6 +57,7 @@ export class ServersService {
   /** Owner-scoped status write for sibling services (restore fencing). */
   async setStatus(id: string, patch: Partial<typeof servers.$inferInsert>): Promise<void> {
     await this.setField(id, patch);
+    if (patch.status) this.realtime.broadcastServerStatus(id, patch.status);
   }
 
   // ---- reads ----------------------------------------------------------------
@@ -470,6 +473,7 @@ export class ServersService {
 
   private async setField(id: string, patch: Partial<typeof servers.$inferInsert>) {
     await this.db.update(servers).set({ ...patch, updatedAt: new Date() } as never).where(eq(servers.id, id));
+    if (patch.status) this.realtime.broadcastServerStatus(id, patch.status);
   }
 
   private async markError(id: string, message: string) {

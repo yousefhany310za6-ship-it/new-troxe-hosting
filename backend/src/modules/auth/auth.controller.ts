@@ -9,6 +9,7 @@ import { CurrentUser } from './current-user';
 import type { ReqUser } from './jwt.guard';
 import { LoginDto, SignupDto } from './dto';
 import { JwtAuthGuard } from './jwt.guard';
+import { WsTicketService } from './ws-ticket.service';
 
 const COOKIE = config.REFRESH_COOKIE;
 const cookieOpts = {
@@ -30,7 +31,10 @@ const noStore = (res: Response) => res.setHeader('Cache-Control', 'no-store');
 /** Routes → /api/v1/auth/... */
 @Controller({ path: 'auth', version: '1' })
 export class AuthController {
-  constructor(private auth: AuthService) {}
+  constructor(
+    private auth: AuthService,
+    private wsTicket: WsTicketService,
+  ) {}
 
   @Post('signup')
   @Throttle(authThrottle)
@@ -103,5 +107,13 @@ export class AuthController {
   me(@CurrentUser() u: ReqUser) {
     if (!u?.sub) throw Err.unauthorized();
     return { id: u.sub, role: u.role };
+  }
+
+  /** Issue a short-lived WebSocket ticket (30s TTL). */
+  @Post('ws/token')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(200)
+  wsToken(@CurrentUser() u: ReqUser) {
+    return { ticket: this.wsTicket.issue(u.sub) };
   }
 }
