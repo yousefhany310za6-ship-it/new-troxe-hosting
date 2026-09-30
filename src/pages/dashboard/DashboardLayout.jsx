@@ -3,7 +3,7 @@ import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { Bell, LayoutDashboard, LogOut, Menu, Server, Settings, X } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
-import { DASHBOARD_USER } from '@/data/dashboard.js';
+import { useAuth } from '@/context/AuthContext.jsx';
 
 const NAV = [
     { to: '/dashboard', label: 'Overview', Icon: LayoutDashboard, end: true },
@@ -13,6 +13,7 @@ const NAV = [
 
 function SidebarContent({ onNavigate }) {
     const navigate = useNavigate();
+    const { user, signOut } = useAuth();
 
     return (
         <div className="flex h-full flex-col">
@@ -51,7 +52,7 @@ function SidebarContent({ onNavigate }) {
                 <div className="mb-2 rounded-md border border-hairline bg-card px-3.5 py-3">
                     <p className="text-[0.8rem] text-ink-muted">Current plan</p>
                     <p className="text-[0.95rem] font-bold text-foreground">
-                        {DASHBOARD_USER.plan} — $2/mo
+                        {user?.planId ?? 'free'} plan
                     </p>
                     <Link
                         to="/pricing"
@@ -63,11 +64,11 @@ function SidebarContent({ onNavigate }) {
                 </div>
                 <button
                     type="button"
-                    onClick={() => navigate('/')}
+                    onClick={async () => { await signOut(); navigate('/'); }}
                     className="flex items-center gap-3 rounded-md px-3.5 py-2.5 text-[0.92rem] font-semibold text-ink-secondary transition hover:bg-veil hover:text-foreground"
                 >
                     <LogOut className="size-[18px]" />
-                    Back to site
+                    Sign out
                 </button>
             </div>
         </div>
@@ -76,6 +77,7 @@ function SidebarContent({ onNavigate }) {
 
 export default function DashboardLayout() {
     const [open, setOpen] = useState(false);
+    const { user } = useAuth();
 
     return (
         <div className="min-h-screen bg-black text-foreground">
@@ -120,16 +122,8 @@ export default function DashboardLayout() {
                         <span className="font-mono">/</span> dashboard
                     </div>
                     <div className="ml-auto flex items-center gap-2">
-                        <button
-                            type="button"
-                            aria-label="Notifications"
-                            className="relative rounded-md p-2 text-ink-secondary transition hover:bg-veil hover:text-foreground"
-                        >
-                            <Bell className="size-5" />
-                            <span className="absolute top-1.5 right-1.5 size-2 rounded-full bg-white" />
-                        </button>
                         <div className="flex size-9 items-center justify-center rounded-full bg-white/10 text-sm font-bold text-white">
-                            {DASHBOARD_USER.name.charAt(0).toUpperCase()}
+                            {user?.name?.charAt(0)?.toUpperCase() ?? 'U'}
                         </div>
                     </div>
                 </header>

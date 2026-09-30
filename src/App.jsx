@@ -4,6 +4,8 @@ import { Route, Routes } from 'react-router-dom';
 import ScrollManager from './components/ScrollManager.jsx';
 import PageLoader from './components/PageLoader.jsx';
 import Home from './pages/Home.jsx';
+import { AuthProvider } from './context/AuthContext.jsx';
+import RequireAuth, { GuestOnly } from './components/guards.jsx';
 
 // Auth pages (and their `motion` dependency) stay out of the landing bundle.
 const SignIn = lazy(() => import('./pages/SignIn.jsx'));
@@ -19,11 +21,12 @@ const FaqPage = lazy(() => import('./pages/FaqPage.jsx'));
 const FeaturesPage = lazy(() => import('./pages/FeaturesPage.jsx'));
 const ServicesPage = lazy(() => import('./pages/ServicesPage.jsx'));
 
-// Dashboard shell + sections (demo data, no backend yet).
+// Dashboard shell + sections (now wired to API).
 const DashboardLayout = lazy(() => import('./pages/dashboard/DashboardLayout.jsx'));
 const Overview = lazy(() => import('./pages/dashboard/Overview.jsx'));
 const Servers = lazy(() => import('./pages/dashboard/Servers.jsx'));
 const ServerDetail = lazy(() => import('./pages/dashboard/ServerDetail.jsx'));
+const CreateServer = lazy(() => import('./pages/dashboard/CreateServer.jsx'));
 const Settings = lazy(() => import('./pages/dashboard/Settings.jsx'));
 
 // The WebGL globe (cobe) is only needed on the 404 route, so it stays out of
@@ -32,14 +35,14 @@ const NotFoundPage = lazy(() => import('./pages/NotFoundPage.jsx'));
 
 export default function App() {
     return (
-        <>
+        <AuthProvider>
             <ScrollManager />
             <Suspense fallback={<PageLoader />}>
                 <Routes>
                     <Route path="/" element={<Home />} />
-                    <Route path="/signin" element={<SignIn />} />
-                    <Route path="/login" element={<SignIn />} />
-                    <Route path="/signup" element={<SignUp />} />
+                    <Route path="/signin" element={<GuestOnly><SignIn /></GuestOnly>} />
+                    <Route path="/login" element={<GuestOnly><SignIn /></GuestOnly>} />
+                    <Route path="/signup" element={<GuestOnly><SignUp /></GuestOnly>} />
                     <Route path="/about" element={<About />} />
                     <Route path="/contact" element={<Contact />} />
                     <Route path="/terms" element={<Terms />} />
@@ -48,16 +51,19 @@ export default function App() {
                     <Route path="/faq" element={<FaqPage />} />
                     <Route path="/features" element={<FeaturesPage />} />
                     <Route path="/services" element={<ServicesPage />} />
-                    <Route path="/dashboard" element={<DashboardLayout />}>
-                        <Route index element={<Overview />} />
-                        <Route path="servers" element={<Servers />} />
-                        <Route path="servers/:id" element={<ServerDetail />} />
-                        <Route path="settings" element={<Settings />} />
+                    <Route element={<RequireAuth />}>
+                        <Route path="/dashboard" element={<DashboardLayout />}>
+                            <Route index element={<Overview />} />
+                            <Route path="servers" element={<Servers />} />
+                            <Route path="servers/new" element={<CreateServer />} />
+                            <Route path="servers/:id" element={<ServerDetail />} />
+                            <Route path="settings" element={<Settings />} />
+                        </Route>
                     </Route>
                     {/* Any unknown URL renders the Cosmic 404 page */}
                     <Route path="*" element={<NotFoundPage />} />
                 </Routes>
             </Suspense>
-        </>
+        </AuthProvider>
     );
 }

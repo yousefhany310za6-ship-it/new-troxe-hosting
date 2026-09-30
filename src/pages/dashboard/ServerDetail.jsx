@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useNavigate } from 'react-router-dom';
 import {
     ArrowLeft,
     Check,
@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
-import { CONSOLE_POOL, SERVER_LOGS, getServerDetail } from '@/data/dashboard.js';
+import { apiGet, apiPost, apiPatch, apiDelete } from '@/lib/api.js';
 import { STATUS_STYLE } from './Overview.jsx';
 import { RUNTIME_ICONS } from './Servers.jsx';
 
@@ -36,147 +36,259 @@ const TABS = [
 const inputClass =
     'w-full rounded-xl border border-hairline bg-white/10 px-4 py-2.5 text-[0.88rem] text-foreground placeholder-ink-muted transition focus:border-primary focus:ring-2 focus:ring-ring/40 focus:outline-none';
 
+const actionBtn =
+    'inline-flex items-center gap-1.5 rounded-md border border-hairline bg-veil px-3 py-1.5 text-[0.8rem] font-semibold text-ink-secondary transition hover:border-hairline-hover hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40';
+
 function timeNow() {
     const d = new Date();
     const pad = (n) => String(n).padStart(2, '0');
     return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-function fullDateNow() {
-    return (
-        new Date().toLocaleDateString('en-US', {
-            month: 'short',
-            day: 'numeric',
-            year: 'numeric',
-        }) + ' — ' + timeNow()
-    );
-}
-
 export default function ServerDetail() {
     const { id } = useParams();
-    const detail = getServerDetail(id);
+    const navigate = useNavigate();
 
+    const [server, setServer] = useState(null);
+    const [stats, setStats] = useState(null);
+    const [usage, setUsage] = useState(null);
+    const [backups, setBackups] = useState([]);
+    const [logs, setLogs] = useState('');
     const [tab, setTab] = useState('overview');
-    const [status, setStatus] = useState(detail?.status ?? 'offline');
+    const [status, setStatus] = useState('offline');
     const [msg, setMsg] = useState({ text: '', ok: true });
 
-    // Console
-    const [lines, setLines] = useState(SERVER_LOGS[id] ?? []);
-    const [cmd, setCmd] = useState('');
+    const [lines, setLines] = useState([]);
     const logRef = useRef(null);
 
-    // Files
     const [path, setPath] = useState([]);
 
-    // Backups
-    const [backups, setBackups] = useState(detail?.backups ?? []);
-
-    // Settings
-    const [name, setName] = useState(detail?.name ?? '');
-    const [startup, setStartup] = useState(detail?.startup ?? '');
-    const [env, setEnv] = useState(detail?.env ?? []);
+    const [name, setName] = useState('');
+    const [startup, setStartup] = useState('');
+    const [env, setEnv] = useState([]);
     const [autoRestart, setAutoRestart] = useState(true);
     const [autoBackup, setAutoBackup] = useState(true);
 
-    // Reset everything when switching servers
-    useEffect(() => {
-        setTab('overview');
-        setStatus(detail?.status ?? 'offline');
-        setMsg({ text: '', ok: true });
-        setLines(SERVER_LOGS[id] ?? []);
-        setCmd('');
-        setPath([]);
-        setBackups(detail?.backups ?? []);
-        setName(detail?.name ?? '');
-        setStartup(detail?.startup ?? '');
-        setEnv(detail?.env ?? []);
-        setAutoRestart(true);
-        setAutoBackup(true);
-    }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
+    const fetchServer = async () => {
+        try {
+            const data = await apiGet(`/servers/${id}`);
+            setServer(data);
+            setStatus(data.status);
+            if (!name) setName(data.name);
+            if (!startup) setStartup(data.startup ?? '');
+            if (env.length === 0) setEnv(data.env ?? []);
+            if (autoRestart !== data.autoRestart) setAutoRestart(data.autoRestart);
+            if (autoBackup !== data.autoBackup) setAutoBackup(data.autoBackup);
+        } catch (e) {
+            setMsg({ text: e.message, ok: false });
+        }
+    };
 
-    // Live console feed
+    const fetchStats = async () => {
+        if (!server?.containerId) { setStats(null); return; }
+        try {
+            const data = await apiGet(`/servers/${id}/stats`);
+            setStats(data);
+        } catch { setStats(null); }
+    };
+
+    const fetchUsage = async () => {
+        try {
+            const data = await apiGet(`/servers/${id}/usage`);
+            setUsage(data);
+        } catch { setUsage(null); }
+    };
+
+    const fetchBackups = async () => {
+        try {
+            const data = await apiGet(`/servers/${id}/backups`);
+            setBackups(data);
+        } catch { setBackups([]); }
+    };
+
+    const fetchLogs = async () => {
+        if (!server?.containerId || status !== 'online') return;
+        try {
+            const data = await apiGet(`/servers/${id}/logs?tail=200`);
+            setLogs(data.logs ?? '');
+        } catch { /* ignore */ }
+    };
+
     useEffect(() => {
-        if (tab !== 'console' || status !== 'online') return undefined;
-        const timer = setInterval(() => {
-            const line = CONSOLE_POOL[Math.floor(Math.random() * CONSOLE_POOL.length)];
-            setLines((prev) => [...prev.slice(-99), `[${timeNow()}] ${line}`]);
-        }, 2500);
+        fetchServer();
+        fetchBackups();
+    }, [id]);
+
+    useEffect(() => {
+        if (!server) return;
+        let alive = true;
+        const interval = setInterval(() => {
+            if (!alive) return;
+            fetchServer();
+            fetchStats();
+            fetchUsage();
+            fetchBackups();
+            if (tab === 'console' && status === 'online') fetchLogs();
+        }, 5000);
+        return () => { alive = false; clearInterval(interval); };
+    }, [server, tab, status]);
+
+    useEffect(() => {
+        if (server) setStatus(server.status);
+    }, [server]);
+
+    useEffect(() => {
+        if (tab !== 'console' || status !== 'online') return;
+        const timer = setInterval(() => fetchLogs(), 3000);
         return () => clearInterval(timer);
-    }, [tab, status]);
+    }, [tab, status, id]);
 
     useEffect(() => {
         if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-    }, [lines, tab]);
+    }, [logs]);
 
-    if (!detail) {
+    if (!server) {
         return (
             <div className="flex flex-col items-center gap-4 py-20 text-center">
-                <p className="text-[1.1rem] font-bold">Server not found</p>
-                <Link to="/dashboard/servers" className="text-sm text-ink-secondary hover:text-foreground hover:underline hover:underline-offset-4">
-                    Back to servers
-                </Link>
+                <p className="text-[1.1rem] font-bold">Loading…</p>
             </div>
         );
     }
 
-    const RuntimeIcon = RUNTIME_ICONS[detail.runtime];
+    const RuntimeIcon = RUNTIME_ICONS[server.runtime];
     const online = status === 'online';
 
-    const start = () => {
-        setStatus('online');
-        setLines((prev) => [...prev, `[${timeNow()}] Server started — streaming output`]);
-    };
-    const stop = () => setStatus('offline');
-    const restart = () => {
+    const start = async () => {
         setStatus('restarting');
-        setTimeout(() => {
-            setStatus('online');
-            setLines((prev) => [...prev, `[${timeNow()}] Server restarted`]);
-        }, 2000);
+        setLines((prev) => [...prev, `[${timeNow()}] Starting server…`]);
+        try {
+            await apiPost(`/servers/${id}/start`);
+            await fetchServer();
+        } catch (e) {
+            setLines((prev) => [...prev, `[${timeNow()}] Error: ${e.message}`]);
+        }
+    };
+    const stop = async () => {
+        setLines((prev) => [...prev, `[${timeNow()}] Stopping server…`]);
+        try {
+            await apiPost(`/servers/${id}/stop`);
+            await fetchServer();
+        } catch (e) {
+            setLines((prev) => [...prev, `[${timeNow()}] Error: ${e.message}`]);
+        }
+    };
+    const restart = async () => {
+        setStatus('restarting');
+        setLines((prev) => [...prev, `[${timeNow()}] Restarting server…`]);
+        try {
+            await apiPost(`/servers/${id}/restart`);
+            await fetchServer();
+        } catch (e) {
+            setLines((prev) => [...prev, `[${timeNow()}] Error: ${e.message}`]);
+        }
     };
 
     const sendCommand = (e) => {
         e.preventDefault();
-        const c = cmd.trim();
-        if (!c) return;
-        if (c === 'clear') {
-            setLines([]);
-        } else if (c === 'help') {
-            setLines((prev) => [...prev, `$ ${c}`, 'Available: help, clear, status, restart']);
-        } else if (c === 'status') {
-            setLines((prev) => [...prev, `$ ${c}`, `Status: ${status} — uptime ${detail.uptime}`]);
-        } else if (c === 'restart') {
-            setLines((prev) => [...prev, `$ ${c}`, 'Restart requested...']);
-            restart();
-        } else {
-            setLines((prev) => [...prev, `$ ${c}`, 'Command sent to server. (Demo)']);
+        setLines((prev) => [...prev, `[${timeNow()}] Interactive exec is not exposed via the API. Use SSH/port-forward if enabled.`]);
+    };
+
+    const createBackup = async () => {
+        setMsg({ text: 'Creating backup…', ok: true });
+        try {
+            await apiPost(`/servers/${id}/backups`);
+            setMsg({ text: 'Backup started', ok: true });
+            fetchBackups();
+        } catch (e) {
+            setMsg({ text: e.message, ok: false });
         }
-        setCmd('');
     };
 
-    const dirAt = (trail) => trail.reduce((node, seg) => node[seg]?.children ?? {}, detail.files ?? {});
-    const entries = Object.entries(dirAt(path));
-
-    const createBackup = () => {
-        const n = backups.length + 1;
-        setBackups((list) => [
-            { id: `manual-${Date.now()}`, name: `manual-backup-${n}`, size: '1.2 GB', date: fullDateNow(), auto: false },
-            ...list,
-        ]);
-        setMsg({ text: 'Backup created. (Demo)', ok: true });
+    const restoreBackup = async (backupId) => {
+        setMsg({ text: 'Restoring backup…', ok: true });
+        try {
+            await apiPost(`/servers/${id}/backups/${backupId}/restore`);
+            setMsg({ text: 'Restore started', ok: true });
+            fetchBackups();
+            fetchServer();
+        } catch (e) {
+            setMsg({ text: e.message, ok: false });
+        }
     };
 
-    const saveSettings = (e) => {
+    const deleteBackup = async (backupId) => {
+        try {
+            await apiDelete(`/servers/${id}/backups/${backupId}`);
+            setMsg({ text: 'Backup deleted', ok: true });
+            fetchBackups();
+        } catch (e) {
+            setMsg({ text: e.message, ok: false });
+        }
+    };
+
+    const saveSettings = async (e) => {
         e.preventDefault();
         if (!name.trim() || !startup.trim()) {
             setMsg({ text: 'Server name and startup command are required.', ok: false });
             return;
         }
-        setMsg({ text: 'Server settings saved. Restart to apply. (Demo)', ok: true });
+        try {
+            await apiPatch(`/servers/${id}`, {
+                name: name.trim(),
+                startup: startup.trim(),
+                env,
+                autoRestart,
+                autoBackup,
+            });
+            setMsg({ text: 'Server settings saved. Restart to apply.', ok: true });
+            fetchServer();
+        } catch (e) {
+            setMsg({ text: e.message, ok: false });
+        }
     };
 
-    const actionBtn =
-        'inline-flex items-center gap-1.5 rounded-md border border-hairline bg-veil px-3 py-1.5 text-[0.8rem] font-semibold text-ink-secondary transition hover:border-hairline-hover hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40';
+    const reinstall = async () => {
+        if (!window.confirm('Reinstall will WIPE all data on this server. Type the server name to confirm.')) return;
+        const confirmName = window.prompt('Confirm server name:');
+        if (confirmName !== server.name) {
+            setMsg({ text: 'Name mismatch. Reinstall cancelled.', ok: false });
+            return;
+        }
+        setMsg({ text: 'Reinstalling…', ok: true });
+        try {
+            await apiPost(`/servers/${id}/reinstall`);
+            setMsg({ text: 'Reinstall started', ok: true });
+            fetchServer();
+        } catch (e) {
+            setMsg({ text: e.message, ok: false });
+        }
+    };
+
+    const deleteServer = async () => {
+        if (!window.confirm('This will DELETE the server and ALL its data permanently. Type DELETE to confirm.')) return;
+        const confirm = window.prompt('Type DELETE to confirm:');
+        if (confirm !== 'DELETE') {
+            setMsg({ text: 'Confirmation failed. Deletion cancelled.', ok: false });
+            return;
+        }
+        setMsg({ text: 'Deleting server…', ok: true });
+        try {
+            await apiDelete(`/servers/${id}`);
+            navigate('/dashboard/servers');
+        } catch (e) {
+            setMsg({ text: e.message, ok: false });
+        }
+    };
+
+    const fmtBytes = (bytes, limit) => {
+        if (!bytes) return '0 B';
+        const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        let i = 0;
+        let v = bytes;
+        while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+        const pct = limit ? Math.min(100, Math.round((bytes / limit) * 100)) : null;
+        return `${v.toFixed(1)} ${units[i]}${pct !== null ? ` (${pct}%)` : ''}`;
+    };
 
     return (
         <div className="flex flex-col gap-6">
@@ -187,7 +299,6 @@ export default function ServerDetail() {
                 <ArrowLeft className="size-4" /> All servers
             </Link>
 
-            {/* Header */}
             <div className="relative overflow-hidden rounded-xl border border-hairline bg-card p-6">
                 {RuntimeIcon && (
                     <div aria-hidden="true" className="pointer-events-none absolute top-1/2 -right-10 size-52 -translate-y-1/2 opacity-[0.07]">
@@ -196,9 +307,9 @@ export default function ServerDetail() {
                 )}
                 <div className="relative flex flex-wrap items-center gap-3">
                     <span className={cn('size-3 rounded-full', STATUS_STYLE[status])} />
-                    <h1 className="font-mono text-[1.4rem] font-extrabold">{detail.name}</h1>
+                    <h1 className="font-mono text-[1.4rem] font-extrabold">{server.name}</h1>
                     <span className="rounded-full border border-hairline bg-veil px-2.5 py-0.5 text-[0.75rem] font-semibold text-ink-secondary">
-                        {detail.runtimeVersion}
+                        {server.runtimeVersion}
                     </span>
                     <span className="font-mono text-[0.75rem] text-ink-muted capitalize">{status}</span>
                     <div className="ml-auto flex items-center gap-2">
@@ -215,7 +326,6 @@ export default function ServerDetail() {
                 </div>
             </div>
 
-            {/* Tabs */}
             <div className="flex gap-1 overflow-x-auto border-b border-hairline">
                 {TABS.map(({ id: tabId, label, Icon }) => (
                     <button
@@ -239,28 +349,45 @@ export default function ServerDetail() {
                 <p className={cn('text-sm', msg.ok ? 'text-emerald-400' : 'text-red-400')}>{msg.text}</p>
             )}
 
-            {/* OVERVIEW */}
             {tab === 'overview' && (
                 <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
                     {[
                         ['Status', status],
-                        ['Runtime', detail.runtimeVersion],
-                        ['Plan', detail.plan],
-                        ['Region', detail.region],
-                        ['IP address', detail.ip],
-                        ['Uptime', online ? detail.uptime : '—'],
-                        ['Startup', detail.startup || '—'],
-                        ['Storage', detail.storageUsed],
+                        ['Runtime', server.runtimeVersion],
+                        ['Plan', server.planId],
+                        ['Region', server.region],
+                        ['CPU limit', `${server.cpuMilli / 1000} vCPU`],
+                        ['RAM limit', `${server.ramMb} MB`],
+                        ['Storage limit', `${server.storageGb} GB`],
+                        ['Startup', server.startup || '—'],
+                        ['Storage used', usage ? fmtBytes(usage.usedBytes, usage.limitBytes) : '—'],
+                        ['Auto-restart', server.autoRestart ? 'On' : 'Off'],
+                        ['Auto-backup', server.autoBackup ? 'On' : 'Off'],
                     ].map(([label, value]) => (
                         <div key={label} className="rounded-xl border border-hairline bg-card p-5">
                             <p className="text-[0.8rem] text-ink-muted">{label}</p>
                             <p className="mt-1 font-mono text-[0.95rem] font-bold capitalize">{value}</p>
                         </div>
                     ))}
+                    {stats && (
+                        <>
+                            <div className="rounded-xl border border-hairline bg-card p-5">
+                                <p className="text-[0.8rem] text-ink-muted">CPU usage</p>
+                                <p className="mt-1 font-mono text-[1.2rem] font-bold">{Math.min(100, Math.round(stats.cpuPercent ?? 0))}%</p>
+                            </div>
+                            <div className="rounded-xl border border-hairline bg-card p-5">
+                                <p className="text-[0.8rem] text-ink-muted">RAM usage</p>
+                                <p className="mt-1 font-mono text-[1.2rem] font-bold">
+                                    {stats.memBytes && stats.memLimitBytes
+                                        ? Math.min(100, Math.round((stats.memBytes / stats.memLimitBytes) * 100))
+                                        : 0}%
+                                </p>
+                            </div>
+                        </>
+                    )}
                 </div>
             )}
 
-            {/* CONSOLE */}
             {tab === 'console' && (
                 <div className="overflow-hidden rounded-xl border border-hairline bg-card">
                     <div className="flex items-center gap-2 border-b border-hairline px-5 py-3">
@@ -269,17 +396,17 @@ export default function ServerDetail() {
                         <span className={cn('ml-2 size-2 rounded-full', online ? 'animate-beat bg-emerald-500' : 'bg-zinc-600')} />
                     </div>
                     <div ref={logRef} className="flex h-[320px] flex-col gap-1.5 overflow-y-auto p-5 font-mono text-[0.8rem] leading-relaxed text-ink-secondary">
-                        {lines.length === 0 && <p className="text-ink-muted">No output yet.</p>}
-                        {lines.map((line, i) => (
-                            <p key={i} className={cn(line.startsWith('$') && 'text-foreground')}>{line}</p>
-                        ))}
+                        {logs
+                            ? logs.split('\n').filter(Boolean).map((line, i) => (
+                                <p key={i} className={cn(line.startsWith('$') && 'text-foreground')}>{line}</p>
+                            ))
+                            : <p className="text-ink-muted">No output yet.</p>
+                        }
                     </div>
                     <form onSubmit={sendCommand} className="flex items-center gap-2 border-t border-hairline px-5 py-3">
                         <span className="font-mono text-[0.85rem] text-emerald-400">$</span>
                         <input
-                            value={cmd}
-                            onChange={(e) => setCmd(e.target.value)}
-                            placeholder={online ? 'Type a command (help, clear, status, restart)...' : 'Start the server to send commands'}
+                            placeholder={online ? 'Interactive exec not available via API' : 'Start the server to view logs'}
                             disabled={!online}
                             className="w-full bg-transparent font-mono text-[0.85rem] text-foreground placeholder-ink-muted focus:outline-none disabled:opacity-50"
                         />
@@ -287,12 +414,11 @@ export default function ServerDetail() {
                 </div>
             )}
 
-            {/* FILES */}
             {tab === 'files' && (
                 <div className="overflow-hidden rounded-xl border border-hairline bg-card">
                     <div className="flex flex-wrap items-center gap-2 border-b border-hairline px-5 py-3">
                         <button type="button" onClick={() => setPath([])} className="font-mono text-[0.85rem] font-bold hover:underline hover:underline-offset-4">
-                            {detail.name}
+                            {server.name}
                         </button>
                         {path.map((seg, i) => (
                             <span key={i} className="flex items-center gap-2">
@@ -307,47 +433,22 @@ export default function ServerDetail() {
                             </span>
                         ))}
                         <div className="ml-auto flex items-center gap-2">
-                            <button type="button" onClick={() => setMsg({ text: 'Uploads are disabled in demo mode.', ok: false })} className={actionBtn}>
+                            <button type="button" onClick={() => setMsg({ text: 'File API not available yet.', ok: false })} className={actionBtn}>
                                 <Upload className="size-3.5" /> Upload
                             </button>
-                            <button type="button" onClick={() => setMsg({ text: 'File creation is disabled in demo mode.', ok: false })} className={actionBtn}>
+                            <button type="button" onClick={() => setMsg({ text: 'File API not available yet.', ok: false })} className={actionBtn}>
                                 <Plus className="size-3.5" /> New file
                             </button>
                         </div>
                     </div>
                     <div className="flex flex-col divide-y divide-hairline">
-                        {entries.length === 0 && (
-                            <p className="px-5 py-8 text-center text-[0.88rem] text-ink-muted">Empty folder.</p>
-                        )}
-                        {entries.map(([entryName, entry]) => (
-                            <button
-                                key={entryName}
-                                type="button"
-                                onClick={() => entry.type === 'dir' && setPath([...path, entryName])}
-                                className={cn(
-                                    'flex items-center gap-3 px-5 py-3 text-left transition',
-                                    entry.type === 'dir' && 'hover:bg-veil'
-                                )}
-                            >
-                                {entry.type === 'dir' ? (
-                                    <Folder className="size-[18px] shrink-0 text-ink-muted" />
-                                ) : (
-                                    <FileText className="size-[18px] shrink-0 text-ink-muted" />
-                                )}
-                                <span className="font-mono text-[0.88rem] font-semibold">{entryName}</span>
-                                <span className="ml-auto font-mono text-[0.78rem] text-ink-muted">
-                                    {entry.type === 'dir' ? `${Object.keys(entry.children ?? {}).length} items` : entry.size}
-                                </span>
-                                <span className="hidden font-mono text-[0.78rem] text-ink-muted sm:block">
-                                    {entry.modified ?? '—'}
-                                </span>
-                            </button>
-                        ))}
+                        <p className="px-5 py-8 text-center text-[0.88rem] text-ink-muted">
+                            The file manager API isn't available yet.
+                        </p>
                     </div>
                 </div>
             )}
 
-            {/* BACKUPS */}
             {tab === 'backups' && (
                 <div className="flex flex-col gap-4">
                     <div className="flex flex-wrap items-center justify-between gap-3">
@@ -375,20 +476,21 @@ export default function ServerDetail() {
                             <div>
                                 <p className="font-mono text-[0.9rem] font-bold">{backup.name}</p>
                                 <p className="mt-0.5 font-mono text-[0.75rem] text-ink-muted">
-                                    {backup.size} • {backup.date} {backup.auto ? '• automatic' : '• manual'}
+                                    {fmtBytes(backup.sizeBytes)} • {new Date(backup.createdAt).toLocaleString()} {backup.type === 'auto' ? '• automatic' : '• manual'}
                                 </p>
                             </div>
                             <div className="ml-auto flex items-center gap-2">
                                 <button
                                     type="button"
-                                    onClick={() => setMsg({ text: `Restoring "${backup.name}"... (Demo)`, ok: true })}
-                                    className={actionBtn}
+                                    onClick={() => restoreBackup(backup.id)}
+                                    disabled={backup.status !== 'ready'}
+                                    className={cn(actionBtn, backup.status !== 'ready' && 'opacity-50')}
                                 >
                                     <History className="size-3.5" /> Restore
                                 </button>
                                 <button
                                     type="button"
-                                    onClick={() => setMsg({ text: 'Downloads are disabled in demo mode.', ok: false })}
+                                    onClick={() => setMsg({ text: 'Downloads are not implemented yet.', ok: false })}
                                     className={actionBtn}
                                 >
                                     <Download className="size-3.5" /> Download
@@ -396,10 +498,7 @@ export default function ServerDetail() {
                                 <button
                                     type="button"
                                     aria-label={`Delete ${backup.name}`}
-                                    onClick={() => {
-                                        setBackups((list) => list.filter((b) => b.id !== backup.id));
-                                        setMsg({ text: 'Backup deleted. (Demo)', ok: true });
-                                    }}
+                                    onClick={() => deleteBackup(backup.id)}
                                     className={cn(actionBtn, 'hover:!border-red-500/50 hover:!text-red-400')}
                                 >
                                     <Trash2 className="size-3.5" />
@@ -410,7 +509,6 @@ export default function ServerDetail() {
                 </div>
             )}
 
-            {/* SETTINGS */}
             {tab === 'settings' && (
                 <div className="flex flex-col gap-4">
                     <form onSubmit={saveSettings} className="rounded-xl border border-hairline bg-card p-6">
@@ -434,6 +532,7 @@ export default function ServerDetail() {
                                 <Plus className="size-3.5" /> Add variable
                             </button>
                         </div>
+                        <p className="mt-1 text-[0.75rem] text-ink-muted">Values are masked (••••••••••••). Editing overwrites the stored value.</p>
                         <div className="mt-3 flex flex-col gap-2">
                             {env.map((row, i) => (
                                 <div key={i} className="grid grid-cols-[1fr_1fr_auto] gap-2 max-md:grid-cols-1">
@@ -496,14 +595,14 @@ export default function ServerDetail() {
                         <div className="mt-4 flex flex-wrap gap-2">
                             <button
                                 type="button"
-                                onClick={() => setMsg({ text: 'Reinstall is disabled in demo mode.', ok: false })}
+                                onClick={reinstall}
                                 className="rounded-full border border-hairline px-5 py-2 text-[0.83rem] font-bold text-ink-secondary transition hover:border-hairline-hover hover:text-foreground"
                             >
                                 Reinstall server
                             </button>
                             <button
                                 type="button"
-                                onClick={() => setMsg({ text: 'Deletion is disabled in demo mode.', ok: false })}
+                                onClick={deleteServer}
                                 className="rounded-full border border-red-500/40 px-5 py-2 text-[0.83rem] font-bold text-red-400 transition hover:bg-red-500 hover:text-white"
                             >
                                 Delete server

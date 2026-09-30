@@ -1,19 +1,10 @@
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Activity, ArrowRight, Clock, Globe, MonitorSmartphone, Server, ShieldCheck } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
-import {
-  CURRENT_SESSION,
-  LOGIN_HISTORY,
-  OVERVIEW_STATS,
-  SERVERS,
-} from '@/data/dashboard.js';
-
-export const STATUS_STYLE = {
-    online: 'bg-emerald-500',
-    offline: 'bg-zinc-600',
-    restarting: 'bg-amber-500',
-};
+import { apiGet } from '@/lib/api.js';
+import { useAuth } from '@/context/AuthContext.jsx';
 
 const STAT_ICONS = {
     server: Server,
@@ -49,7 +40,66 @@ function Flag({ code, name }) {
     );
 }
 
+export const STATUS_STYLE = {
+    online: 'bg-emerald-500',
+    offline: 'bg-zinc-600',
+    restarting: 'bg-amber-500',
+    error: 'bg-red-500',
+    provisioning: 'bg-blue-500',
+};
+
+export const RUNTIME_ICONS = {
+    'Node.js': (props) => <svg {...props} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>,
+    Bun: (props) => <svg {...props} viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/></svg>,
+    Python: (props) => <svg {...props} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5"/></svg>,
+    PHP: (props) => <svg {...props} viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/></svg>,
+};
+
 export default function Overview() {
+    const { user, reloadUser } = useAuth();
+    const [servers, setServers] = useState(null);
+    const [sessions, setSessions] = useState(null);
+    const [error, setError] = useState(null);
+
+    useEffect(() => {
+        let alive = true;
+        (async () => {
+            try {
+                const [srv, sess] = await Promise.all([
+                    apiGet('/servers'),
+                    apiGet('/auth/sessions'),
+                ]);
+                if (alive) { setServers(srv); setSessions(sess); }
+            } catch (e) {
+                if (alive) setError(e.message);
+            }
+        })();
+        return () => { alive = false; };
+    }, []);
+
+    if (servers === null) {
+        return <div className="flex items-center justify-center h-64 text-ink-muted">Loading…</div>;
+    }
+    if (error) {
+        return <div className="text-red-400">Failed to load: {error}</div>;
+    }
+
+    const online = servers.filter(s => s.status === 'online').length;
+    const restarting = servers.filter(s => s.status === 'restarting').length;
+    const currentSession = sessions?.current;
+
+    const stats = [
+        { label: 'Total servers', value: servers.length, hint: `${online} online`, icon: 'server' },
+        { label: 'Online now', value: online, hint: restarting > 0 ? `${restarting} restarting` : 'All healthy', icon: 'activity' },
+        { label: 'Plan', value: user?.planId ?? 'free', hint: `${user?.role ?? 'user'} account`, icon: 'shield' },
+        {
+            label: 'Last sign-in',
+            value: currentSession ? new Date(currentSession.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—',
+            hint: currentSession ? currentSession.location : 'No history',
+            icon: 'globe',
+        },
+    ];
+
     return (
         <div className="flex flex-col gap-6">
             <div>
@@ -60,7 +110,7 @@ export default function Overview() {
             </div>
 
             <div className="grid grid-cols-4 gap-4 max-lg:grid-cols-2 max-md:grid-cols-1">
-                {OVERVIEW_STATS.map((stat) => (
+                {stats.map((stat) => (
                     <StatCard key={stat.label} {...stat} />
                 ))}
             </div>
@@ -78,29 +128,23 @@ export default function Overview() {
                         </Link>
                     </div>
                     <div className="flex flex-col">
-                        {SERVERS.map((server) => (
+                        {servers.slice(0, 5).map((server) => (
                             <Link
                                 key={server.id}
-                                to="/dashboard/servers"
+                                to={`/dashboard/servers/${server.id}`}
                                 className="flex items-center gap-3 border-t border-hairline py-3.5 first:border-t-0 first:pt-0 last:pb-0"
                             >
-                                <span
-                                    className={cn(
-                                        'size-2.5 shrink-0 rounded-full',
-                                        STATUS_STYLE[server.status]
-                                    )}
-                                />
-                                <span className="font-mono text-[0.9rem] font-semibold">
-                                    {server.name}
-                                </span>
+                                <span className={cn('size-2.5 shrink-0 rounded-full', STATUS_STYLE[server.status])} />
+                                <span className="font-mono text-[0.9rem] font-semibold">{server.name}</span>
                                 <span className="rounded-full border border-hairline bg-veil px-2 py-0.5 text-[0.72rem] font-semibold text-ink-secondary">
                                     {server.runtime}
                                 </span>
-                                <span className="ml-auto font-mono text-[0.8rem] text-ink-muted">
-                                    {server.uptime}
-                                </span>
+                                <span className="ml-auto font-mono text-[0.8rem] text-ink-muted capitalize">{server.status}</span>
                             </Link>
                         ))}
+                        {servers.length === 0 && (
+                            <p className="border-t border-hairline py-3.5 text-center text-ink-muted">No servers yet</p>
+                        )}
                     </div>
                 </div>
 
@@ -109,30 +153,32 @@ export default function Overview() {
                     <h2 className="mb-4 flex items-center gap-2 text-[1.05rem] font-bold">
                         <MonitorSmartphone className="size-[18px] text-ink-muted" /> Current session
                     </h2>
-                    <div className="flex items-center gap-3">
-                        <Flag code={CURRENT_SESSION.countryCode} name={CURRENT_SESSION.location} />
-                        <div>
-                            <p className="text-[0.92rem] font-bold">{CURRENT_SESSION.location}</p>
-                            <p className="font-mono text-[0.78rem] text-ink-secondary">
-                                {CURRENT_SESSION.ip}
-                            </p>
-                        </div>
-                        <span className="ml-auto rounded-full bg-emerald-500/15 px-2.5 py-1 text-[0.7rem] font-bold text-emerald-400">
-                            This device
-                        </span>
-                    </div>
-                    <div className="mt-4 flex flex-col gap-2 border-t border-hairline pt-4 text-[0.85rem]">
-                        <div className="flex justify-between gap-2">
-                            <span className="text-ink-muted">Device</span>
-                            <span className="text-right font-semibold">{CURRENT_SESSION.device}</span>
-                        </div>
-                        <div className="flex justify-between gap-2">
-                            <span className="text-ink-muted">Signed in</span>
-                            <span className="text-right font-mono text-[0.78rem]">
-                                {CURRENT_SESSION.started}
-                            </span>
-                        </div>
-                    </div>
+                    {currentSession ? (
+                        <>
+                            <div className="flex items-center gap-3">
+                                <Flag code={currentSession.countryCode} name={currentSession.location} />
+                                <div>
+                                    <p className="text-[0.92rem] font-bold">{currentSession.location}</p>
+                                    <p className="font-mono text-[0.78rem] text-ink-secondary">{currentSession.ip}</p>
+                                </div>
+                                <span className="ml-auto rounded-full bg-emerald-500/15 px-2.5 py-1 text-[0.7rem] font-bold text-emerald-400">
+                                    This device
+                                </span>
+                            </div>
+                            <div className="mt-4 flex flex-col gap-2 border-t border-hairline pt-4 text-[0.85rem]">
+                                <div className="flex justify-between gap-2">
+                                    <span className="text-ink-muted">Device</span>
+                                    <span className="text-right font-semibold">{currentSession.device}</span>
+                                </div>
+                                <div className="flex justify-between gap-2">
+                                    <span className="text-ink-muted">Signed in</span>
+                                    <span className="text-right font-mono text-[0.78rem]">{new Date(currentSession.createdAt).toLocaleString()}</span>
+                                </div>
+                            </div>
+                        </>
+                    ) : (
+                        <p className="text-ink-muted">No active session</p>
+                    )}
                 </div>
             </div>
 
@@ -152,45 +198,37 @@ export default function Overview() {
                     <span>Date</span>
                 </div>
                 <div className="flex flex-col divide-y divide-hairline">
-                    {LOGIN_HISTORY.map((entry) => (
+                    {(sessions?.history ?? []).map((entry) => (
                         <div
                             key={entry.id}
                             className="grid grid-cols-1 gap-2 px-6 py-4 lg:grid-cols-[90px_1fr_150px_1fr_220px] lg:items-center lg:gap-4"
                         >
                             <span>
-                                <span
-                                    className={cn(
-                                        'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[0.7rem] font-bold',
-                                        entry.status === 'success'
-                                            ? 'bg-emerald-500/15 text-emerald-400'
-                                            : 'bg-red-500/15 text-red-400'
-                                    )}
-                                >
-                                    <span
-                                        className={cn(
-                                            'size-1.5 rounded-full',
-                                            entry.status === 'success' ? 'bg-emerald-400' : 'bg-red-400'
-                                        )}
-                                    />
+                                <span className={cn(
+                                    'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[0.7rem] font-bold',
+                                    entry.status === 'success'
+                                        ? 'bg-emerald-500/15 text-emerald-400'
+                                        : 'bg-red-500/15 text-red-400'
+                                )}>
+                                    <span className={cn(
+                                        'size-1.5 rounded-full',
+                                        entry.status === 'success' ? 'bg-emerald-400' : 'bg-red-400'
+                                    )} />
                                     {entry.status === 'success' ? 'Success' : 'Failed'}
                                 </span>
                             </span>
                             <span className="flex items-center gap-2.5">
                                 <Flag code={entry.countryCode} name={entry.location} />
                                 <span className="text-[0.88rem] font-semibold">{entry.location}</span>
-                                {entry.current && (
+                                {entry.id === currentSession?.id && (
                                     <span className="rounded-full border border-hairline bg-veil px-2 py-0.5 text-[0.68rem] font-bold text-ink-secondary">
                                         Current
                                     </span>
                                 )}
                             </span>
-                            <span className="font-mono text-[0.8rem] text-ink-secondary">
-                                {entry.ip}
-                            </span>
+                            <span className="font-mono text-[0.8rem] text-ink-secondary">{entry.ip}</span>
                             <span className="text-[0.83rem] text-ink-secondary">{entry.device}</span>
-                            <span className="font-mono text-[0.78rem] text-ink-muted">
-                                {entry.date}
-                            </span>
+                            <span className="font-mono text-[0.78rem] text-ink-muted">{new Date(entry.createdAt).toLocaleString()}</span>
                         </div>
                     ))}
                 </div>

@@ -2,8 +2,10 @@ import Navbar from '../components/Navbar.jsx';
 import Footer from '../components/Footer.jsx';
 import { SignUp1 } from '../components/ui/modern-stunning-sign-up.jsx';
 import { AntiGravityCanvas } from '../components/ui/particle-effect-for-hero.jsx';
+import { useAuth } from '@/context/AuthContext.jsx';
 
 export default function SignUp() {
+  const { signUp } = useAuth();
   return (
     <div className="relative min-h-screen overflow-hidden bg-background text-foreground">
       <AntiGravityCanvas />
@@ -11,7 +13,7 @@ export default function SignUp() {
       {/* pt accounts for the fixed navbar height */}
       <main className="container-page relative z-10 pt-28 pb-16">
         <div className="overflow-hidden rounded-xl">
-          <SignUp1 brandName="Troxe Hosting" />
+          <SignUp1 brandName="Troxe Hosting" onSignUp={({ username, email, password }) => signUp({ name: username, email, password })} />
         </div>
       </main>
       <div className="relative z-10">

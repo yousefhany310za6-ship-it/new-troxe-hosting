@@ -1,7 +1,8 @@
 import { useRef, useState } from 'react';
 
 import { cn } from '@/lib/utils';
-import { DASHBOARD_USER } from '@/data/dashboard.js';
+import { apiGet, apiPatch, apiPost } from '@/lib/api.js';
+import { useAuth } from '@/context/AuthContext.jsx';
 
 const inputClass =
     'w-full rounded-xl border border-hairline bg-white/10 px-5 py-3 text-[0.92rem] text-foreground placeholder-ink-muted transition focus:border-primary focus:ring-2 focus:ring-ring/40 focus:outline-none';
@@ -47,12 +48,26 @@ function Toggle({ checked, onChange, label, hint }) {
 }
 
 export default function Settings() {
-    const [profile, setProfile] = useState({ name: DASHBOARD_USER.name, email: DASHBOARD_USER.email });
+    const { user, reloadUser } = useAuth();
+    const [profile, setProfile] = useState({ name: '', email: '' });
     const [avatar, setAvatar] = useState(null);
     const fileRef = useRef(null);
     const [passwords, setPasswords] = useState({ current: '', next: '', confirm: '' });
     const [notif, setNotif] = useState({ restarts: true, invoices: true, marketing: false });
     const [msg, setMsg] = useState({ text: '', ok: true });
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        if (user) {
+            setProfile({ name: user.name, email: user.email });
+            setNotif({
+                restarts: user.notifyRestarts ?? true,
+                invoices: user.notifyInvoices ?? true,
+                marketing: user.notifyMarketing ?? false,
+            });
+            setLoading(false);
+        }
+    }, [user]);
 
     const handleAvatar = (e) => {
         const file = e.target.files?.[0];
@@ -67,26 +82,32 @@ export default function Settings() {
         }
         if (avatar) URL.revokeObjectURL(avatar);
         setAvatar(URL.createObjectURL(file));
-        setMsg({ text: 'Profile photo updated. (Demo)', ok: true });
+        setMsg({ text: 'Avatar updated locally. Save profile to persist.', ok: true });
     };
 
     const removeAvatar = () => {
         if (avatar) URL.revokeObjectURL(avatar);
         setAvatar(null);
         if (fileRef.current) fileRef.current.value = '';
-        setMsg({ text: 'Profile photo removed. (Demo)', ok: true });
+        setMsg({ text: 'Avatar removed. Save profile to persist.', ok: true });
     };
 
-    const saveProfile = (e) => {
+    const saveProfile = async (e) => {
         e.preventDefault();
         if (!profile.name.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(profile.email)) {
             setMsg({ text: 'Please enter a valid name and email.', ok: false });
             return;
         }
-        setMsg({ text: 'Profile saved. (Demo)', ok: true });
+        try {
+            await apiPatch('/users/me', profile);
+            setMsg({ text: 'Profile saved.', ok: true });
+            reloadUser();
+        } catch (err) {
+            setMsg({ text: err.message, ok: false });
+        }
     };
 
-    const changePassword = (e) => {
+    const changePassword = async (e) => {
         e.preventDefault();
         if (!passwords.current || !passwords.next || !passwords.confirm) {
             setMsg({ text: 'Please fill in all password fields.', ok: false });
@@ -100,9 +121,44 @@ export default function Settings() {
             setMsg({ text: 'New passwords do not match.', ok: false });
             return;
         }
-        setMsg({ text: 'Password changed. (Demo)', ok: true });
-        setPasswords({ current: '', next: '', confirm: '' });
+        try {
+            await apiPost('/users/me/password', passwords);
+            setMsg({ text: 'Password changed. You will be logged out of other sessions.', ok: true });
+            setPasswords({ current: '', next: '', confirm: '' });
+            reloadUser();
+        } catch (err) {
+            setMsg({ text: err.message, ok: false });
+        }
     };
+
+    const saveNotifications = async () => {
+        try {
+            await apiPatch('/users/me/notifications', notif);
+            setMsg({ text: 'Notifications updated.', ok: true });
+            reloadUser();
+        } catch (err) {
+            setMsg({ text: err.message, ok: false });
+        }
+    };
+
+    const deleteAccount = async () => {
+        const password = window.prompt('This will DELETE your account and ALL servers permanently. Enter your password to confirm:');
+        if (!password) {
+            setMsg({ text: 'Deletion cancelled.', ok: false });
+            return;
+        }
+        try {
+            await apiPost('/users/me', { current: password });
+            setMsg({ text: 'Account deleted.', ok: true });
+            setTimeout(() => window.location.href = '/', 1500);
+        } catch (err) {
+            setMsg({ text: err.message, ok: false });
+        }
+    };
+
+    if (loading) {
+        return <div className="flex items-center justify-center h-64 text-ink-muted">Loading…</div>;
+    }
 
     return (
         <div className="flex flex-col gap-6">
@@ -226,19 +282,19 @@ export default function Settings() {
                 <div className="flex flex-col divide-y divide-hairline">
                     <Toggle
                         checked={notif.restarts}
-                        onChange={(v) => setNotif({ ...notif, restarts: v })}
+                        onChange={(v) => { setNotif({ ...notif, restarts: v }); saveNotifications(); }}
                         label="Restarts & incidents"
                         hint="When a server goes down or recovers."
                     />
                     <Toggle
                         checked={notif.invoices}
-                        onChange={(v) => setNotif({ ...notif, invoices: v })}
+                        onChange={(v) => { setNotif({ ...notif, invoices: v }); saveNotifications(); }}
                         label="Billing & invoices"
                         hint="Receipts, renewals and failed payments."
                     />
                     <Toggle
                         checked={notif.marketing}
-                        onChange={(v) => setNotif({ ...notif, marketing: v })}
+                        onChange={(v) => { setNotif({ ...notif, marketing: v }); saveNotifications(); }}
                         label="Product news"
                         hint="New runtimes, features and offers."
                     />
@@ -252,7 +308,7 @@ export default function Settings() {
                 </p>
                 <button
                     type="button"
-                    onClick={() => setMsg({ text: 'Account deletion is disabled in demo mode.', ok: false })}
+                    onClick={deleteAccount}
                     className="mt-5 rounded-full border border-red-500/40 px-6 py-2.5 text-sm font-bold text-red-400 transition hover:bg-red-500 hover:text-white"
                 >
                     Delete account
