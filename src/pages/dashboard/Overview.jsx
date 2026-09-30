@@ -1,10 +1,9 @@
-import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Activity, ArrowRight, Clock, Globe, MonitorSmartphone, Server, ShieldCheck } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
-import { apiGet } from '@/lib/api.js';
 import { useAuth } from '@/context/AuthContext.jsx';
+import { useServers, useAuthSessions } from '@/hooks/useQueries.jsx';
 
 const STAT_ICONS = {
     server: Server,
@@ -56,32 +55,15 @@ export const RUNTIME_ICONS = {
 };
 
 export default function Overview() {
-    const { user, reloadUser } = useAuth();
-    const [servers, setServers] = useState(null);
-    const [sessions, setSessions] = useState(null);
-    const [error, setError] = useState(null);
+    const { user } = useAuth();
+    const { data: servers, isLoading: serversLoading, error: serversError } = useServers();
+    const { data: sessions, isLoading: sessionsLoading, error: sessionsError } = useAuthSessions();
 
-    useEffect(() => {
-        let alive = true;
-        (async () => {
-            try {
-                const [srv, sess] = await Promise.all([
-                    apiGet('/servers'),
-                    apiGet('/auth/sessions'),
-                ]);
-                if (alive) { setServers(srv); setSessions(sess); }
-            } catch (e) {
-                if (alive) setError(e.message);
-            }
-        })();
-        return () => { alive = false; };
-    }, []);
-
-    if (servers === null) {
+    if (serversLoading || sessionsLoading) {
         return <div className="flex items-center justify-center h-64 text-ink-muted">Loading…</div>;
     }
-    if (error) {
-        return <div className="text-red-400">Failed to load: {error}</div>;
+    if (serversError || sessionsError) {
+        return <div className="text-red-400">Failed to load: {serversError?.message ?? sessionsError?.message}</div>;
     }
 
     const online = servers.filter(s => s.status === 'online').length;

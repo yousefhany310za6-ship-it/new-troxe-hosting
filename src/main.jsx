@@ -1,7 +1,9 @@
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
+import { Toaster } from 'sonner';
 
 import App from './App.jsx';
+import { QueryProvider } from '@/lib/queryProvider.jsx';
 import { APP_BASE } from './lib/appBase.js';
 import './index.css';
 
@@ -18,6 +20,9 @@ const basename = APP_BASE === '/' ? undefined : APP_BASE.replace(/\/+$/, '');
 
 createRoot(document.getElementById('root')).render(
     <BrowserRouter basename={basename}>
-        <App />
+        <QueryProvider>
+            <App />
+            <Toaster position="top-right" theme="dark" />
+        </QueryProvider>
     </BrowserRouter>
 );

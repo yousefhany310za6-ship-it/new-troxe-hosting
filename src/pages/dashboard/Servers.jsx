@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Play, Plus, RotateCcw, Square } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
-import { apiGet, apiPost } from '@/lib/api.js';
+import { useToast } from '@/hooks/useToast.jsx';
+import { useServers, useServerStats, useServerLifecycle } from '@/hooks/useQueries.jsx';
 import { STATUS_STYLE } from './Overview.jsx';
 import { IconBun, IconNode, IconPhp, IconPython } from '../../components/icons.jsx';
 
@@ -19,82 +19,20 @@ const actionBtn =
 
 export default function Servers() {
     const navigate = useNavigate();
-    const [servers, setServers] = useState(null);
-    const [stats, setStats] = useState({});
-    const [error, setError] = useState(null);
-    const [creating, setCreating] = useState(false);
+    const { success, error: toastError } = useToast();
+    const { data: servers, isLoading, error } = useServers();
+    const { mutate: lifecycle } = useServerLifecycle();
 
-    // Fetch servers
-    useEffect(() => {
-        let alive = true;
-        (async () => {
-            try {
-                const data = await apiGet('/servers');
-                if (alive) setServers(data);
-            } catch (e) {
-                if (alive) setError(e.message);
-            }
-        })();
-        return () => { alive = false; };
-    }, []);
-
-    // Poll stats for online servers
-    useEffect(() => {
-        if (!servers) return;
-        const onlineIds = servers.filter(s => s.status === 'online').map(s => s.id);
-        if (onlineIds.length === 0) return;
-        let alive = true;
-        const fetchStats = async () => {
-            try {
-                const results = await Promise.all(onlineIds.map(id =>
-                    apiGet(`/servers/${id}/stats`).catch(() => null)
-                ));
-                if (alive) {
-                    const map = {};
-                    onlineIds.forEach((id, i) => { map[id] = results[i]; });
-                    setStats(map);
-                }
-            } catch { /* ignore */ }
-        };
-        fetchStats();
-        const timer = setInterval(fetchStats, 8000);
-        return () => { alive = false; clearInterval(timer); };
-    }, [servers]);
-
-    if (servers === null) {
+    if (isLoading) {
         return <div className="flex items-center justify-center h-64 text-ink-muted">Loading…</div>;
     }
     if (error) {
-        return <div className="text-red-400">Failed to load: {error}</div>;
+        return <div className="text-red-400">Failed to load: {error.message}</div>;
     }
 
-    const patch = (id, data) =>
-        setServers((list) => list.map((s) => (s.id === id ? { ...s, ...data } : s)));
-
-    const start = async (id) => {
-        patch(id, { status: 'restarting' });
-        try {
-            await apiPost(`/servers/${id}/start`);
-            patch(id, { status: 'online' });
-        } catch {
-            patch(id, { status: 'offline' });
-        }
-    };
-    const stop = async (id) => {
-        try {
-            await apiPost(`/servers/${id}/stop`);
-            patch(id, { status: 'offline', uptime: '—' });
-        } catch { /* keep current */ }
-    };
-    const restart = async (id) => {
-        patch(id, { status: 'restarting' });
-        try {
-            await apiPost(`/servers/${id}/restart`);
-            patch(id, { status: 'online' });
-        } catch {
-            patch(id, { status: 'offline' });
-        }
-    };
+    const start = (id) => lifecycle(id, { onSuccess: () => success('Server started'), onError: (e) => toastError(e.message) });
+    const stop = (id) => lifecycle('stop', { onSuccess: () => success('Server stopped'), onError: (e) => toastError(e.message) });
+    const restart = (id) => lifecycle('restart', { onSuccess: () => success('Server restarted'), onError: (e) => toastError(e.message) });
 
     return (
         <div className="flex flex-col gap-6">
@@ -106,21 +44,20 @@ export default function Servers() {
                         online
                     </p>
                 </div>
-                <button
-                    type="button"
-                    onClick={() => navigate('/dashboard/servers/new')}
+                <Link
+                    to="/dashboard/servers/new"
                     className="inline-flex items-center gap-2 rounded-full bg-white px-5 py-2.5 text-sm font-bold text-black transition hover:bg-gray-200"
                 >
                     <Plus className="size-4" /> New server
-                </button>
+                </Link>
             </div>
 
             <div className="flex flex-col gap-3">
                 {servers.map((server) => {
                     const RuntimeIcon = RUNTIME_ICONS[server.runtime];
-                    const s = stats[server.id];
-                    const cpuPct = s?.cpuPercent ? Math.min(100, Math.round(s.cpuPercent)) : 0;
-                    const memPct = s?.memBytes && s?.memLimitBytes ? Math.min(100, Math.round((s.memBytes / s.memLimitBytes) * 100)) : 0;
+                    const { data: stats } = useServerStats(server.id);
+                    const cpuPct = stats?.cpuPercent ? Math.min(100, Math.round(stats.cpuPercent)) : 0;
+                    const memPct = stats?.memBytes && stats?.memLimitBytes ? Math.min(100, Math.round((stats.memBytes / stats.memLimitBytes) * 100)) : 0;
                     return (
                     <div
                         key={server.id}

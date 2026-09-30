@@ -1,18 +1,22 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { apiGet, setAccessToken } from '@/lib/api.js';
+import { useQueryClient } from '@tanstack/react-query';
+import { apiGet, setAccessToken, authPost } from '@/lib/api.js';
+import { keys } from '@/hooks/useQueries.jsx';
 
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
   const [status, setStatus] = useState('loading'); // 'loading' | 'guest' | 'authed'
   const [user, setUser] = useState(null);
+  const qc = useQueryClient();
 
   const loadUser = useCallback(async () => {
     const me = await apiGet('/users/me');
     setUser(me);
+    qc.setQueryData(keys.user(), me);
     setStatus('authed');
     return me;
-  }, []);
+  }, [qc]);
 
   // Boot: try the refresh cookie once — silent session restore.
   useEffect(() => {
@@ -28,8 +32,6 @@ export function AuthProvider({ children }) {
   }, [loadUser]);
 
   const signIn = useCallback(async (email, password) => {
-    // Import dynamically to avoid circular deps
-    const { authPost } = await import('@/lib/api.js');
     const out = await authPost('/auth/login', { email, password });
     setAccessToken(out.accessToken);
     try { await loadUser(); } catch { setUser({ ...out.user }); }
@@ -37,7 +39,6 @@ export function AuthProvider({ children }) {
   }, [loadUser]);
 
   const signUp = useCallback(async ({ name, email, password }) => {
-    const { authPost } = await import('@/lib/api.js');
     const out = await authPost('/auth/signup', { name, email, password });
     setAccessToken(out.accessToken);
     try { await loadUser(); } catch { setUser({ ...out.user }); }
@@ -48,8 +49,12 @@ export function AuthProvider({ children }) {
     try { await apiGet('/auth/logout', { method: 'POST', auth: false }); } catch { /* cookie may be gone */ }
     setAccessToken(null);
     setUser(null);
+    qc.removeQueries({ queryKey: keys.user() });
+    qc.removeQueries({ queryKey: keys.servers() });
+    qc.removeQueries({ queryKey: keys.authSessions() });
+    qc.removeQueries({ queryKey: keys.activeSessions() });
     setStatus('guest');
-  }, []);
+  }, [qc]);
 
   const value = useMemo(() => ({
     user,
