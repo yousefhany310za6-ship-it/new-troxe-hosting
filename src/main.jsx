@@ -5,6 +5,7 @@ import { Toaster } from 'sonner';
 import App from './App.jsx';
 import { QueryProvider } from '@/lib/queryProvider.jsx';
 import { APP_BASE } from './lib/appBase.js';
+import 'flag-icons/css/flag-icons.min.css';
 import './index.css';
 
 // BrowserRouter gives clean URLs with no hash ("/signin" instead of "/#/signin").

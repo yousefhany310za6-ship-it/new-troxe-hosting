@@ -19,6 +19,7 @@
     "clsx": "^2.1.1",
     "cobe": "^2.0.1",
     "d3": "^7.9.0",
+    "flag-icons": "^7.5.0",
     "framer-motion": "^13.4.4",
     "lucide-react": "^1.48.0",
     "motion": "^13.4.4",

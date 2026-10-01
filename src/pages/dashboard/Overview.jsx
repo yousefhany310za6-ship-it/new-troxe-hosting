@@ -29,17 +29,23 @@ function StatCard({ label, value, hint, icon }) {
 }
 
 function Flag({ code, name }) {
-    // Emoji flags render locally — no external image host to fail, block,
-    // or leak visitor IPs (the old flagcdn <img> showed broken images).
+    // Local flag-icons SVGs (bundled, offline) — the old flagcdn <img>
+    // showed broken images whenever the CDN was blocked or slow.
     const cc = (code ?? '').toLowerCase();
-    const flag =
-        /^[a-z]{2}$/.test(cc) && cc !== 'xx'
-            ? String.fromCodePoint(...[...cc.toUpperCase()].map((c) => 127397 + c.charCodeAt(0)))
-            : '🌐';
+    if (!/^[a-z]{2}$/.test(cc) || cc === 'xx') {
+        return (
+            <span role="img" aria-label={name} title={name} className="inline-block w-6 text-center text-base leading-none">
+                🌐
+            </span>
+        );
+    }
     return (
-        <span role="img" aria-label={name} title={name} className="inline-block w-6 text-center text-base leading-none">
-            {flag}
-        </span>
+        <span
+            title={name}
+            aria-label={name}
+            role="img"
+            className={`fi fi-${cc} inline-block w-6 overflow-hidden rounded-[3px] leading-none`}
+        />
     );
 }
 
