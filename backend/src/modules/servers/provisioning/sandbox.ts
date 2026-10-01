@@ -112,8 +112,11 @@ export function buildSandboxConfig(spec: SandboxSpec): ContainerCreateOptions {
     // --- housekeeping -----------------------------------------------------
     AutoRemove: false,
     LogConfig: { Type: 'json-file', Config: { 'max-size': '10m', 'max-file': '3', 'compress': 'true' } },
-    // MaximumRetryCount is only valid with the "on-failure" policy
-    RestartPolicy: spec.autoRestart ? { Name: 'unless-stopped' } : { Name: 'no' },
+    // MaximumRetryCount is only valid with the "on-failure" policy.
+    // on-failure (not unless-stopped): a crashing startup must NOT loop
+    // forever — after 5 retries the container stays exited so the API can
+    // report a clear error instead of flapping online/offline.
+    RestartPolicy: spec.autoRestart ? { Name: 'on-failure', MaximumRetryCount: 5 } : { Name: 'no' },
     // CgroupnsMode is supported by the engine but missing from @types/dockerode
   } as HostConfig;
   return {

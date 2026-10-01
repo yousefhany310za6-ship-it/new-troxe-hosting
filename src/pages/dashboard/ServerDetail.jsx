@@ -333,7 +333,14 @@ export default function ServerDetail() {
             )}
 
             {tab === 'overview' && (
-                <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
+                <>
+                    {(status === 'error' || server.lastError) && server.lastError && (
+                        <div className="rounded-xl border border-red-500/30 bg-card p-5">
+                            <p className="text-[0.8rem] text-red-400">Last error</p>
+                            <p className="mt-1 font-mono text-[0.88rem] font-bold text-red-300">{server.lastError}</p>
+                        </div>
+                    )}
+                    <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
                     {[
                         ['Status', status],
                         ['Runtime', server.runtimeLabel ?? server.runtime],
@@ -368,7 +375,8 @@ export default function ServerDetail() {
                             </div>
                         </>
                     )}
-                </div>
+                    </div>
+                </>
             )}
 
             {tab === 'console' && (

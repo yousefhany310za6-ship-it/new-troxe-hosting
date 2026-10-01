@@ -158,6 +158,12 @@ export class ServersService {
         autoRestart: row.autoRestart,
       });
       const updated = await this.persistProvision(row.id, result, { start: config.AUTO_START_ON_CREATE });
+      // same fast-fail as start/: a doomed entry file must surface as an
+      // error state right away, not as a phantom "online".
+      if (config.AUTO_START_ON_CREATE && updated.containerId) {
+        await this.settled(updated.containerId, row.id, ownerId, 'start');
+        return this.toPublic(await this.requireOwned(ownerId, row.id));
+      }
       await this.audit.record({
         actorId: ownerId,
         action: 'server.create',
@@ -372,7 +378,14 @@ export class ServersService {
       }
 
       const state = await this.docker.inspect(row.containerId!);
-      const status = state?.running ? 'online' : 'offline';
+      // fast-fail: a missing entry file (or any instant crash) exits in
+      // milliseconds — report it NOW with the real stderr tail instead of
+      // claiming "online" and letting the user discover the loop in logs.
+      if ((action === 'start' || action === 'restart') && !(await this.settled(row.containerId!, id, ownerId, action))) {
+        return { status: 'error' };
+      }
+      const fresh = await this.docker.inspect(row.containerId!);
+      const status = fresh?.running ? 'online' : 'offline';
       await this.setField(id, { status });
       await this.event(id, ownerId, action, { status });
       await this.audit.record({ ...actor, action: `server.${action}` });
@@ -496,6 +509,70 @@ export class ServersService {
 
   private async markError(id: string, message: string) {
     await this.setField(id, { status: 'error', lastError: message.slice(0, 500) }).catch(() => undefined);
+  }
+
+  /**
+   * Waits for a freshly started container to prove it stays up: 3 consecutive
+   * clean 1s polls (running, zero new restarts). A single "running" snapshot
+   * proves nothing — the daemon may relaunch a doomed process between polls.
+   * Instant crash (missing entry file, syntax error, clean immediate exit)
+   * or any new restart inside the window → stop it, record status=error
+   * with the last stderr lines, return false.
+   */
+  private async settled(containerId: string, serverId: string, ownerId: string, action: string): Promise<boolean> {
+    const base = await this.docker.inspect(containerId).catch(() => null);
+    const baseRest = base?.restartCount ?? 0;
+    const baseStarted = base?.startedAt ?? '';
+    let clean = 0;
+    for (let i = 0; i < 10; i++) {
+      await new Promise((r) => setTimeout(r, 1000));
+      const s = await this.docker.inspect(containerId).catch(() => null);
+      if (!s) return true; // vanished mid-check — the reconciler owns this case
+      // StartedAt changes on EVERY (re)start — the airtight incarnation
+      // check (counters/snapshots can straddle a restart boundary).
+      if (s.restartCount > baseRest || (baseStarted && s.startedAt !== baseStarted)) {
+        return this.failStart(containerId, serverId, ownerId, action,
+          `Process crashed ${Math.max(1, s.restartCount - baseRest)}x in seconds`);
+      }
+      if (!s.running) {
+        if (s.exitCode !== 0 || i >= 3) {
+          return this.failStart(containerId, serverId, ownerId, action, null, s.exitCode);
+        }
+        continue; // exited 0 in the first seconds — keep watching the gap
+      }
+      if (++clean >= 3) return true;
+    }
+    const s = await this.docker.inspect(containerId).catch(() => null);
+    return !!s?.running && (s.restartCount <= baseRest) && (!baseStarted || s.startedAt === baseStarted);
+  }
+
+  private async failStart(
+    containerId: string,
+    serverId: string,
+    ownerId: string,
+    action: string,
+    msg: string | null,
+    exitCode?: number,
+  ): Promise<boolean> {
+    // the user may have hit stop while we were watching — never overwrite a
+    // deliberate offline/deleting state with our error.
+    const [cur] = await this.db
+      .select({ status: servers.status })
+      .from(servers)
+      .where(eq(servers.id, serverId))
+      .limit(1);
+    if (!cur || (cur.status !== 'restarting' && cur.status !== 'online' && cur.status !== 'provisioning')) return true;
+    await this.docker.stop(containerId).catch(() => undefined);
+    let detail = msg;
+    if (!detail) {
+      const tail = await this.docker.logs(containerId, 20).catch(() => '');
+      detail =
+        tail.split('\n').map((l) => l.trim()).filter(Boolean).slice(-3).join(' / ').slice(0, 300) ||
+        `Process exited with code ${exitCode ?? 'unknown'}`;
+    }
+    await this.setField(serverId, { status: 'error', lastError: `Startup failed: ${detail}` });
+    await this.event(serverId, ownerId, `${action}_error`, { error: detail });
+    return false;
   }
 
   private async resolvePlan(planId: string) {

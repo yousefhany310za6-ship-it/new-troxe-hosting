@@ -47,6 +47,8 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
   private lastPingOk = true;
   private lastStorageCheck = new Map<string, number>();
   private lastPrune = 0;
+  /** restart-count velocity tracking for crash-loop detection (in-memory; single instance) */
+  private restarts = new Map<string, { count: number; at: number }>();
 
   constructor(
     @Inject(DB) private db: Db,
@@ -131,6 +133,34 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
           continue;
         }
 
+        // crash-loop guard: 3+ restarts inside ~two ticks means the process
+        // can never stay up (missing entry file, boot error, …) — stop it
+        // instead of burning CPU restarts forever, and say so plainly.
+        // (Threshold spans 2 ticks because ticks themselves are 60s apart.)
+        const prev = this.restarts.get(row.id);
+        if (state.restartCount > (prev?.count ?? 0)) {
+          if (
+            prev &&
+            state.restartCount - prev.count >= 3 &&
+            now - prev.at < 130_000 &&
+            row.status !== 'error'
+          ) {
+            await this.docker.stop(row.containerId).catch(() => undefined);
+            await this.db
+              .update(servers)
+              .set({
+                status: 'error',
+                lastError: `Crash loop detected (${state.restartCount} restarts in under a minute) — check the startup command and logs`,
+              })
+              .where(eq(servers.id, row.id));
+            this.restarts.delete(row.id);
+            continue;
+          }
+          this.restarts.set(row.id, { count: state.restartCount, at: now });
+        } else if (state.restartCount === 0 && prev) {
+          this.restarts.delete(row.id);
+        }
+
         if (state.running && row.status !== 'online') {
           await this.db.update(servers).set({ status: 'online', lastError: null }).where(eq(servers.id, row.id));
         } else if (!state.running && row.status === 'online') {
@@ -150,6 +180,11 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
       }
     });
     await Promise.all(workers);
+    // drop velocity state for servers that no longer exist (bounded memory)
+    if (this.restarts.size > rows.length) {
+      const live = new Set(rows.map((r) => r.id));
+      for (const id of this.restarts.keys()) if (!live.has(id)) this.restarts.delete(id);
+    }
   }
 
   /**

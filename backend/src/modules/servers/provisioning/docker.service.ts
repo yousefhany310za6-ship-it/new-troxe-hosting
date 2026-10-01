@@ -15,6 +15,8 @@ export interface ContainerState {
   exitCode: number;
   oomKilled: boolean;
   error: string;
+  restartCount: number;
+  startedAt: string;
 }
 
 export interface ContainerStats {
@@ -273,6 +275,8 @@ export class DockerService {
         exitCode: state.ExitCode ?? 0,
         oomKilled: !!state.OOMKilled,
         error: state.Error ?? '',
+        restartCount: state.RestartCount ?? 0,
+        startedAt: state.StartedAt ?? '',
       };
     } catch (e) {
       if (isStatus(e, 404)) return null;
