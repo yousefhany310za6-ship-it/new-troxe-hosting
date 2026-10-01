@@ -5,7 +5,6 @@ import {
     Check,
     ChevronRight,
     Download,
-    FileArchive,
     FileText,
     Folder,
     MoreHorizontal,
@@ -16,6 +15,7 @@ import {
 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
+import { fileIcon } from '@/lib/fileIcons.js';
 import { useToast } from '@/hooks/useToast.jsx';
 import {
     blobToBase64,
@@ -374,10 +374,18 @@ export default function ServerFiles({ server }) {
         return (
             <div className="flex min-h-[70vh] flex-col overflow-hidden rounded-xl border border-hairline bg-card">
                 <div className="flex flex-wrap items-center gap-2 border-b border-hairline px-5 py-3">
-                    <button type="button" onClick={closeEditor} className="inline-flex items-center gap-1.5 text-[0.85rem] font-semibold text-ink-secondary transition hover:text-foreground">
+                    <button type="button" onClick={closeEditor} className="inline-flex shrink-0 items-center gap-1.5 text-[0.85rem] font-semibold text-ink-secondary transition hover:text-foreground">
                         <ArrowLeft className="size-4" /> Files
                     </button>
-                    <span className="truncate font-mono text-[0.85rem] font-bold">{editing}</span>
+                    {(() => {
+                        const icon = fileIcon(editing.split('/').pop(), 'file');
+                        return icon ? (
+                            <img src={icon} alt="" aria-hidden="true" className="size-5 shrink-0" draggable={false} />
+                        ) : (
+                            <FileText className="size-4 shrink-0 text-ink-muted" />
+                        );
+                    })()}
+                    <span className="min-w-0 flex-1 truncate font-mono text-[0.85rem] font-bold">{editing}</span>
                     {dirty && <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[0.68rem] font-bold text-amber-400">unsaved</span>}
                     <div className="ml-auto flex items-center gap-2">
                         <button
@@ -424,21 +432,23 @@ export default function ServerFiles({ server }) {
     return (
         <div className="overflow-hidden rounded-xl border border-hairline bg-card">
             <div className="flex flex-wrap items-center gap-2 border-b border-hairline px-5 py-3">
-                <button type="button" onClick={() => setDir([])} className="font-mono text-[0.85rem] font-bold hover:underline hover:underline-offset-4">
-                    {server.name}
-                </button>
-                {dir.map((seg, i) => (
-                    <span key={i} className="flex items-center gap-2">
-                        <ChevronRight className="size-3.5 text-ink-muted" />
-                        <button
-                            type="button"
-                            onClick={() => setDir(dir.slice(0, i + 1))}
-                            className="font-mono text-[0.85rem] text-ink-secondary hover:text-foreground hover:underline hover:underline-offset-4"
-                        >
-                            {seg}
-                        </button>
-                    </span>
-                ))}
+                <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto whitespace-nowrap py-0.5">
+                    <button type="button" onClick={() => setDir([])} className="shrink-0 font-mono text-[0.85rem] font-bold hover:underline hover:underline-offset-4">
+                        {server.name}
+                    </button>
+                    {dir.map((seg, i) => (
+                        <span key={i} className="flex shrink-0 items-center gap-2">
+                            <ChevronRight className="size-3.5 text-ink-muted" />
+                            <button
+                                type="button"
+                                onClick={() => setDir(dir.slice(0, i + 1))}
+                                className="max-w-36 truncate font-mono text-[0.85rem] text-ink-secondary hover:text-foreground hover:underline hover:underline-offset-4"
+                            >
+                                {seg}
+                            </button>
+                        </span>
+                    ))}
+                </div>
                 <div className="ml-auto flex items-center gap-2">
                     <input ref={uploadRef} type="file" className="hidden" onChange={onUpload} />
                     <button type="button" onClick={() => uploadRef.current?.click()} disabled={!!transfer} className={actionBtn}>
@@ -507,33 +517,53 @@ export default function ServerFiles({ server }) {
                 {isLoading && <p className="px-5 py-8 text-center text-[0.88rem] text-ink-muted">Loading…</p>}
                 {error && <p className="px-5 py-8 text-center text-[0.88rem] text-red-400">Failed to load: {error.message}</p>}
                 {!isLoading && !error && entries.length === 0 && (
-                    <p className="px-5 py-8 text-center text-[0.88rem] text-ink-muted">Empty folder.</p>
+                    <div className="flex flex-col items-center gap-2 px-5 py-12 text-center">
+                        <Folder className="size-8 text-ink-muted" />
+                        <p className="text-[0.9rem] font-semibold">Empty folder</p>
+                        <p className="text-[0.8rem] text-ink-secondary">Upload files or create a new one to get started.</p>
+                    </div>
                 )}
                 {entries.map((entry) => {
                     const isDir = entry.type === 'dir';
                     const isArch = entry.type === 'file' && ARCHIVE_RE.test(entry.name);
+                    const icon = !isDir ? fileIcon(entry.name, entry.type) : null;
+                    const checked = selected.includes(entry.name);
                     return (
-                        <div key={entry.name} className="group flex items-center gap-3 px-5 py-3">
+                        <div
+                            key={entry.name}
+                            className={cn(
+                                'group flex items-center gap-3 px-5 py-3 transition',
+                                checked ? 'bg-veil/70' : 'hover:bg-veil/40',
+                                isDir && 'cursor-pointer',
+                            )}
+                            onClick={isDir ? () => openEntry(entry) : undefined}
+                        >
                             <input
                                 type="checkbox"
-                                checked={selected.includes(entry.name)}
+                                checked={checked}
                                 onChange={() => toggleSelect(entry.name)}
+                                onClick={(e) => e.stopPropagation()}
                                 aria-label={`Select ${entry.name}`}
-                                className="size-4 shrink-0 accent-white"
+                                className="size-4 shrink-0 cursor-pointer accent-white"
                             />
                             <button type="button" onClick={() => openEntry(entry)} className="flex min-w-0 flex-1 items-center gap-3 text-left">
                                 {isDir ? (
-                                    <Folder className="size-[18px] shrink-0 text-ink-muted" />
-                                ) : isArch ? (
-                                    <FileArchive className="size-[18px] shrink-0 text-ink-muted" />
+                                    <Folder className="size-[22px] shrink-0 text-sky-300/80" />
+                                ) : icon ? (
+                                    <img src={icon} alt="" aria-hidden="true" className="size-[22px] shrink-0" draggable={false} />
                                 ) : (
-                                    <FileText className="size-[18px] shrink-0 text-ink-muted" />
+                                    <FileText className="size-[20px] shrink-0 text-ink-muted" />
                                 )}
-                                <span className="truncate font-mono text-[0.88rem] font-semibold">{entry.name}</span>
-                                <span className="ml-auto shrink-0 font-mono text-[0.78rem] text-ink-muted">
-                                    {isDir ? '' : fmtSize(entry.size)}
+                                <span className="min-w-0">
+                                    <span className="block truncate font-mono text-[0.88rem] font-semibold">{entry.name}</span>
+                                    <span className="block font-mono text-[0.7rem] text-ink-muted sm:hidden">
+                                        {isDir ? 'Folder' : fmtSize(entry.size)}
+                                    </span>
                                 </span>
-                                <span className="hidden shrink-0 font-mono text-[0.78rem] text-ink-muted sm:block">
+                                <span className="ml-auto hidden shrink-0 rounded-full border border-hairline bg-veil px-2 py-0.5 font-mono text-[0.72rem] text-ink-secondary sm:block">
+                                    {isDir ? 'dir' : fmtSize(entry.size)}
+                                </span>
+                                <span className="hidden w-24 shrink-0 text-right font-mono text-[0.75rem] text-ink-muted md:block">
                                     {entry.mtime ? new Date(entry.mtime * 1000).toLocaleDateString() : '—'}
                                 </span>
                             </button>
