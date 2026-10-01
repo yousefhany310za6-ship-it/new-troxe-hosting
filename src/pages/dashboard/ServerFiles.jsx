@@ -98,7 +98,10 @@ function RowMenu({ entry, isDir, isArchiveFile, onAction, disabled }) {
 
     // fixed positioning from the button rect: immune to overflow-hidden
     // ancestors and row stacking on mobile; flips upward near the bottom.
-    const toggle = () => {
+    const toggle = (e) => {
+        // the row itself navigates on click (folders) — never let the
+        // menu trigger bubble up to it.
+        e?.stopPropagation?.();
         if (open) { setOpen(false); return; }
         const r = btnRef.current?.getBoundingClientRect();
         if (!r) return;

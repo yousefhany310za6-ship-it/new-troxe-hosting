@@ -120,6 +120,11 @@ export class FilesService {
       const CHUNK = 500_000 - (500_000 % 4);
       const parts: string[] = [];
       for (let i = 0; i < b64.length; i += CHUNK) parts.push(b64.slice(i, i + CHUNK));
+      // empty content has no chunks — truncate/create the tmp file directly
+      // (otherwise mv would fail on a file that was never created)
+      const payload = parts.length
+        ? parts.map((p, i) => `printf '%s' '${p}' | base64 -d ${i === 0 ? '>' : '>>'} "$f.tmp.$$" || { echo TROXE_ERR=WRITE; exit 5; }`)
+        : [`: > "$f.tmp.$$" || { echo TROXE_ERR=WRITE; exit 5; }`];
       const lines = [
         `f=${this.q(`/data/${file}`)}`,
         `d=$(dirname "$f");`,
@@ -129,7 +134,7 @@ export class FilesService {
         `done;`,
         `mkdir -p "$d";`,
         `r=$(realpath "$d"); case "$r" in /data|/data/*) ;; *) echo TROXE_ERR=ESCAPE; exit 4;; esac`,
-        ...parts.map((p, i) => `printf '%s' '${p}' | base64 -d ${i === 0 ? '>' : '>>'} "$f.tmp.$$" || { echo TROXE_ERR=WRITE; exit 5; }`),
+        ...payload,
         // mv replaces a symlink itself instead of following it
         `mv -f "$f.tmp.$$" "$f" || { echo TROXE_ERR=WRITE; exit 5; }`,
       ];
