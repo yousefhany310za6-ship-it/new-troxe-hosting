@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { apiGet, apiPost, apiPatch, apiPut, apiDelete, apiDownload } from '@/lib/api.js';
+import { apiGet, apiPost, apiPatch, apiPut, apiDelete, apiDownload, apiUploadJson } from '@/lib/api.js';
 
 // Query keys
 export const keys = {
@@ -207,8 +207,11 @@ export function useArchiveFiles(id) {
 export function useExtractFiles(id) {
   return useFilesMutation(id, ({ file, dest }) => apiPost(`/servers/${id}/files/extract`, { file, dest }));
 }
-export async function downloadServerFile(id, path) {
-  const { blob, filename } = await apiDownload(`/servers/${id}/files/download?path=${encodeURIComponent(path)}`);
+export async function downloadServerFile(id, path, { onProgress, signal } = {}) {
+  const { blob, filename } = await apiDownload(
+    `/servers/${id}/files/download?path=${encodeURIComponent(path)}`,
+    { onProgress, signal },
+  );
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -217,6 +220,9 @@ export async function downloadServerFile(id, path) {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+export function uploadServerFile(id, path, contentBase64, { onProgress, signal } = {}) {
+  return apiUploadJson(`/servers/${id}/files/content`, { path, contentBase64 }, { onProgress, signal });
 }
 export function blobToBase64(blob) {
   return new Promise((resolve, reject) => {

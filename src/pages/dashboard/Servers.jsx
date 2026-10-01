@@ -90,7 +90,7 @@ export default function Servers() {
                                 </Link>
                             </span>
                             <span className="rounded-full border border-hairline bg-veil px-2 py-0.5 text-[0.72rem] font-semibold text-ink-secondary">
-                                {server.runtime}
+                                {server.runtimeLabel ?? server.runtime}
                             </span>
                             <span className="font-mono text-[0.75rem] text-ink-muted capitalize">
                                 {server.status}

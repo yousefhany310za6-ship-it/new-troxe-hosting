@@ -97,20 +97,87 @@ export const apiDelete = (path, options) => apiFetch(path, { ...options, method:
 export const authPost = (path, body) => apiFetch(path, { method: 'POST', body, auth: false, retry: false });
 
 // Raw binary download (blob) with the same 401→refresh→retry behavior.
-export async function apiDownload(path) {
+// onProgress(ratio|null) streams progress; signal aborts.
+export async function apiDownload(path, { onProgress, signal } = {}) {
   const headers = {};
   if (getAccessToken()) headers.Authorization = `Bearer ${getAccessToken()}`;
-  let res = await fetch(BASE + path, { credentials: 'include', headers });
+  const doFetch = () => fetch(BASE + path, { credentials: 'include', headers, signal });
+  let res = await doFetch();
   if (res.status === 401 && !path.startsWith('/auth/')) {
     try { await refreshAccess(); } catch {
       throw new ApiError(401, 'SESSION_EXPIRED', 'Your session has expired. Please sign in again.');
     }
     if (getAccessToken()) headers.Authorization = `Bearer ${getAccessToken()}`;
-    res = await fetch(BASE + path, { credentials: 'include', headers });
+    res = await doFetch();
   }
   if (!res.ok) throw await toError(res);
-  const blob = await res.blob();
+  const total = Number(res.headers.get('Content-Length')) || null;
+  if (!onProgress || !res.body) {
+    const blob = await res.blob();
+    return finishDownload(res, blob);
+  }
+  const reader = res.body.getReader();
+  const chunks = [];
+  let loaded = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    loaded += value.length;
+    onProgress(total ? loaded / total : null);
+  }
+  return finishDownload(res, new Blob(chunks));
+}
+
+function finishDownload(res, blob) {
   const cd = res.headers.get('Content-Disposition') || '';
   const m = cd.match(/filename="([^"]+)"/);
   return { blob, filename: m ? m[1] : 'download' };
+}
+
+// JSON PUT over XHR — fetch has no upload-progress events. Used by the file
+// manager (base64 payloads). Retries once after a refresh on 401.
+export function apiUploadJson(path, body, { onProgress, signal } = {}) {
+  return new Promise((resolve, reject) => {
+    let retried = false;
+    const send = async () => {
+      if (signal?.aborted) return reject(new ApiError(0, 'ABORTED', 'Upload cancelled.'));
+      const xhr = new XMLHttpRequest();
+      xhr.open('PUT', BASE + path);
+      xhr.setRequestHeader('Content-Type', 'application/json');
+      if (getAccessToken()) xhr.setRequestHeader('Authorization', `Bearer ${getAccessToken()}`);
+      xhr.withCredentials = true;
+      if (signal) signal.addEventListener('abort', () => xhr.abort(), { once: true });
+      if (xhr.upload && onProgress) {
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) onProgress(e.loaded / e.total);
+        };
+      }
+      xhr.onload = async () => {
+        if (xhr.status === 401 && !retried && !path.startsWith('/auth/')) {
+          retried = true;
+          try { await refreshAccess(); } catch {
+            return reject(new ApiError(401, 'SESSION_EXPIRED', 'Your session has expired. Please sign in again.'));
+          }
+          return send();
+        }
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try { resolve(JSON.parse(xhr.responseText || 'null')); }
+          catch { resolve(null); }
+          return;
+        }
+        try {
+          const b = JSON.parse(xhr.responseText);
+          const msg = Array.isArray(b?.message) ? b.message.join(', ') : b?.message;
+          reject(new ApiError(xhr.status, b?.code || 'ERROR', msg || `Request failed (${xhr.status})`));
+        } catch {
+          reject(new ApiError(xhr.status, 'ERROR', `Request failed (${xhr.status})`));
+        }
+      };
+      xhr.onerror = () => reject(new ApiError(0, 'NETWORK', 'Upload failed — check your connection.'));
+      xhr.onabort = () => reject(new ApiError(0, 'ABORTED', 'Upload cancelled.'));
+      xhr.send(JSON.stringify(body));
+    };
+    send();
+  });
 }

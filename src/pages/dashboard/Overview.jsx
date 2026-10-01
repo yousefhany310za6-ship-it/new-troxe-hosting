@@ -119,7 +119,7 @@ export default function Overview() {
                                 <span className={cn('size-2.5 shrink-0 rounded-full', STATUS_STYLE[server.status])} />
                                 <span className="font-mono text-[0.9rem] font-semibold">{server.name}</span>
                                 <span className="rounded-full border border-hairline bg-veil px-2 py-0.5 text-[0.72rem] font-semibold text-ink-secondary">
-                                    {server.runtime}
+                                    {server.runtimeLabel ?? server.runtime}
                                 </span>
                                 <span className="ml-auto font-mono text-[0.8rem] text-ink-muted capitalize">{server.status}</span>
                             </Link>

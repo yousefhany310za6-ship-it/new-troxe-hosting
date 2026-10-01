@@ -557,6 +557,8 @@ export class ServersService {
       id: row.id,
       name: row.name,
       runtime: row.runtime,
+      // digest refs must never reach clients — the label is the display name
+      runtimeLabel: runtimeImage(row.runtime).label,
       runtimeVersion: row.runtimeVersion,
       status: row.status,
       lastError: row.lastError,

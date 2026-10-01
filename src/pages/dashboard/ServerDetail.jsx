@@ -292,7 +292,7 @@ export default function ServerDetail() {
                     <span className={cn('size-3 rounded-full', STATUS_STYLE[status])} />
                     <h1 className="font-mono text-[1.4rem] font-extrabold">{server.name}</h1>
                     <span className="rounded-full border border-hairline bg-veil px-2.5 py-0.5 text-[0.75rem] font-semibold text-ink-secondary">
-                        {server.runtimeVersion}
+                        {server.runtimeLabel ?? server.runtime}
                     </span>
                     <span className="font-mono text-[0.75rem] text-ink-muted capitalize">{status}</span>
                     <div className="ml-auto flex items-center gap-2">
@@ -336,7 +336,7 @@ export default function ServerDetail() {
                 <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
                     {[
                         ['Status', status],
-                        ['Runtime', server.runtimeVersion],
+                        ['Runtime', server.runtimeLabel ?? server.runtime],
                         ['Plan', server.planId],
                         ['Region', server.region],
                         ['CPU limit', `${server.cpuMilli / 1000} vCPU`],
