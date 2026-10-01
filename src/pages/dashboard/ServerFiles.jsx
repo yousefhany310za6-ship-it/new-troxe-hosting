@@ -63,6 +63,8 @@ function openable(entry) {
 
 function RowMenu({ entry, isDir, isArchiveFile, onAction, disabled }) {
     const [open, setOpen] = useState(false);
+    const [pos, setPos] = useState({ top: 0, left: 0, up: false });
+    const btnRef = useRef(null);
     const items = [];
     if (isDir) items.push(['open', 'Open']);
     else if (openable(entry)) items.push(['open', 'Open']);
@@ -73,14 +75,42 @@ function RowMenu({ entry, isDir, isArchiveFile, onAction, disabled }) {
     items.push(['archive', 'Archive (.tar.gz)']);
     items.push(['delete', 'Delete']);
 
+    // fixed positioning from the button rect: immune to overflow-hidden
+    // ancestors and row stacking on mobile; flips upward near the bottom.
+    const toggle = () => {
+        if (open) { setOpen(false); return; }
+        const r = btnRef.current?.getBoundingClientRect();
+        if (!r) return;
+        const menuH = items.length * 38 + 8;
+        const up = r.bottom + menuH > window.innerHeight - 8;
+        setPos({
+            top: up ? Math.max(8, r.top - menuH) : r.bottom + 4,
+            left: Math.max(8, Math.min(r.right - 192, window.innerWidth - 200)),
+            up,
+        });
+        setOpen(true);
+    };
+
+    useEffect(() => {
+        if (!open) return;
+        const close = () => setOpen(false);
+        window.addEventListener('resize', close);
+        window.addEventListener('scroll', close, true);
+        return () => {
+            window.removeEventListener('resize', close);
+            window.removeEventListener('scroll', close, true);
+        };
+    }, [open ]);
+
     return (
-        <div className="relative shrink-0">
+        <div className="shrink-0">
             <button
+                ref={btnRef}
                 type="button"
                 aria-label={`Actions for ${entry.name}`}
                 aria-haspopup="menu"
                 aria-expanded={open}
-                onClick={() => setOpen((v) => !v)}
+                onClick={toggle}
                 disabled={disabled}
                 className={cn(actionBtn, 'px-2')}
             >
@@ -88,8 +118,12 @@ function RowMenu({ entry, isDir, isArchiveFile, onAction, disabled }) {
             </button>
             {open && (
                 <>
-                    <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-                    <div role="menu" className="absolute right-0 z-50 w-48 overflow-hidden rounded-xl border border-hairline bg-card py-1 shadow-2xl">
+                    <div className="fixed inset-0 z-[60]" onClick={() => setOpen(false)} />
+                    <div
+                        role="menu"
+                        style={{ top: pos.top, left: pos.left }}
+                        className="fixed z-[61] w-48 overflow-hidden rounded-xl border border-hairline bg-card py-1 shadow-2xl"
+                    >
                         {items.map(([key, label]) => (
                             <button
                                 key={key}
