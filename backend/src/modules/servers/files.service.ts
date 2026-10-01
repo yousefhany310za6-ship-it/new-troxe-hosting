@@ -13,6 +13,13 @@ export interface FileEntry {
 }
 
 /**
+ * Internal marker files that keep the volume functional (ownership, init).
+ * Hidden from listings and untouchable through the API — the server must
+ * look empty and ready on first open.
+ */
+const RESERVED = new Set(['.troxe-init']);
+
+/**
  * File manager over a server's persistent volume.
  *
  * Every operation runs in an ephemeral helper container (net: none, capped,
@@ -74,6 +81,7 @@ export class FilesService {
       } catch {
         continue;
       }
+      if (RESERVED.has(name)) continue; // internal markers stay invisible
       entries.push({
         name,
         type: kind === 'directory' ? 'dir' : kind === 'regular file' || kind === 'regular empty file' ? 'file' : kind === 'symbolic link' ? 'symlink' : 'other',
@@ -406,6 +414,8 @@ export class FilesService {
     const segs = clean.split('/');
     if (segs.length > 32 || segs.some((s) => !s || s.length > 255 || s === '.' || s === '..'))
       throw Err.invalid('FILE_PATH', 'Invalid path');
+    if (segs.some((s) => RESERVED.has(s)))
+      throw Err.invalid('FILE_RESERVED', 'This name is reserved for the platform');
     return clean;
   }
 
