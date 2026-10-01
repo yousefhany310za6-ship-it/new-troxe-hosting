@@ -9,7 +9,9 @@ import {
     Folder,
     FolderPlus,
     FilePlus,
+    Home,
     MoreHorizontal,
+    Pencil,
     Plus,
     Trash2,
     Upload,
@@ -33,10 +35,13 @@ import {
     useWriteFile,
 } from '@/hooks/useQueries.jsx';
 
-const actionBtn =
-    'inline-flex items-center gap-1.5 rounded-md border border-hairline bg-veil px-3 py-1.5 text-[0.8rem] font-semibold text-ink-secondary transition hover:border-hairline-hover hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40';
+// Pterodactyl-flavored controls: small gray buttons, uppercase labels.
+const btnSecondary =
+    'inline-flex min-h-9 items-center gap-1.5 rounded-md border border-hairline bg-veil px-3 py-1.5 text-[0.75rem] font-bold uppercase tracking-wide text-ink-secondary transition hover:border-hairline-hover hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40';
+const btnIcon =
+    'inline-flex min-h-9 min-w-9 items-center justify-center rounded-md p-2 text-ink-secondary transition hover:bg-veil hover:text-foreground disabled:opacity-40';
 const inputClass =
-    'w-full rounded-xl border border-hairline bg-white/10 px-4 py-2.5 text-[0.88rem] text-foreground placeholder-ink-muted transition focus:border-primary focus:ring-2 focus:ring-ring/40 focus:outline-none';
+    'w-full rounded-md border border-hairline bg-black/40 px-3.5 py-2.5 text-[0.88rem] text-foreground placeholder-ink-muted transition focus:border-primary focus:ring-2 focus:ring-ring/40 focus:outline-none';
 const menuItem =
     'flex w-full items-center gap-2 px-4 py-2 text-left text-[0.83rem] font-semibold text-ink-secondary transition hover:bg-veil hover:text-foreground disabled:opacity-40';
 
@@ -59,9 +64,7 @@ const fmtDate = (mtime) => {
     const d = new Date(mtime * 1000);
     const now = new Date();
     const sameDay = d.toDateString() === now.toDateString();
-    const yday = new Date(now - 864e5).toDateString() === d.toDateString();
-    if (sameDay) return `Today ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-    if (yday) return `Yesterday ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    if (sameDay) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: d.getFullYear() === now.getFullYear() ? undefined : 'numeric' });
 };
 
@@ -135,17 +138,17 @@ function RowMenu({ entry, isDir, isArchiveFile, onAction, disabled }) {
                 aria-expanded={open}
                 onClick={toggle}
                 disabled={disabled}
-                className={cn(actionBtn, 'min-h-11 min-w-11 items-center justify-center px-2.5 sm:min-h-0 sm:min-w-0 sm:px-2')}
+                className={cn(btnIcon, 'lg:hidden')}
             >
-                <MoreHorizontal className="size-5 sm:size-4" />
+                <MoreHorizontal className="size-5" />
             </button>
             {open && (
                 <>
-                    <div className="fixed inset-0 z-[60]" onClick={() => setOpen(false)} />
+                    <div className="fixed inset-0 z-[60] lg:hidden" onClick={() => setOpen(false)} />
                     <div
                         role="menu"
                         style={{ top: pos.top, left: pos.left }}
-                        className="fixed z-[61] w-52 overflow-hidden rounded-xl border border-hairline bg-card py-1 shadow-2xl"
+                        className="fixed z-[61] w-52 overflow-hidden rounded-lg border border-hairline bg-card py-1 shadow-2xl"
                     >
                         {items.map(([key, label]) => (
                             <button
@@ -153,7 +156,7 @@ function RowMenu({ entry, isDir, isArchiveFile, onAction, disabled }) {
                                 type="button"
                                 role="menuitem"
                                 onClick={() => { setOpen(false); onAction(key, entry); }}
-                                className={cn(menuItem, 'min-h-11 sm:min-h-0', key === 'delete' && 'text-red-400 hover:!text-red-300')}
+                                className={cn(menuItem, 'min-h-11', key === 'delete' && 'text-red-400 hover:!text-red-300')}
                             >
                                 {label}
                             </button>
@@ -182,7 +185,7 @@ function Sheet({ title, subtitle, onClose, onSubmit, submitLabel, danger, childr
             <form
                 onSubmit={(e) => { e.preventDefault(); onSubmit(); }}
                 onClick={(e) => e.stopPropagation()}
-                className="w-full rounded-t-2xl border border-hairline bg-card p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:max-w-md sm:rounded-2xl sm:p-6"
+                className="w-full rounded-t-2xl border border-hairline bg-card p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:max-w-md sm:rounded-xl sm:p-6"
             >
                 <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-white/20 sm:hidden" />
                 <h2 className="text-[1.05rem] font-bold">{title}</h2>
@@ -192,7 +195,7 @@ function Sheet({ title, subtitle, onClose, onSubmit, submitLabel, danger, childr
                     <button
                         type="button"
                         onClick={onClose}
-                        className="flex-1 rounded-full border border-hairline px-5 py-3 text-sm font-bold text-ink-secondary transition hover:text-foreground"
+                        className="min-h-11 flex-1 rounded-md border border-hairline px-5 py-2.5 text-sm font-bold text-ink-secondary transition hover:text-foreground"
                     >
                         Cancel
                     </button>
@@ -200,7 +203,7 @@ function Sheet({ title, subtitle, onClose, onSubmit, submitLabel, danger, childr
                         type="submit"
                         disabled={submitDisabled}
                         className={cn(
-                            'flex-1 rounded-full px-5 py-3 text-sm font-bold transition disabled:opacity-50',
+                            'min-h-11 flex-1 rounded-md px-5 py-2.5 text-sm font-bold transition disabled:opacity-50',
                             danger
                                 ? 'bg-red-500 text-white hover:bg-red-400'
                                 : 'bg-white text-black hover:bg-gray-200',
@@ -367,12 +370,12 @@ export default function ServerFiles({ server }) {
 
     const sheetTitle = () => {
         switch (sheet?.type) {
-            case 'new-file': return 'New file';
-            case 'new-dir': return 'New folder';
+            case 'new-file': return 'Create file';
+            case 'new-dir': return 'Create directory';
             case 'rename': return 'Rename';
             case 'move': return 'Move';
-            case 'archive-one': return 'Compress';
-            case 'archive-many': return `Compress ${sheet.names.length} items`;
+            case 'archive-one': return 'Create archive';
+            case 'archive-many': return `Create archive (${sheet.names.length} items)`;
             case 'extract': return 'Extract archive';
             case 'delete': return 'Delete';
             case 'discard': return 'Discard changes?';
@@ -444,8 +447,7 @@ export default function ServerFiles({ server }) {
         else if (key === 'rename') setSheet({ type: 'rename', entry, value: entry.name });
         else if (key === 'move') setSheet({ type: 'move', entry, value: relOf(entry.name) });
         else if (key === 'archive') {
-            const def = `${entry.name}.tar.gz`;
-            setSheet({ type: 'archive-one', entry, value: def });
+            setSheet({ type: 'archive-one', entry, value: `${entry.name}.tar.gz` });
         }
         else if (key === 'extract') {
             setSheet({
@@ -470,27 +472,43 @@ export default function ServerFiles({ server }) {
 
     const entries = [...(data?.entries ?? [])].sort((a, b) =>
         (a.type === 'dir' ? 0 : 1) - (b.type === 'dir' ? 0 : 1) || a.name.localeCompare(b.name));
+    const allChecked = entries.length > 0 && entries.every((e) => selected.includes(e.name));
 
-    // ---- full-page editor takeover ----
+    // ---- full-page editor takeover (Pterodactyl-style code view) ----
     if (editing) {
         const dirty = !!fileData && draft !== (fileData.content ?? '');
         const icon = fileIcon(editing.split('/').pop(), 'file');
         return (
-            <div className="flex min-h-[70vh] flex-col overflow-hidden rounded-xl border border-hairline bg-card">
-                <div className="flex items-center gap-2 border-b border-hairline px-4 py-3 sm:px-5">
-                    <button type="button" onClick={closeEditor} className="inline-flex min-h-11 shrink-0 items-center gap-1.5 text-[0.85rem] font-semibold text-ink-secondary transition hover:text-foreground sm:min-h-0">
-                        <ArrowLeft className="size-4" /> <span className="hidden sm:inline">Files</span>
+            <div className="flex min-h-[70vh] flex-col overflow-hidden rounded-lg border border-hairline bg-[#0d1117]">
+                <div className="flex items-center gap-2 border-b border-hairline bg-black/30 px-4 py-2.5 sm:px-5">
+                    <button type="button" onClick={closeEditor} aria-label="Back to files" className="inline-flex min-h-11 shrink-0 items-center gap-1 text-[0.85rem] font-semibold text-ink-secondary transition hover:text-foreground sm:min-h-0">
+                        <ArrowLeft className="size-4" />
                     </button>
                     {icon ? (
                         <img src={icon} alt="" aria-hidden="true" className="size-5 shrink-0" draggable={false} />
                     ) : null}
-                    <span className="min-w-0 flex-1 truncate font-mono text-[0.85rem] font-bold">{editing}</span>
-                    {dirty && <span className="shrink-0 rounded-full bg-amber-500/15 px-2 py-0.5 text-[0.68rem] font-bold text-amber-400">unsaved</span>}
+                    <span className="min-w-0 flex-1 truncate font-mono text-[0.85rem] font-semibold">{editing}</span>
+                    {dirty
+                        ? <span className="shrink-0 rounded bg-amber-500/15 px-2 py-0.5 text-[0.68rem] font-bold uppercase tracking-wide text-amber-400">unsaved</span>
+                        : <span className="hidden shrink-0 items-center gap-1 text-[0.7rem] text-ink-muted sm:inline-flex"><Check className="size-3.5" /> saved</span>}
+                    <div className="ml-auto flex shrink-0 items-center gap-2">
+                        <button type="button" onClick={() => onDownload({ name: editing })} className={btnSecondary}>
+                            <Download className="size-3.5" /> <span className="hidden sm:inline">Download</span>
+                        </button>
+                        <button
+                            type="button"
+                            onClick={saveEdit}
+                            disabled={fileLoading || !!fileError || writeFile.isPending}
+                            className="inline-flex min-h-11 items-center gap-1.5 rounded-md bg-white px-5 py-2 text-[0.78rem] font-bold uppercase tracking-wide text-black transition hover:bg-gray-200 disabled:opacity-50 sm:min-h-9"
+                        >
+                            {writeFile.isPending ? 'Saving…' : 'Save'}
+                        </button>
+                    </div>
                 </div>
-                <div className="flex min-h-0 flex-1 flex-col p-3 sm:p-5">
-                    {fileLoading && <p className="text-[0.85rem] text-ink-muted">Loading…</p>}
+                <div className="flex min-h-0 flex-1 flex-col">
+                    {fileLoading && <p className="p-5 text-[0.85rem] text-ink-muted">Loading…</p>}
                     {fileError && (
-                        <p className="text-[0.85rem] text-red-400">
+                        <p className="p-5 text-[0.85rem] text-red-400">
                             {fileError.code === 'FILE_BINARY'
                                 ? 'Binary file — preview unavailable. Download it instead.'
                                 : `Failed to load: ${fileError.message}`}
@@ -504,27 +522,13 @@ export default function ServerFiles({ server }) {
                             autoCapitalize="off"
                             autoCorrect="off"
                             placeholder="Empty file — start typing…"
-                            className="min-h-[55vh] w-full flex-1 resize-y rounded-lg border border-hairline bg-black/40 p-4 font-mono text-base leading-relaxed text-foreground focus:border-primary focus:outline-none"
+                            className="min-h-[55vh] w-full flex-1 resize-y bg-transparent p-4 font-mono text-base leading-relaxed text-gray-200 focus:outline-none sm:p-5 sm:text-[0.85rem]"
                         />
                     )}
                 </div>
-                <div className="sticky bottom-0 flex items-center gap-2 border-t border-hairline bg-card px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-5">
-                    <button
-                        type="button"
-                        onClick={saveEdit}
-                        disabled={fileLoading || !!fileError || writeFile.isPending}
-                        className="inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-full bg-white px-6 py-2 text-[0.9rem] font-bold text-black transition hover:bg-gray-200 disabled:opacity-50 sm:flex-none"
-                    >
-                        <Check className="size-4" /> {writeFile.isPending ? 'Saving…' : 'Save'}
-                    </button>
-                    <button
-                        type="button"
-                        onClick={() => onDownload({ name: editing })}
-                        className="inline-flex min-h-11 items-center gap-2 rounded-full border border-hairline px-5 py-2 text-[0.85rem] font-bold text-ink-secondary transition hover:text-foreground"
-                    >
-                        <Download className="size-4" />
-                    </button>
-                    <span className="ml-auto hidden font-mono text-[0.72rem] text-ink-muted sm:block">512KB edit cap</span>
+                <div className="flex items-center gap-3 border-t border-hairline bg-black/30 px-4 py-2 sm:px-5">
+                    <span className="font-mono text-[0.7rem] text-ink-muted">{draft.split('\n').length} lines · {new Blob([draft]).size} bytes</span>
+                    <span className="ml-auto font-mono text-[0.7rem] text-ink-muted">512KB edit cap</span>
                 </div>
                 {sheet?.type === 'discard' && (
                     <Sheet title={sheetTitle()} subtitle={sheetSubtitle()} onClose={() => setSheet(null)} onSubmit={submitSheet} submitLabel="Discard" danger>
@@ -535,32 +539,30 @@ export default function ServerFiles({ server }) {
         );
     }
 
-    const allChecked = entries.length > 0 && entries.every((e) => selected.includes(e.name));
-
     return (
-        <div className="overflow-hidden rounded-xl border border-hairline bg-card">
-            {/* breadcrumb */}
-            <div className="flex items-center gap-2 border-b border-hairline px-4 py-3 sm:px-5">
-                <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto whitespace-nowrap py-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                    <button type="button" onClick={() => setDir([])} className="flex min-h-11 shrink-0 items-center gap-1.5 font-mono text-[0.85rem] font-bold hover:underline hover:underline-offset-4">
-                        <Folder className="size-4 text-sky-300/80" /> {server.name}
+        <div className="overflow-hidden rounded-lg border border-hairline bg-card">
+            {/* toolbar: breadcrumb + actions */}
+            <div className="flex items-center gap-2 border-b border-hairline bg-black/20 px-3 py-2 sm:px-4">
+                <nav aria-label="Breadcrumb" className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto whitespace-nowrap py-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                    <button type="button" onClick={() => setDir([])} aria-label="Root directory" className="flex min-h-11 shrink-0 items-center gap-1.5 rounded-md px-2 font-mono text-[0.85rem] font-bold transition hover:bg-veil sm:min-h-9">
+                        <Home className="size-4 text-ink-secondary" />
                     </button>
                     {dir.map((seg, i) => (
-                        <span key={i} className="flex shrink-0 items-center gap-1.5">
+                        <span key={i} className="flex shrink-0 items-center gap-1">
                             <ChevronRight className="size-3.5 text-ink-muted" />
                             <button
                                 type="button"
                                 onClick={() => setDir(dir.slice(0, i + 1))}
-                                className="max-w-32 truncate font-mono text-[0.85rem] text-ink-secondary hover:text-foreground hover:underline hover:underline-offset-4"
+                                className="max-w-32 truncate rounded-md px-1.5 py-1 font-mono text-[0.85rem] text-ink-secondary transition hover:bg-veil hover:text-foreground"
                             >
                                 {seg}
                             </button>
                         </span>
                     ))}
-                </div>
-                {/* New: single entry point on mobile, split buttons on desktop */}
-                <div className="ml-auto flex shrink-0 items-center gap-2">
+                </nav>
+                <div className="ml-auto flex shrink-0 items-center gap-1.5">
                     <input ref={uploadRef} type="file" className="hidden" onChange={onUpload} />
+                    {/* mobile: single + menu */}
                     <div className="relative sm:hidden">
                         <button
                             ref={newBtnRef}
@@ -569,7 +571,7 @@ export default function ServerFiles({ server }) {
                             aria-haspopup="menu"
                             aria-expanded={newMenu}
                             onClick={toggleNew}
-                            className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-full bg-white text-black transition hover:bg-gray-200"
+                            className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-md bg-white text-black transition hover:bg-gray-200"
                         >
                             <Plus className="size-5" />
                         </button>
@@ -579,7 +581,7 @@ export default function ServerFiles({ server }) {
                                 <div
                                     role="menu"
                                     style={{ top: newPos.top, left: newPos.left }}
-                                    className="fixed z-[61] w-48 overflow-hidden rounded-xl border border-hairline bg-card py-1 shadow-2xl"
+                                    className="fixed z-[61] w-48 overflow-hidden rounded-lg border border-hairline bg-card py-1 shadow-2xl"
                                 >
                                     <button type="button" role="menuitem" onClick={() => { setNewMenu(false); uploadRef.current?.click(); }} className={cn(menuItem, 'min-h-11')}>
                                         <Upload className="size-4" /> Upload file
@@ -588,28 +590,29 @@ export default function ServerFiles({ server }) {
                                         <FilePlus className="size-4" /> New file
                                     </button>
                                     <button type="button" role="menuitem" onClick={() => { setNewMenu(false); setSheet({ type: 'new-dir', value: '' }); }} className={cn(menuItem, 'min-h-11')}>
-                                        <FolderPlus className="size-4" /> New folder
+                                        <FolderPlus className="size-4" /> New directory
                                     </button>
                                 </div>
                             </>
                         )}
                     </div>
-                    <div className="hidden items-center gap-2 sm:flex">
-                        <button type="button" onClick={() => uploadRef.current?.click()} disabled={!!transfer} className={actionBtn}>
+                    {/* desktop: Pterodactyl-style action buttons */}
+                    <div className="hidden items-center gap-1.5 sm:flex">
+                        <button type="button" onClick={() => uploadRef.current?.click()} disabled={!!transfer} className={btnSecondary}>
                             <Upload className="size-3.5" /> Upload
                         </button>
-                        <button type="button" onClick={() => setSheet({ type: 'new-dir', value: '' })} className={actionBtn}>
-                            <Folder className="size-3.5" /> New folder
+                        <button type="button" onClick={() => setSheet({ type: 'new-file', value: '' })} className={btnSecondary}>
+                            New file
                         </button>
-                        <button type="button" onClick={() => setSheet({ type: 'new-file', value: '' })} className={actionBtn}>
-                            <Plus className="size-3.5" /> New file
+                        <button type="button" onClick={() => setSheet({ type: 'new-dir', value: '' })} className={btnSecondary}>
+                            New directory
                         </button>
                     </div>
                 </div>
             </div>
 
             {transfer && (
-                <div className="flex items-center gap-3 border-b border-hairline bg-veil/60 px-4 py-3 sm:px-5">
+                <div className="flex items-center gap-3 border-b border-hairline bg-veil/60 px-4 py-3">
                     <span className="min-w-0 flex-1 truncate font-mono text-[0.78rem] text-ink-secondary">
                         {transfer.kind === 'upload' ? 'Uploading' : 'Downloading'} {transfer.name}
                     </span>
@@ -622,47 +625,20 @@ export default function ServerFiles({ server }) {
                     <span className="w-11 shrink-0 text-right font-mono text-[0.75rem] text-ink-secondary">
                         {transfer.ratio === null ? '…' : `${Math.round(transfer.ratio * 100)}%`}
                     </span>
-                    <button type="button" onClick={transfer.abort} className="shrink-0 rounded-full border border-red-500/40 px-3 py-1 font-mono text-[0.72rem] font-bold text-red-400">
+                    <button type="button" onClick={transfer.abort} className="shrink-0 rounded-md border border-red-500/40 px-3 py-1 font-mono text-[0.72rem] font-bold text-red-400">
                         Stop
                     </button>
                 </div>
             )}
 
-            {selected.length > 0 && (
-                <div className="flex flex-wrap items-center gap-2 border-b border-hairline bg-veil/60 px-4 py-2.5 sm:px-5">
-                    <span className="font-mono text-[0.78rem] text-ink-secondary">{selected.length} selected</span>
-                    <button type="button" onClick={() => setSheet({ type: 'archive-many', names: [...selected], value: `${selected.length === 1 ? selected[0] : (dir[dir.length - 1] ?? server.name)}.tar.gz` })} disabled={archive.isPending} className={actionBtn}>
-                        <Archive className="size-3.5" /> Compress
-                    </button>
-                    <button type="button" onClick={() => setSelected([])} className="font-mono text-[0.78rem] text-ink-secondary hover:text-foreground">
-                        Clear
-                    </button>
-                </div>
-            )}
-
-            {/* list header */}
-            {!isLoading && !error && entries.length > 0 && (
-                <div className="flex items-center gap-3 border-b border-hairline px-4 py-2 sm:px-5">
-                    <input
-                        type="checkbox"
-                        checked={allChecked}
-                        onChange={() => setSelected(allChecked ? [] : entries.map((e) => e.name))}
-                        aria-label="Select all"
-                        className="size-5 shrink-0 cursor-pointer accent-white"
-                    />
-                    <span className="font-mono text-[0.72rem] text-ink-muted">
-                        {entries.length} item{entries.length === 1 ? '' : 's'}
-                    </span>
-                </div>
-            )}
-
-            <div className="flex flex-col divide-y divide-hairline">
-                {isLoading && <p className="px-5 py-10 text-center text-[0.88rem] text-ink-muted">Loading…</p>}
-                {error && <p className="px-5 py-10 text-center text-[0.88rem] text-red-400">Failed to load: {error.message}</p>}
+            {/* rows */}
+            <div className="flex flex-col divide-y divide-hairline/60">
+                {isLoading && <p className="px-4 py-10 text-center text-[0.88rem] text-ink-muted">Loading…</p>}
+                {error && <p className="px-4 py-10 text-center text-[0.88rem] text-red-400">Failed to load: {error.message}</p>}
                 {!isLoading && !error && entries.length === 0 && (
-                    <div className="flex flex-col items-center gap-2 px-5 py-12 text-center">
+                    <div className="flex flex-col items-center gap-2 px-4 py-12 text-center">
                         <Folder className="size-9 text-ink-muted" />
-                        <p className="text-[0.92rem] font-semibold">Empty folder</p>
+                        <p className="text-[0.92rem] font-semibold">This directory is empty</p>
                         <p className="max-w-60 text-[0.82rem] text-ink-secondary">Upload files or create a new one to get started.</p>
                     </div>
                 )}
@@ -674,12 +650,12 @@ export default function ServerFiles({ server }) {
                     return (
                         <div
                             key={entry.name}
+                            onClick={isDir ? () => openEntry(entry) : undefined}
                             className={cn(
-                                'flex items-center gap-2.5 px-4 py-3.5 transition sm:gap-3 sm:px-5',
-                                checked ? 'bg-veil/70' : 'active:bg-veil/40 sm:hover:bg-veil/40',
+                                'group flex min-h-[3.5rem] items-center gap-2.5 px-3 py-2 transition sm:gap-3 sm:px-4',
+                                checked ? 'bg-blue-500/10' : 'sm:hover:bg-veil/40 active:bg-veil/40',
                                 isDir && 'cursor-pointer',
                             )}
-                            onClick={isDir ? () => openEntry(entry) : undefined}
                         >
                             <input
                                 type="checkbox"
@@ -689,38 +665,99 @@ export default function ServerFiles({ server }) {
                                 aria-label={`Select ${entry.name}`}
                                 className="size-5 shrink-0 cursor-pointer accent-white"
                             />
-                            <button type="button" onClick={() => openEntry(entry)} className="flex min-w-0 flex-1 items-center gap-3 text-left" aria-label={isDir ? `Open folder ${entry.name}` : `Open file ${entry.name}`}>
+                            <button
+                                type="button"
+                                onClick={() => openEntry(entry)}
+                                className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                                aria-label={isDir ? `Open folder ${entry.name}` : `Open file ${entry.name}`}
+                            >
                                 {isDir ? (
-                                    <Folder className="size-7 shrink-0 text-sky-300/80" />
+                                    <Folder className="size-6 shrink-0 text-sky-300/80" />
                                 ) : icon ? (
-                                    <img src={icon} alt="" aria-hidden="true" className="size-7 shrink-0" draggable={false} />
+                                    <img src={icon} alt="" aria-hidden="true" className="size-6 shrink-0" draggable={false} />
                                 ) : (
-                                    <FileText className="size-6 shrink-0 text-ink-muted" />
+                                    <FileText className="size-5 shrink-0 text-ink-muted" />
                                 )}
                                 <span className="min-w-0 flex-1">
-                                    <span className="block truncate text-[0.92rem] font-semibold sm:font-mono sm:text-[0.88rem]">{entry.name}</span>
-                                    <span className="mt-0.5 block font-mono text-[0.72rem] text-ink-muted sm:hidden">
-                                        {isDir ? 'Folder' : fmtSize(entry.size)} · {fmtDate(entry.mtime)}
+                                    <span className="block truncate text-[0.9rem] font-medium text-gray-100">{entry.name}</span>
+                                    <span className="mt-0.5 block font-mono text-[0.7rem] text-ink-muted sm:hidden">
+                                        {isDir ? 'Directory' : fmtSize(entry.size)} · {fmtDate(entry.mtime)}
                                     </span>
                                 </span>
-                                <span className="ml-auto hidden shrink-0 rounded-full border border-hairline bg-veil px-2.5 py-0.5 font-mono text-[0.72rem] text-ink-secondary sm:block">
-                                    {isDir ? 'dir' : fmtSize(entry.size)}
-                                </span>
-                                <span className="hidden w-28 shrink-0 text-right font-mono text-[0.75rem] text-ink-muted md:block">
-                                    {fmtDate(entry.mtime)}
-                                </span>
                             </button>
-                            <RowMenu
-                                entry={entry}
-                                isDir={isDir}
-                                isArchiveFile={isArch}
-                                disabled={busy || !!transfer}
-                                onAction={onMenu}
-                            />
+                            <span className="hidden w-28 shrink-0 text-right font-mono text-[0.75rem] text-ink-muted md:block">
+                                {fmtDate(entry.mtime)}
+                            </span>
+                            <span className="hidden w-20 shrink-0 text-right font-mono text-[0.75rem] text-ink-muted sm:block">
+                                {isDir ? '—' : fmtSize(entry.size)}
+                            </span>
+                            {/* desktop hover actions (Pterodactyl-style) */}
+                            <span className="hidden shrink-0 items-center gap-0.5 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100 lg:flex">
+                                {entry.type === 'file' && !isArch && (
+                                    <button type="button" title="Edit" aria-label={`Edit ${entry.name}`} onClick={() => openEntry(entry)} className={btnIcon}>
+                                        <Pencil className="size-4" />
+                                    </button>
+                                )}
+                                {entry.type === 'file' && isArch && (
+                                    <button type="button" title="Extract" aria-label={`Extract ${entry.name}`} onClick={() => onMenu('extract', entry)} className={btnIcon}>
+                                        <Archive className="size-4" />
+                                    </button>
+                                )}
+                                <button type="button" title="Download" aria-label={`Download ${entry.name}`} onClick={() => onDownload(entry)} className={btnIcon}>
+                                    <Download className="size-4" />
+                                </button>
+                                <button
+                                    type="button"
+                                    title="Delete"
+                                    aria-label={`Delete ${entry.name}`}
+                                    onClick={() => onMenu('delete', entry)}
+                                    className={cn(btnIcon, 'hover:!text-red-400')}
+                                >
+                                    <Trash2 className="size-4" />
+                                </button>
+                            </span>
+                            {/* mobile / overflow menu */}
+                            <span className="lg:hidden">
+                                <RowMenu
+                                    entry={entry}
+                                    isDir={isDir}
+                                    isArchiveFile={isArch}
+                                    disabled={busy || !!transfer}
+                                    onAction={onMenu}
+                                />
+                            </span>
                         </div>
                     );
                 })}
             </div>
+
+            {/* bulk selection bar */}
+            {(selected.length > 0 || entries.length > 0) && !isLoading && !error && (
+                <div className="flex flex-wrap items-center gap-2 border-t border-hairline bg-black/20 px-3 py-2 sm:px-4">
+                    <input
+                        type="checkbox"
+                        checked={allChecked}
+                        onChange={() => setSelected(allChecked ? [] : entries.map((e) => e.name))}
+                        aria-label="Select all"
+                        className="size-5 shrink-0 cursor-pointer accent-white"
+                    />
+                    {selected.length > 0 ? (
+                        <>
+                            <span className="font-mono text-[0.75rem] text-ink-secondary">{selected.length} selected</span>
+                            <button type="button" onClick={() => setSheet({ type: 'archive-many', names: [...selected], value: `${selected.length === 1 ? selected[0] : (dir[dir.length - 1] ?? server.name)}.tar.gz` })} disabled={archive.isPending} className={btnSecondary}>
+                                <Archive className="size-3.5" /> Archive
+                            </button>
+                            <button type="button" onClick={() => setSelected([])} className="font-mono text-[0.75rem] text-ink-secondary hover:text-foreground">
+                                Clear
+                            </button>
+                        </>
+                    ) : (
+                        <span className="font-mono text-[0.72rem] text-ink-muted">
+                            {entries.length} item{entries.length === 1 ? '' : 's'}
+                        </span>
+                    )}
+                </div>
+            )}
 
             {/* unified sheet */}
             {sheet && sheet.type !== 'discard' && (
@@ -740,7 +777,7 @@ export default function ServerFiles({ server }) {
                     {sheet.type === 'delete' ? (
                         <p className="text-[0.88rem] text-ink-secondary">
                             {sheet.entry.type === 'dir'
-                                ? 'This folder and everything inside it will be permanently removed.'
+                                ? 'This directory and everything inside it will be permanently removed.'
                                 : 'This file will be permanently removed.'} This cannot be undone.
                         </p>
                     ) : sheet.type === 'move' ? (
