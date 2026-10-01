@@ -10,7 +10,7 @@ import { plans, servers, serverEvents, users, type EnvVar, type Server } from '.
 import { AuditService } from '../audit/audit.module';
 import { DockerService } from './provisioning/docker.service';
 import { ProvisionerService, type ProvisionResult } from './provisioning/provisioner.service';
-import { runtimeImage, type Runtime } from './provisioning/images';
+import { RUNTIMES, runtimeImage, type Runtime, applyTemplate, labelFor, resolveEggEnv, resolveVersion } from './provisioning/images';
 import { CreateServerDto, UpdateServerDto } from './dto';
 import { backupDirFor, backupOwnerDir } from './backup-paths';
 import { RealtimeGateway } from '@auth/realtime.gateway';
@@ -71,6 +71,20 @@ export class ServersService {
     return rows.map((r) => this.toPublic(r));
   }
 
+  /** Egg catalog: versions + variables per runtime (no digests leak). */
+  catalog() {
+    return RUNTIMES.map((r) => {
+      const img = runtimeImage(r);
+      return {
+        runtime: img.runtime,
+        label: img.label,
+        versions: img.versions.map((v) => ({ version: v.version, label: v.label })),
+        variables: img.variables,
+        defaultStartup: img.defaultStartup,
+      };
+    });
+  }
+
   /** Owner-scoped single read — never trusts an id alone. */
   async getOne(ownerId: string, id: string) {
     const row = await this.requireOwned(ownerId, id);
@@ -95,8 +109,27 @@ export class ServersService {
     const region = dto.region ?? config.REGIONS[0];
     if (!config.REGIONS.includes(region)) throw Err.invalid('REGION_UNSUPPORTED', `Allowed regions: ${config.REGIONS.join(', ')}`);
 
-    const env = this.cleanEnv(dto.env);
-    const startup = this.cleanStartup(dto.startup) || runtimeImage(dto.runtime).defaultStartup;
+    const storedEnv = this.cleanEnv(dto.env);
+    // egg defaults apply at RESOLVE time only — storage keeps exactly what
+    // the user set (no surprise rows in the API/UI); missing variables fall
+    // back to their defaults when the startup template is rendered.
+    const env = resolveEggEnv(dto.runtime, storedEnv);
+    // row.startup keeps the RAW template ({{VAR}} re-resolves on every
+    // provision, so later variable edits apply); `startup` is the resolved
+    // command actually executed.
+    const startupRaw = this.cleanStartup(dto.startup) || runtimeImage(dto.runtime).defaultStartup;
+    let version;
+    try {
+      version = resolveVersion(dto.runtime, dto.version);
+    } catch {
+      throw Err.invalid('VERSION_UNSUPPORTED', `Unknown version "${dto.version}" for ${dto.runtime}`);
+    }
+    let startup: string;
+    try {
+      startup = applyTemplate(startupRaw, env);
+    } catch (e) {
+      throw Err.invalid('STARTUP_VAR_UNKNOWN', (e as Error).message);
+    }
 
     // quota + insert are ONE transaction holding a row lock on the owner:
     // two concurrent creates cannot both pass the count check (TOCTOU).
@@ -124,15 +157,15 @@ export class ServersService {
           ownerId,
           name: dto.name,
           runtime: dto.runtime,
-          runtimeVersion: runtimeImage(dto.runtime).image,
+          runtimeVersion: version.image,
           status: 'provisioning',
           region,
           planId: plan.id,
           cpuMilli: plan.cpuMilli,
           ramMb: plan.ramMb,
           storageGb: plan.storageGb,
-          startup,
-          envEncrypted: env.length ? encryptEnv(env) : null,
+          startup: startupRaw,
+          envEncrypted: storedEnv.length ? encryptEnv(storedEnv) : null,
           autoRestart: dto.autoRestart ?? true,
           autoBackup: dto.autoBackup ?? true,
         } as never)
@@ -151,6 +184,7 @@ export class ServersService {
         id: row.id,
         ownerId,
         runtime: dto.runtime as Runtime,
+        image: version.image,
         startup,
         env,
         cpuMilli: plan.cpuMilli,
@@ -212,18 +246,30 @@ export class ServersService {
         patch.startup = this.cleanStartup(dto.startup);
         rebuild = true;
       }
+      // effective env for template validation: stored values (with masked
+      // round-trip) merged under egg defaults — same merge provision uses.
+      const stored = row.envEncrypted ? this.safeDecrypt(row.envEncrypted) : [];
+      const storedMap = new Map(stored.map((e) => [e.k, e.v]));
+      let effective = resolveEggEnv(row.runtime, stored);
       if (dto.env !== undefined) {
         const env = this.cleanEnv(dto.env);
         // toPublic masks values (••••) — a masked value sent back means
         // "keep the stored one", never "store bullets". Without this, any
         // settings save would silently destroy all secrets.
-        const prev = row.envEncrypted ? this.safeDecrypt(row.envEncrypted) : [];
-        const prevMap = new Map(prev.map((e) => [e.k, e.v]));
         for (const e of env) {
-          if (/^•+$/.test(e.v) && prevMap.has(e.k)) e.v = prevMap.get(e.k)!;
+          if (/^•+$/.test(e.v) && storedMap.has(e.k)) e.v = storedMap.get(e.k)!;
         }
         patch.envEncrypted = env.length ? encryptEnv(env) : null;
+        effective = resolveEggEnv(row.runtime, env);
         rebuild = true;
+      }
+      if (patch.startup !== undefined || dto.env !== undefined) {
+        // fail fast on unknown {{VAR}} instead of booting wrong later
+        try {
+          applyTemplate((patch.startup ?? row.startup) as string, effective);
+        } catch (e) {
+          throw Err.invalid('STARTUP_VAR_UNKNOWN', (e as Error).message);
+        }
       }
       if (dto.autoRestart !== undefined && dto.autoRestart !== row.autoRestart) {
         patch.autoRestart = dto.autoRestart;
@@ -338,8 +384,11 @@ export class ServersService {
         id: row.id,
         ownerId,
         runtime: row.runtime as Runtime,
-        startup: row.startup,
-        env,
+        image: row.runtimeVersion ?? undefined,
+        startup: applyTemplate(row.startup, resolveEggEnv(row.runtime, env)),
+        // container sees the merged env (egg defaults included); storage
+        // keeps exactly what the user set (see create)
+        env: resolveEggEnv(row.runtime, env),
         cpuMilli: row.cpuMilli,
         ramMb: row.ramMb,
         autoRestart: row.autoRestart,
@@ -357,8 +406,11 @@ export class ServersService {
         id: row.id,
         ownerId,
         runtime: row.runtime as Runtime,
-        startup: row.startup,
-        env,
+        image: row.runtimeVersion ?? undefined,
+        startup: applyTemplate(row.startup, resolveEggEnv(row.runtime, env)),
+        // container sees the merged env (egg defaults included); storage
+        // keeps exactly what the user set (see create)
+        env: resolveEggEnv(row.runtime, env),
         cpuMilli: row.cpuMilli,
         ramMb: row.ramMb,
         autoRestart: row.autoRestart,
@@ -488,12 +540,17 @@ export class ServersService {
   /** Remove the old container and re-provision from the current row. */
   private async rebuild(row: Server, start: boolean) {
     const env = row.envEncrypted ? this.safeDecrypt(row.envEncrypted) : [];
+    // stored startup is the raw template — resolve with current variables;
+    // the image stays pinned to the version chosen at creation.
     const result = await this.provisioner.provision({
       id: row.id,
       ownerId: row.ownerId,
       runtime: row.runtime as Runtime,
-      startup: row.startup,
-      env,
+      image: row.runtimeVersion ?? undefined,
+      startup: applyTemplate(row.startup, resolveEggEnv(row.runtime, env)),
+      // container sees the merged env (egg defaults included); storage
+      // keeps exactly what the user set (see create)
+      env: resolveEggEnv(row.runtime, env),
       cpuMilli: row.cpuMilli,
       ramMb: row.ramMb,
       autoRestart: row.autoRestart,
@@ -635,7 +692,7 @@ export class ServersService {
       name: row.name,
       runtime: row.runtime,
       // digest refs must never reach clients — the label is the display name
-      runtimeLabel: runtimeImage(row.runtime).label,
+      runtimeLabel: labelFor(row.runtime, row.runtimeVersion),
       runtimeVersion: row.runtimeVersion,
       status: row.status,
       lastError: row.lastError,

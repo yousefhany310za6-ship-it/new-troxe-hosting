@@ -11,6 +11,8 @@ export interface ProvisionInput {
   id: string;
   ownerId: string;
   runtime: Runtime;
+  /** pinned digest override (a selectable version) — must be allowlisted */
+  image?: string;
   startup: string;
   env: EnvVar[];
   cpuMilli: number;
@@ -85,6 +87,12 @@ export class ProvisionerService {
     }
 
     const runtime = runtimeImage(input.runtime);
+    // defense in depth: even internal callers may only use allowlisted digests
+    const image = input.image ?? runtime.image;
+    if (!runtime.versions.some((v) => v.image === image)) {
+      throw new AppError('IMAGE_NOT_ALLOWED', 400, 'Image is not allowlisted for this runtime');
+    }
+    const spec = { ...runtime, image };
     const names = resourceNames(input.id);
     const labels = LABELS(input.id, input.ownerId);
     const partial: DestroyInput = { containerName: names.containerName, networkName: names.networkName, volumeName: names.volumeName };
@@ -94,7 +102,7 @@ export class ProvisionerService {
 
     try {
       // 1. image (allowlisted) must exist before we create anything
-      await this.docker.ensureImage(runtime.image);
+      await this.docker.ensureImage(image);
 
       // 2. private network for this server only (reused if it already exists)
       const network = await this.getOrCreateNetwork(names.networkName, labels);
@@ -115,7 +123,7 @@ export class ProvisionerService {
       // preparing WorkingDir (/data) at create time, so the helper must
       // guarantee ownership + a non-empty dir first (see chownVolume).
       await this.getOrCreateVolume(names.volumeName, labels).then((v) => (created.volume = v));
-      await this.chownVolume(names.volumeName, runtime.image);
+      await this.chownVolume(names.volumeName, image);
 
       // 4. the sandbox container itself (replaces any previous one)
       await this.docker.removeByName(names.containerName).catch(() => undefined);
@@ -123,7 +131,7 @@ export class ProvisionerService {
         buildSandboxConfig({
           serverId: input.id,
           ownerId: input.ownerId,
-          image: runtime,
+          image: spec,
           startup: input.startup || runtime.defaultStartup,
           env: input.env,
           cpuMilli: input.cpuMilli,
@@ -146,7 +154,7 @@ export class ProvisionerService {
         networkName: names.networkName,
         networkSubnet: network.subnet,
         volumeName: names.volumeName,
-        image: runtime.image,
+        image,
       };
     } catch (e) {
       const message = e instanceof AppError ? e.message : `Provisioning failed: ${(e as Error).message}`;

@@ -165,9 +165,13 @@ export function useRestoreBackup(serverId, backupId) {
   });
 }
 
+// Runtime egg catalog (versions + variables, no digests)
+export function useRuntimeCatalog() {
+  return useQuery({ queryKey: ['runtimes', 'catalog'], queryFn: () => apiGet('/servers/runtimes/catalog'), staleTime: 60000 });
+}
+
 // Files
-const fkey = (id, path) => ['servers', id, 'files', path || ''];
-export function useServerFiles(id, path) {
+const fkey = (id, path) => ['servers', id, 'files', path || ''];export function useServerFiles(id, path) {
   return useQuery({
     queryKey: fkey(id, path),
     queryFn: () => apiGet(`/servers/${id}/files?path=${encodeURIComponent(path || '')}`),

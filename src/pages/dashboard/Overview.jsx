@@ -29,13 +29,17 @@ function StatCard({ label, value, hint, icon }) {
 }
 
 function Flag({ code, name }) {
+    // Emoji flags render locally — no external image host to fail, block,
+    // or leak visitor IPs (the old flagcdn <img> showed broken images).
+    const cc = (code ?? '').toLowerCase();
+    const flag =
+        /^[a-z]{2}$/.test(cc) && cc !== 'xx'
+            ? String.fromCodePoint(...[...cc.toUpperCase()].map((c) => 127397 + c.charCodeAt(0)))
+            : '🌐';
     return (
-        <img
-            src={`https://flagcdn.com/w40/${code}.png`}
-            alt={name}
-            loading="lazy"
-            className="h-4 w-6 shrink-0 rounded-[3px] object-cover"
-        />
+        <span role="img" aria-label={name} title={name} className="inline-block w-6 text-center text-base leading-none">
+            {flag}
+        </span>
     );
 }
 

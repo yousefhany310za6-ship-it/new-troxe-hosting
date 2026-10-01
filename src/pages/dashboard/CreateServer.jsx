@@ -4,13 +4,7 @@ import { ArrowLeft, Check, Loader2, Server as ServerIcon } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { apiGet, apiPost } from '@/lib/api.js';
-
-const RUNTIME_OPTS = [
-    { value: 'Node.js', label: 'Node.js', hint: 'LTS (20.x)', defaultStartup: 'node index.js' },
-    { value: 'Python', label: 'Python', hint: '3.11 slim', defaultStartup: 'python main.py' },
-    { value: 'Bun', label: 'Bun', hint: '1.2.x', defaultStartup: 'bun run index.js' },
-    { value: 'PHP', label: 'PHP', hint: '8.3 CLI', defaultStartup: 'php index.php' },
-];
+import { useRuntimeCatalog } from '@/hooks/useQueries.jsx';
 
 const inputClass =
     'w-full rounded-xl border border-hairline bg-white/10 px-4 py-2.5 text-[0.88rem] text-foreground placeholder-ink-muted transition focus:border-primary focus:ring-2 focus:ring-ring/40 focus:outline-none';
@@ -23,7 +17,9 @@ export default function CreateServer({ adminMode = false }) {
     const [searchParams] = useSearchParams();
     const [name, setName] = useState('');
     const [runtime, setRuntime] = useState('Node.js');
+    const [version, setVersion] = useState('');
     const [startup, setStartup] = useState('');
+    const [vars, setVars] = useState({});
     const [env, setEnv] = useState([{ k: '', v: '' }]);
     const [autoRestart, setAutoRestart] = useState(true);
     const [autoBackup, setAutoBackup] = useState(true);
@@ -34,7 +30,21 @@ export default function CreateServer({ adminMode = false }) {
     const [ownerOptions, setOwnerOptions] = useState([]);
     const [ownerId, setOwnerId] = useState('');
 
-    const runtimeDefault = RUNTIME_OPTS.find((o) => o.value === runtime)?.defaultStartup ?? '';
+    const { data: catalog } = useRuntimeCatalog();
+    const entry = (catalog ?? []).find((c) => c.runtime === runtime);
+    const runtimeDefault = entry?.defaultStartup ?? '';
+
+    // reset version + variables when the runtime changes
+    useEffect(() => {
+        if (!entry) return;
+        setVersion((v) => (entry.versions.some((x) => x.version === v) ? v : (entry.versions[0]?.version ?? '')));
+        setVars((prev) => {
+            const next = {};
+            for (const x of entry.variables) next[x.key] = prev[x.key] ?? x.defaultValue;
+            return next;
+        });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [runtime, catalog]);
 
     // ?owner=<id> e.g. from the user-detail page — skip the picker entirely
     useEffect(() => {
@@ -74,10 +84,19 @@ export default function CreateServer({ adminMode = false }) {
             setMsg({ text: 'Please select the owning user first.', ok: false });
             return;
         }
+        for (const x of entry?.variables ?? []) {
+            if (x.required && !(vars[x.key] ?? '').trim()) {
+                setMsg({ text: `${x.name} (${x.key}) is required.`, ok: false });
+                return;
+            }
+        }
         setCreating(true);
         setMsg({ text: '', ok: true });
         try {
-            const filteredEnv = env.filter(r => r.k.trim() && r.v.trim());
+            const varEnv = Object.entries(vars)
+                .filter(([, v]) => v !== undefined && v !== '')
+                .map(([k, v]) => ({ k, v }));
+            const filteredEnv = [...varEnv, ...env.filter(r => r.k.trim() && r.v.trim())];
             const payload = {
                 name: name.trim(),
                 runtime,
@@ -85,6 +104,7 @@ export default function CreateServer({ adminMode = false }) {
                 autoRestart,
                 autoBackup,
             };
+            if (version) payload.version = version;
             if (startup.trim()) payload.startup = startup.trim();
             const res = adminMode
                 ? await apiPost('/admin/servers', { ...payload, ownerId })
@@ -160,22 +180,57 @@ export default function CreateServer({ adminMode = false }) {
                         />
                         <p className="text-[0.75rem] text-ink-muted">3-32 chars, lowercase, digits, dashes</p>
                     </label>
-                    <label className="flex flex-col gap-1.5 text-[0.85rem] font-semibold">
-                        Runtime
-                        <select
-                            value={runtime}
-                            onChange={(e) => setRuntime(e.target.value)}
-                            className={inputClass}
-                            disabled={creating}
-                        >
-                            {RUNTIME_OPTS.map(opt => (
-                                <option key={opt.value} value={opt.value}>
-                                    {opt.label} — {opt.hint}
-                                </option>
-                            ))}
-                        </select>
-                    </label>
+                    <div className="grid grid-cols-2 gap-4">
+                        <label className="flex flex-col gap-1.5 text-[0.85rem] font-semibold">
+                            Runtime
+                            <select
+                                value={runtime}
+                                onChange={(e) => setRuntime(e.target.value)}
+                                className={inputClass}
+                                disabled={creating}
+                            >
+                                {(catalog ?? []).map((c) => (
+                                    <option key={c.runtime} value={c.runtime}>{c.label}</option>
+                                ))}
+                            </select>
+                        </label>
+                        <label className="flex flex-col gap-1.5 text-[0.85rem] font-semibold">
+                            Version
+                            <select
+                                value={version}
+                                onChange={(e) => setVersion(e.target.value)}
+                                className={inputClass}
+                                disabled={creating}
+                            >
+                                {(entry?.versions ?? []).map((v) => (
+                                    <option key={v.version} value={v.version}>{v.label}</option>
+                                ))}
+                            </select>
+                        </label>
+                    </div>
                 </div>
+
+                {(entry?.variables ?? []).length > 0 && (
+                    <div>
+                        <p className="text-[0.85rem] font-semibold">Startup variables</p>
+                        <p className="mt-0.5 text-[0.75rem] text-ink-muted">Usable as <span className="font-mono">{'{{KEY}}'}</span> in the startup command.</p>
+                        <div className="mt-3 grid grid-cols-2 gap-4 max-md:grid-cols-1">
+                            {(entry?.variables ?? []).map((x) => (
+                                <label key={x.key} className="flex flex-col gap-1.5 text-[0.85rem] font-semibold">
+                                    {x.name} <span className="font-mono text-[0.72rem] text-ink-muted">{x.key}{x.required ? ' (required)' : ''}</span>
+                                    <input
+                                        value={vars[x.key] ?? ''}
+                                        onChange={(e) => setVars((prev) => ({ ...prev, [x.key]: e.target.value }))}
+                                        placeholder={x.defaultValue}
+                                        className={cn(inputClass, 'font-mono')}
+                                        disabled={creating}
+                                    />
+                                    <span className="text-[0.72rem] font-normal text-ink-muted">{x.description}</span>
+                                </label>
+                            ))}
+                        </div>
+                    </div>
+                )}
 
                 <label className="flex flex-col gap-1.5 text-[0.85rem] font-semibold">
                     Startup command
@@ -187,7 +242,7 @@ export default function CreateServer({ adminMode = false }) {
                         disabled={creating}
                     />
                     <p className="text-[0.75rem] text-ink-muted">
-                        Optional — defaults to <span className="font-mono">{runtimeDefault}</span>. Must stay in foreground.
+                        Optional — defaults to <span className="font-mono">{runtimeDefault}</span>. Supports <span className="font-mono">{'{{VARIABLE}}'}</span> placeholders. Must stay in foreground.
                     </p>
                 </label>
 

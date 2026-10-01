@@ -27,6 +27,16 @@ export class ServersController {
     return this.svc.list(u.sub);
   }
 
+  /**
+   * Egg catalog for the create form: runtimes, selectable versions and
+   * startup variables. Digests are NEVER exposed — the API accepts only
+   * version selectors. (Static route registered before `:id`.)
+   */
+  @Get('runtimes/catalog')
+  catalog() {
+    return this.svc.catalog();
+  }
+
   // provisioning is expensive → stricter burst limit
   @Post()
   @Throttle({ default: { limit: 10, ttl: 60_000 } })

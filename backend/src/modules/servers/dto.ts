@@ -1,4 +1,4 @@
-import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsOptional, Matches, MaxLength, MinLength, ValidateNested } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsOptional, IsString, Matches, MaxLength, MinLength, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 import { config } from '../../config/env';
 import { RUNTIMES } from './provisioning/images';
@@ -21,6 +21,12 @@ export class CreateServerDto {
 
   @IsIn(RUNTIMES as unknown as string[], { message: 'RUNTIME_UNSUPPORTED' })
   runtime!: (typeof RUNTIMES)[number];
+
+  /** version selector, e.g. '22' — must exist for the runtime (default: first) */
+  @IsOptional()
+  @IsString()
+  @MaxLength(16)
+  version?: string;
 
   @IsOptional()
   @IsIn([...config.REGIONS], { message: 'REGION_UNSUPPORTED' })
