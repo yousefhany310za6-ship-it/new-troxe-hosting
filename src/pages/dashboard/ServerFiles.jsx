@@ -7,6 +7,8 @@ import {
     Download,
     FileText,
     Folder,
+    FolderPlus,
+    FilePlus,
     MoreHorizontal,
     Plus,
     Trash2,
@@ -44,11 +46,23 @@ const ARCHIVE_RE = /\.(zip|tar\.gz|tgz|tar)$/i;
 const MEDIA_RE = /\.(png|jpe?g|gif|webp|ico|bmp|mp4|webm|mov|mp3|wav|ogg|pdf|woff2?|ttf|eot|exe|dll|so|bin|dat|db|sqlite|mpkg|dmg|iso)$/i;
 
 const fmtSize = (b) => {
-    if (!b) return '—';
+    if (!b && b !== 0) return '—';
+    if (b === 0) return '0 B';
     const u = ['B', 'KB', 'MB', 'GB'];
     let i = 0, v = b;
     while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
     return `${v.toFixed(v < 10 && i > 0 ? 1 : 0)} ${u[i]}`;
+};
+
+const fmtDate = (mtime) => {
+    if (!mtime) return '—';
+    const d = new Date(mtime * 1000);
+    const now = new Date();
+    const sameDay = d.toDateString() === now.toDateString();
+    const yday = new Date(now - 864e5).toDateString() === d.toDateString();
+    if (sameDay) return `Today ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    if (yday) return `Yesterday ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: d.getFullYear() === now.getFullYear() ? undefined : 'numeric' });
 };
 
 function join(segs) { return segs.filter((s) => s !== '').join('/'); }
@@ -61,9 +75,16 @@ function openable(entry) {
     return true;
 }
 
+function notOpenableReason(entry) {
+    if (entry.type !== 'file') return 'Only regular files can be opened — download it instead.';
+    if (ARCHIVE_RE.test(entry.name)) return 'Archives cannot be edited — extract or download it instead.';
+    if (entry.size > EDIT_MAX) return 'File exceeds the 512KB edit cap — download it instead.';
+    return 'This file type cannot be edited — download it instead.';
+}
+
 function RowMenu({ entry, isDir, isArchiveFile, onAction, disabled }) {
     const [open, setOpen] = useState(false);
-    const [pos, setPos] = useState({ top: 0, left: 0, up: false });
+    const [pos, setPos] = useState({ top: 0, left: 0 });
     const btnRef = useRef(null);
     const items = [];
     if (isDir) items.push(['open', 'Open']);
@@ -86,7 +107,6 @@ function RowMenu({ entry, isDir, isArchiveFile, onAction, disabled }) {
         setPos({
             top: up ? Math.max(8, r.top - menuH) : r.bottom + 4,
             left: Math.max(8, Math.min(r.right - 192, window.innerWidth - 200)),
-            up,
         });
         setOpen(true);
     };
@@ -112,9 +132,9 @@ function RowMenu({ entry, isDir, isArchiveFile, onAction, disabled }) {
                 aria-expanded={open}
                 onClick={toggle}
                 disabled={disabled}
-                className={cn(actionBtn, 'px-2')}
+                className={cn(actionBtn, 'min-h-11 min-w-11 items-center justify-center px-2.5 sm:min-h-0 sm:min-w-0 sm:px-2')}
             >
-                <MoreHorizontal className="size-4" />
+                <MoreHorizontal className="size-5 sm:size-4" />
             </button>
             {open && (
                 <>
@@ -122,7 +142,7 @@ function RowMenu({ entry, isDir, isArchiveFile, onAction, disabled }) {
                     <div
                         role="menu"
                         style={{ top: pos.top, left: pos.left }}
-                        className="fixed z-[61] w-48 overflow-hidden rounded-xl border border-hairline bg-card py-1 shadow-2xl"
+                        className="fixed z-[61] w-52 overflow-hidden rounded-xl border border-hairline bg-card py-1 shadow-2xl"
                     >
                         {items.map(([key, label]) => (
                             <button
@@ -130,7 +150,7 @@ function RowMenu({ entry, isDir, isArchiveFile, onAction, disabled }) {
                                 type="button"
                                 role="menuitem"
                                 onClick={() => { setOpen(false); onAction(key, entry); }}
-                                className={cn(menuItem, key === 'delete' && 'text-red-400 hover:!text-red-300')}
+                                className={cn(menuItem, 'min-h-11 sm:min-h-0', key === 'delete' && 'text-red-400 hover:!text-red-300')}
                             >
                                 {label}
                             </button>
@@ -142,16 +162,67 @@ function RowMenu({ entry, isDir, isArchiveFile, onAction, disabled }) {
     );
 }
 
+/**
+ * Bottom-sheet on mobile, centered dialog on desktop. Replaces every
+ * window.prompt/confirm in the file manager (native dialogs are cramped
+ * and inconsistent on mobile browsers).
+ */
+function Sheet({ title, subtitle, onClose, onSubmit, submitLabel, danger, children, submitDisabled }) {
+    useEffect(() => {
+        const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [onClose ]);
+
+    return (
+        <div className="fixed inset-0 z-[70] flex items-end justify-center bg-black/70 p-0 sm:items-center sm:p-4" onClick={onClose}>
+            <form
+                onSubmit={(e) => { e.preventDefault(); onSubmit(); }}
+                onClick={(e) => e.stopPropagation()}
+                className="w-full rounded-t-2xl border border-hairline bg-card p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:max-w-md sm:rounded-2xl sm:p-6"
+            >
+                <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-white/20 sm:hidden" />
+                <h2 className="text-[1.05rem] font-bold">{title}</h2>
+                {subtitle && <p className="mt-1 break-words font-mono text-[0.78rem] text-ink-secondary">{subtitle}</p>}
+                <div className="mt-4">{children}</div>
+                <div className="mt-5 flex gap-2">
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        className="flex-1 rounded-full border border-hairline px-5 py-3 text-sm font-bold text-ink-secondary transition hover:text-foreground"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        type="submit"
+                        disabled={submitDisabled}
+                        className={cn(
+                            'flex-1 rounded-full px-5 py-3 text-sm font-bold transition disabled:opacity-50',
+                            danger
+                                ? 'bg-red-500 text-white hover:bg-red-400'
+                                : 'bg-white text-black hover:bg-gray-200',
+                        )}
+                    >
+                        {submitLabel}
+                    </button>
+                </div>
+            </form>
+        </div>
+    );
+}
+
 export default function ServerFiles({ server }) {
     const toast = useToast();
     const [dir, setDir] = useState([]);
     const [editing, setEditing] = useState(null); // rel path being edited
     const [draft, setDraft] = useState('');
-    const [showNew, setShowNew] = useState(null); // 'file' | 'dir' | null
-    const [newName, setNewName] = useState('');
     const [selected, setSelected] = useState([]); // entry names for bulk archive
+    const [newMenu, setNewMenu] = useState(false);
+    const [sheet, setSheet] = useState(null); // { type, entry?, value }
     const [transfer, setTransfer] = useState(null); // { kind, name, ratio|null, abort }
     const uploadRef = useRef(null);
+    const newBtnRef = useRef(null);
+    const [newPos, setNewPos] = useState({ top: 0, left: 0 });
 
     const dirPath = join(dir);
     const { data, isLoading, error, refetch } = useServerFiles(server.id, dirPath);
@@ -171,6 +242,17 @@ export default function ServerFiles({ server }) {
 
     useEffect(() => { setSelected([]); }, [dirPath]);
 
+    useEffect(() => {
+        if (!newMenu) return;
+        const close = () => setNewMenu(false);
+        window.addEventListener('resize', close);
+        window.addEventListener('scroll', close, true);
+        return () => {
+            window.removeEventListener('resize', close);
+            window.removeEventListener('scroll', close, true);
+        };
+    }, [newMenu]);
+
     const fail = (e) => toast.error(e.message);
     const busy = writeFile.isPending || remove.isPending || rename.isPending || archive.isPending || extract.isPending || mkdir.isPending;
 
@@ -178,24 +260,20 @@ export default function ServerFiles({ server }) {
         setSelected((s) => (s.includes(name) ? s.filter((n) => n !== name) : [...s, name]));
 
     const relOf = (name) => join([...dir, name]);
+    const sheetVal = (sheet?.value ?? '').trim();
 
     const openEntry = (entry) => {
         const rel = relOf(entry.name);
         if (entry.type === 'dir') { setDir([...dir, entry.name]); return; }
-        if (!openable(entry)) {
-            if (entry.type !== 'file') toast.info('Only regular files can be opened — download it instead.');
-            else if (ARCHIVE_RE.test(entry.name)) toast.info('Archives cannot be edited — extract or download it instead.');
-            else if (entry.size > EDIT_MAX) toast.info('File exceeds the 512KB edit cap — download it instead.');
-            else toast.info('This file type cannot be edited — download it instead.');
-            return;
-        }
+        if (!openable(entry)) { toast.info(notOpenableReason(entry)); return; }
         setEditing(rel);
         setDraft('');
     };
 
     const closeEditor = () => {
         if (fileData && draft !== (fileData.content ?? '')) {
-            if (!window.confirm('Discard unsaved changes?')) return;
+            setSheet({ type: 'discard' });
+            return;
         }
         setEditing(null);
     };
@@ -208,20 +286,114 @@ export default function ServerFiles({ server }) {
         } catch (e) { fail(e); }
     };
 
-    const createNew = async (e) => {
-        e.preventDefault();
-        const name = newName.trim().replace(/[/\\]/g, '');
-        if (!name) { toast.error('Enter a name.'); return; }
-        const rel = relOf(name);
+    // ---- sheet confirmations ----
+
+    const submitSheet = async () => {
+        if (!sheet) return;
+        const v = sheetVal;
         try {
-            if (showNew === 'dir') await mkdir.mutateAsync(rel);
-            else await writeFile.mutateAsync({ path: rel, content: '' });
-            toast.success(`${showNew === 'dir' ? 'Folder' : 'File'} created.`);
-            setShowNew(null);
-            setNewName('');
-            refetch();
-        } catch (err) { fail(err); }
+            switch (sheet.type) {
+                case 'new-file':
+                case 'new-dir': {
+                    if (!v) { toast.error('Enter a name.'); return; }
+                    if (/[/\\]/.test(v)) { toast.error('Name cannot contain slashes.'); return; }
+                    const rel = relOf(v);
+                    if (sheet.type === 'new-dir') await mkdir.mutateAsync(rel);
+                    else await writeFile.mutateAsync({ path: rel, content: '' });
+                    toast.success(`${sheet.type === 'new-dir' ? 'Folder' : 'File'} created.`);
+                    if (sheet.type === 'new-file') { setEditing(rel); setDraft(''); }
+                    refetch();
+                    break;
+                }
+                case 'rename': {
+                    if (!v || v === sheet.entry.name) return;
+                    if (/[/\\]/.test(v)) { toast.error('Name cannot contain slashes — use Move to relocate.'); return; }
+                    await rename.mutateAsync({ from: relOf(sheet.entry.name), to: relOf(v) });
+                    toast.success('Renamed.');
+                    refetch();
+                    break;
+                }
+                case 'move': {
+                    if (!v || v === relOf(sheet.entry.name)) return;
+                    await rename.mutateAsync({ from: relOf(sheet.entry.name), to: v.replace(/^\/+/, '') });
+                    toast.success('Moved.');
+                    refetch();
+                    break;
+                }
+                case 'archive-one': {
+                    if (!/\.tar\.gz$/.test(v) && !/\.tgz$/.test(v)) { toast.error('Name must end in .tar.gz or .tgz.'); return; }
+                    await archive.mutateAsync({ sources: [relOf(sheet.entry.name)], dest: relOf(v) });
+                    toast.success(`Archived to ${v}.`);
+                    refetch();
+                    break;
+                }
+                case 'archive-many': {
+                    if (!/\.tar\.gz$/.test(v) && !/\.tgz$/.test(v)) { toast.error('Name must end in .tar.gz or .tgz.'); return; }
+                    await archive.mutateAsync({ sources: sheet.names.map((n) => relOf(n)), dest: relOf(v) });
+                    toast.success(`Archived to ${v}.`);
+                    setSelected([]);
+                    refetch();
+                    break;
+                }
+                case 'extract': {
+                    await extract.mutateAsync({
+                        file: relOf(sheet.entry.name),
+                        dest: join([...dir, v || '.']),
+                    });
+                    toast.success('Extracted.');
+                    refetch();
+                    break;
+                }
+                case 'delete': {
+                    await remove.mutateAsync(relOf(sheet.entry.name));
+                    toast.success('Deleted.');
+                    if (editing === relOf(sheet.entry.name)) setEditing(null);
+                    refetch();
+                    break;
+                }
+                case 'discard': {
+                    setEditing(null);
+                    break;
+                }
+                default:
+                    break;
+            }
+        } catch (e) { fail(e); return; }
+        setSheet(null);
     };
+
+    const sheetTitle = () => {
+        switch (sheet?.type) {
+            case 'new-file': return 'New file';
+            case 'new-dir': return 'New folder';
+            case 'rename': return 'Rename';
+            case 'move': return 'Move';
+            case 'archive-one': return 'Compress';
+            case 'archive-many': return `Compress ${sheet.names.length} items`;
+            case 'extract': return 'Extract archive';
+            case 'delete': return 'Delete';
+            case 'discard': return 'Discard changes?';
+            default: return '';
+        }
+    };
+
+    const sheetSubtitle = () => {
+        switch (sheet?.type) {
+            case 'rename':
+            case 'move':
+            case 'delete':
+                return relOf(sheet.entry.name);
+            case 'archive-one':
+            case 'extract':
+                return relOf(sheet.entry.name);
+            case 'discard':
+                return editing;
+            default:
+                return dirPath ? `in ${dirPath}` : 'in / (root)';
+        }
+    };
+
+    // ---- row actions ----
 
     const onUpload = async (e) => {
         const f = e.target.files?.[0];
@@ -263,106 +435,34 @@ export default function ServerFiles({ server }) {
         }
     };
 
-    const onRename = async (entry) => {
-        const next = window.prompt('Rename to:', entry.name);
-        if (!next || next === entry.name) return;
-        if (/[/\\]/.test(next)) { toast.error('Name cannot contain slashes — use Move to relocate.'); return; }
-        try {
-            await rename.mutateAsync({ from: relOf(entry.name), to: relOf(next.trim()) });
-            toast.success('Renamed.');
-            refetch();
-        } catch (e) { fail(e); }
-    };
-
-    const onMove = async (entry) => {
-        const next = window.prompt('Move to (path inside storage):', relOf(entry.name));
-        if (!next || next === relOf(entry.name)) return;
-        try {
-            await rename.mutateAsync({ from: relOf(entry.name), to: next.trim().replace(/^\/+/, '') });
-            toast.success('Moved.');
-            refetch();
-        } catch (e) { fail(e); }
-    };
-
-    const onArchiveOne = async (entry) => {
-        const def = `${entry.name}.tar.gz`;
-        const name = window.prompt('Archive name:', def);
-        if (!name) return;
-        if (!/\.tar\.gz$/.test(name) && !/\.tgz$/.test(name)) { toast.error('Name must end in .tar.gz or .tgz.'); return; }
-        try {
-            await archive.mutateAsync({
-                sources: [relOf(entry.name)],
-                dest: relOf(name.replace(/[/\\]/g, '')),
-            });
-            toast.success(`Archived to ${name}.`);
-            refetch();
-        } catch (e) { fail(e); }
-    };
-
-    const compressSelected = async () => {
-        const def = selected.length === 1 ? `${selected[0]}.tar.gz` : `${dir.length ? dir[dir.length - 1] : server.name}.tar.gz`;
-        const name = window.prompt('Archive name:', def);
-        if (!name) return;
-        if (!/\.tar\.gz$/.test(name) && !/\.tgz$/.test(name)) { toast.error('Name must end in .tar.gz or .tgz.'); return; }
-        try {
-            await archive.mutateAsync({
-                sources: selected.map((n) => relOf(n)),
-                dest: relOf(name.replace(/[/\\]/g, '')),
-            });
-            toast.success(`Archived to ${name}.`);
-            setSelected([]);
-            refetch();
-        } catch (e) { fail(e); }
-    };
-
-    const extractHere = async (entry) => {
-        const rel = relOf(entry.name);
-        const dest = window.prompt('Extract into folder:', entry.name.replace(/\.(zip|tar\.gz|tgz|tar)$/, ''));
-        if (dest === null) return;
-        try {
-            await extract.mutateAsync({
-                file: rel,
-                dest: join([...dir, (dest.trim() || '.').replace(/[/\\]/g, '') || '.']),
-            });
-            toast.success('Extracted.');
-            refetch();
-        } catch (e) { fail(e); }
-    };
-
-    const onDelete = async (entry) => {
-        if (!window.confirm(`Delete "${entry.name}"${entry.type === 'dir' ? ' and everything inside it' : ''}?`)) return;
-        try {
-            await remove.mutateAsync(relOf(entry.name));
-            toast.success('Deleted.');
-            if (editing === relOf(entry.name)) setEditing(null);
-            refetch();
-        } catch (e) { fail(e); }
-    };
-
     const onMenu = (key, entry) => {
-        const isDir = entry.type === 'dir';
-        const isArch = entry.type === 'file' && ARCHIVE_RE.test(entry.name);
         if (key === 'open') openEntry(entry);
-        else if (key === 'extract') extractHere(entry);
         else if (key === 'download') onDownload(entry);
-        else if (key === 'rename') onRename(entry);
-        else if (key === 'move') onMove(entry);
+        else if (key === 'rename') setSheet({ type: 'rename', entry, value: entry.name });
+        else if (key === 'move') setSheet({ type: 'move', entry, value: relOf(entry.name) });
         else if (key === 'archive') {
-            if (isDir || !isArch) onArchiveOne(entry);
-            else compressSelectedSingle(entry);
+            const def = `${entry.name}.tar.gz`;
+            setSheet({ type: 'archive-one', entry, value: def });
         }
-        else if (key === 'delete') onDelete(entry);
+        else if (key === 'extract') {
+            setSheet({
+                type: 'extract', entry,
+                value: entry.name.replace(/\.(zip|tar\.gz|tgz|tar)$/, ''),
+            });
+        }
+        else if (key === 'delete') setSheet({ type: 'delete', entry, value: '' });
     };
 
-    const compressSelectedSingle = async (entry) => {
-        try {
-            await archive.mutateAsync({
-                sources: [relOf(entry.name)],
-                dest: relOf(`${entry.name}.tar.gz`),
+    const toggleNew = () => {
+        if (newMenu) { setNewMenu(false); return; }
+        const r = newBtnRef.current?.getBoundingClientRect();
+        if (r) {
+            setNewPos({
+                top: Math.max(8, r.top - (3 * 38 + 8)),
+                left: Math.max(8, Math.min(r.right - 192, window.innerWidth - 200)),
             });
-            toast.success('Archived.');
-            refetch();
-        } catch (e) { fail(e); }
+        }
+        setNewMenu(true);
     };
 
     const entries = [...(data?.entries ?? [])].sort((a, b) =>
@@ -371,41 +471,20 @@ export default function ServerFiles({ server }) {
     // ---- full-page editor takeover ----
     if (editing) {
         const dirty = !!fileData && draft !== (fileData.content ?? '');
+        const icon = fileIcon(editing.split('/').pop(), 'file');
         return (
             <div className="flex min-h-[70vh] flex-col overflow-hidden rounded-xl border border-hairline bg-card">
-                <div className="flex flex-wrap items-center gap-2 border-b border-hairline px-5 py-3">
-                    <button type="button" onClick={closeEditor} className="inline-flex shrink-0 items-center gap-1.5 text-[0.85rem] font-semibold text-ink-secondary transition hover:text-foreground">
-                        <ArrowLeft className="size-4" /> Files
+                <div className="flex items-center gap-2 border-b border-hairline px-4 py-3 sm:px-5">
+                    <button type="button" onClick={closeEditor} className="inline-flex min-h-11 shrink-0 items-center gap-1.5 text-[0.85rem] font-semibold text-ink-secondary transition hover:text-foreground sm:min-h-0">
+                        <ArrowLeft className="size-4" /> <span className="hidden sm:inline">Files</span>
                     </button>
-                    {(() => {
-                        const icon = fileIcon(editing.split('/').pop(), 'file');
-                        return icon ? (
-                            <img src={icon} alt="" aria-hidden="true" className="size-5 shrink-0" draggable={false} />
-                        ) : (
-                            <FileText className="size-4 shrink-0 text-ink-muted" />
-                        );
-                    })()}
+                    {icon ? (
+                        <img src={icon} alt="" aria-hidden="true" className="size-5 shrink-0" draggable={false} />
+                    ) : null}
                     <span className="min-w-0 flex-1 truncate font-mono text-[0.85rem] font-bold">{editing}</span>
-                    {dirty && <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[0.68rem] font-bold text-amber-400">unsaved</span>}
-                    <div className="ml-auto flex items-center gap-2">
-                        <button
-                            type="button"
-                            onClick={() => onDownload({ name: editing })}
-                            className={actionBtn}
-                        >
-                            <Download className="size-3.5" /> Download
-                        </button>
-                        <button
-                            type="button"
-                            onClick={saveEdit}
-                            disabled={fileLoading || !!fileError || writeFile.isPending}
-                            className="inline-flex items-center gap-2 rounded-full bg-white px-6 py-2 text-[0.83rem] font-bold text-black transition hover:bg-gray-200 disabled:opacity-50"
-                        >
-                            <Check className="size-3.5" /> {writeFile.isPending ? 'Saving…' : 'Save'}
-                        </button>
-                    </div>
+                    {dirty && <span className="shrink-0 rounded-full bg-amber-500/15 px-2 py-0.5 text-[0.68rem] font-bold text-amber-400">unsaved</span>}
                 </div>
-                <div className="flex min-h-0 flex-1 flex-col p-5">
+                <div className="flex min-h-0 flex-1 flex-col p-3 sm:p-5">
                     {fileLoading && <p className="text-[0.85rem] text-ink-muted">Loading…</p>}
                     {fileError && (
                         <p className="text-[0.85rem] text-red-400">
@@ -419,93 +498,138 @@ export default function ServerFiles({ server }) {
                             value={draft}
                             onChange={(e) => setDraft(e.target.value)}
                             spellCheck={false}
+                            autoCapitalize="off"
+                            autoCorrect="off"
                             placeholder="Empty file — start typing…"
-                            className="min-h-[55vh] w-full flex-1 resize-y rounded-lg border border-hairline bg-black/40 p-4 font-mono text-[0.85rem] leading-relaxed text-foreground focus:border-primary focus:outline-none"
+                            className="min-h-[55vh] w-full flex-1 resize-y rounded-lg border border-hairline bg-black/40 p-4 font-mono text-base leading-relaxed text-foreground focus:border-primary focus:outline-none"
                         />
                     )}
-                    <p className="mt-2 font-mono text-[0.72rem] text-ink-muted">512KB edit cap · Ctrl+S saves{dirty ? ' · unsaved changes' : ''}</p>
                 </div>
+                <div className="sticky bottom-0 flex items-center gap-2 border-t border-hairline bg-card px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-5">
+                    <button
+                        type="button"
+                        onClick={saveEdit}
+                        disabled={fileLoading || !!fileError || writeFile.isPending}
+                        className="inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-full bg-white px-6 py-2 text-[0.9rem] font-bold text-black transition hover:bg-gray-200 disabled:opacity-50 sm:flex-none"
+                    >
+                        <Check className="size-4" /> {writeFile.isPending ? 'Saving…' : 'Save'}
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => onDownload({ name: editing })}
+                        className="inline-flex min-h-11 items-center gap-2 rounded-full border border-hairline px-5 py-2 text-[0.85rem] font-bold text-ink-secondary transition hover:text-foreground"
+                    >
+                        <Download className="size-4" />
+                    </button>
+                    <span className="ml-auto hidden font-mono text-[0.72rem] text-ink-muted sm:block">512KB edit cap</span>
+                </div>
+                {sheet?.type === 'discard' && (
+                    <Sheet title={sheetTitle()} subtitle={sheetSubtitle()} onClose={() => setSheet(null)} onSubmit={submitSheet} submitLabel="Discard" danger>
+                        <p className="text-[0.88rem] text-ink-secondary">Unsaved changes to this file will be lost.</p>
+                    </Sheet>
+                )}
             </div>
         );
     }
 
+    const allChecked = entries.length > 0 && entries.every((e) => selected.includes(e.name));
+
     return (
         <div className="overflow-hidden rounded-xl border border-hairline bg-card">
-            <div className="flex flex-wrap items-center gap-2 border-b border-hairline px-5 py-3">
-                <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto whitespace-nowrap py-0.5">
-                    <button type="button" onClick={() => setDir([])} className="shrink-0 font-mono text-[0.85rem] font-bold hover:underline hover:underline-offset-4">
-                        {server.name}
+            {/* breadcrumb */}
+            <div className="flex items-center gap-2 border-b border-hairline px-4 py-3 sm:px-5">
+                <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto whitespace-nowrap py-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                    <button type="button" onClick={() => setDir([])} className="flex min-h-11 shrink-0 items-center gap-1.5 font-mono text-[0.85rem] font-bold hover:underline hover:underline-offset-4">
+                        <Folder className="size-4 text-sky-300/80" /> {server.name}
                     </button>
                     {dir.map((seg, i) => (
-                        <span key={i} className="flex shrink-0 items-center gap-2">
+                        <span key={i} className="flex shrink-0 items-center gap-1.5">
                             <ChevronRight className="size-3.5 text-ink-muted" />
                             <button
                                 type="button"
                                 onClick={() => setDir(dir.slice(0, i + 1))}
-                                className="max-w-36 truncate font-mono text-[0.85rem] text-ink-secondary hover:text-foreground hover:underline hover:underline-offset-4"
+                                className="max-w-32 truncate font-mono text-[0.85rem] text-ink-secondary hover:text-foreground hover:underline hover:underline-offset-4"
                             >
                                 {seg}
                             </button>
                         </span>
                     ))}
                 </div>
-                <div className="ml-auto flex items-center gap-2">
+                {/* New: single entry point on mobile, split buttons on desktop */}
+                <div className="ml-auto flex shrink-0 items-center gap-2">
                     <input ref={uploadRef} type="file" className="hidden" onChange={onUpload} />
-                    <button type="button" onClick={() => uploadRef.current?.click()} disabled={!!transfer} className={actionBtn}>
-                        <Upload className="size-3.5" /> Upload
-                    </button>
-                    <button type="button" onClick={() => { setShowNew(showNew === 'dir' ? null : 'dir'); setNewName(''); }} className={actionBtn}>
-                        <Folder className="size-3.5" /> New folder
-                    </button>
-                    <button type="button" onClick={() => { setShowNew(showNew === 'file' ? null : 'file'); setNewName(''); }} className={actionBtn}>
-                        <Plus className="size-3.5" /> New file
-                    </button>
+                    <div className="relative sm:hidden">
+                        <button
+                            ref={newBtnRef}
+                            type="button"
+                            aria-label="Create or upload"
+                            aria-haspopup="menu"
+                            aria-expanded={newMenu}
+                            onClick={toggleNew}
+                            className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-full bg-white text-black transition hover:bg-gray-200"
+                        >
+                            <Plus className="size-5" />
+                        </button>
+                        {newMenu && (
+                            <>
+                                <div className="fixed inset-0 z-[60]" onClick={() => setNewMenu(false)} />
+                                <div
+                                    role="menu"
+                                    style={{ top: newPos.top, left: newPos.left }}
+                                    className="fixed z-[61] w-48 overflow-hidden rounded-xl border border-hairline bg-card py-1 shadow-2xl"
+                                >
+                                    <button type="button" role="menuitem" onClick={() => { setNewMenu(false); uploadRef.current?.click(); }} className={cn(menuItem, 'min-h-11')}>
+                                        <Upload className="size-4" /> Upload file
+                                    </button>
+                                    <button type="button" role="menuitem" onClick={() => { setNewMenu(false); setSheet({ type: 'new-file', value: '' }); }} className={cn(menuItem, 'min-h-11')}>
+                                        <FilePlus className="size-4" /> New file
+                                    </button>
+                                    <button type="button" role="menuitem" onClick={() => { setNewMenu(false); setSheet({ type: 'new-dir', value: '' }); }} className={cn(menuItem, 'min-h-11')}>
+                                        <FolderPlus className="size-4" /> New folder
+                                    </button>
+                                </div>
+                            </>
+                        )}
+                    </div>
+                    <div className="hidden items-center gap-2 sm:flex">
+                        <button type="button" onClick={() => uploadRef.current?.click()} disabled={!!transfer} className={actionBtn}>
+                            <Upload className="size-3.5" /> Upload
+                        </button>
+                        <button type="button" onClick={() => setSheet({ type: 'new-dir', value: '' })} className={actionBtn}>
+                            <Folder className="size-3.5" /> New folder
+                        </button>
+                        <button type="button" onClick={() => setSheet({ type: 'new-file', value: '' })} className={actionBtn}>
+                            <Plus className="size-3.5" /> New file
+                        </button>
+                    </div>
                 </div>
             </div>
 
             {transfer && (
-                <div className="flex items-center gap-3 border-b border-hairline bg-veil/60 px-5 py-2.5">
-                    <span className="font-mono text-[0.78rem] text-ink-secondary">
+                <div className="flex items-center gap-3 border-b border-hairline bg-veil/60 px-4 py-3 sm:px-5">
+                    <span className="min-w-0 flex-1 truncate font-mono text-[0.78rem] text-ink-secondary">
                         {transfer.kind === 'upload' ? 'Uploading' : 'Downloading'} {transfer.name}
                     </span>
-                    <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/10">
+                    <div className="h-2 w-24 shrink-0 overflow-hidden rounded-full bg-white/10 sm:w-40">
                         <div
                             className="h-full rounded-full bg-white transition-[width]"
                             style={{ width: transfer.ratio === null ? '100%' : `${Math.round(transfer.ratio * 100)}%` }}
                         />
                     </div>
-                    <span className="w-12 text-right font-mono text-[0.75rem] text-ink-secondary">
+                    <span className="w-11 shrink-0 text-right font-mono text-[0.75rem] text-ink-secondary">
                         {transfer.ratio === null ? '…' : `${Math.round(transfer.ratio * 100)}%`}
                     </span>
-                    <button type="button" onClick={transfer.abort} className="font-mono text-[0.75rem] font-bold text-red-400 hover:text-red-300">
-                        Cancel
+                    <button type="button" onClick={transfer.abort} className="shrink-0 rounded-full border border-red-500/40 px-3 py-1 font-mono text-[0.72rem] font-bold text-red-400">
+                        Stop
                     </button>
                 </div>
             )}
 
-            {showNew && (
-                <form onSubmit={createNew} className="flex items-center gap-2 border-b border-hairline px-5 py-3">
-                    <input
-                        autoFocus
-                        value={newName}
-                        onChange={(e) => setNewName(e.target.value)}
-                        placeholder={showNew === 'dir' ? 'folder-name' : 'file-name.js'}
-                        className={cn(inputClass, 'font-mono')}
-                    />
-                    <button type="submit" className="shrink-0 rounded-full bg-white px-5 py-2 text-[0.83rem] font-bold text-black transition hover:bg-gray-200">
-                        Create
-                    </button>
-                    <button type="button" onClick={() => setShowNew(null)} aria-label="Cancel" className={actionBtn}>
-                        <X className="size-3.5" />
-                    </button>
-                </form>
-            )}
-
             {selected.length > 0 && (
-                <div className="flex items-center gap-3 border-b border-hairline bg-veil/60 px-5 py-2.5">
+                <div className="flex flex-wrap items-center gap-2 border-b border-hairline bg-veil/60 px-4 py-2.5 sm:px-5">
                     <span className="font-mono text-[0.78rem] text-ink-secondary">{selected.length} selected</span>
-                    <button type="button" onClick={compressSelected} disabled={archive.isPending} className={actionBtn}>
-                        <Archive className="size-3.5" /> Compress to .tar.gz
+                    <button type="button" onClick={() => setSheet({ type: 'archive-many', names: [...selected], value: `${selected.length === 1 ? selected[0] : (dir[dir.length - 1] ?? server.name)}.tar.gz` })} disabled={archive.isPending} className={actionBtn}>
+                        <Archive className="size-3.5" /> Compress
                     </button>
                     <button type="button" onClick={() => setSelected([])} className="font-mono text-[0.78rem] text-ink-secondary hover:text-foreground">
                         Clear
@@ -513,14 +637,30 @@ export default function ServerFiles({ server }) {
                 </div>
             )}
 
+            {/* list header */}
+            {!isLoading && !error && entries.length > 0 && (
+                <div className="flex items-center gap-3 border-b border-hairline px-4 py-2 sm:px-5">
+                    <input
+                        type="checkbox"
+                        checked={allChecked}
+                        onChange={() => setSelected(allChecked ? [] : entries.map((e) => e.name))}
+                        aria-label="Select all"
+                        className="size-5 shrink-0 cursor-pointer accent-white"
+                    />
+                    <span className="font-mono text-[0.72rem] text-ink-muted">
+                        {entries.length} item{entries.length === 1 ? '' : 's'}
+                    </span>
+                </div>
+            )}
+
             <div className="flex flex-col divide-y divide-hairline">
-                {isLoading && <p className="px-5 py-8 text-center text-[0.88rem] text-ink-muted">Loading…</p>}
-                {error && <p className="px-5 py-8 text-center text-[0.88rem] text-red-400">Failed to load: {error.message}</p>}
+                {isLoading && <p className="px-5 py-10 text-center text-[0.88rem] text-ink-muted">Loading…</p>}
+                {error && <p className="px-5 py-10 text-center text-[0.88rem] text-red-400">Failed to load: {error.message}</p>}
                 {!isLoading && !error && entries.length === 0 && (
                     <div className="flex flex-col items-center gap-2 px-5 py-12 text-center">
-                        <Folder className="size-8 text-ink-muted" />
-                        <p className="text-[0.9rem] font-semibold">Empty folder</p>
-                        <p className="text-[0.8rem] text-ink-secondary">Upload files or create a new one to get started.</p>
+                        <Folder className="size-9 text-ink-muted" />
+                        <p className="text-[0.92rem] font-semibold">Empty folder</p>
+                        <p className="max-w-60 text-[0.82rem] text-ink-secondary">Upload files or create a new one to get started.</p>
                     </div>
                 )}
                 {entries.map((entry) => {
@@ -532,8 +672,8 @@ export default function ServerFiles({ server }) {
                         <div
                             key={entry.name}
                             className={cn(
-                                'group flex items-center gap-3 px-5 py-3 transition',
-                                checked ? 'bg-veil/70' : 'hover:bg-veil/40',
+                                'flex items-center gap-2.5 px-4 py-3.5 transition sm:gap-3 sm:px-5',
+                                checked ? 'bg-veil/70' : 'active:bg-veil/40 sm:hover:bg-veil/40',
                                 isDir && 'cursor-pointer',
                             )}
                             onClick={isDir ? () => openEntry(entry) : undefined}
@@ -544,27 +684,27 @@ export default function ServerFiles({ server }) {
                                 onChange={() => toggleSelect(entry.name)}
                                 onClick={(e) => e.stopPropagation()}
                                 aria-label={`Select ${entry.name}`}
-                                className="size-4 shrink-0 cursor-pointer accent-white"
+                                className="size-5 shrink-0 cursor-pointer accent-white"
                             />
-                            <button type="button" onClick={() => openEntry(entry)} className="flex min-w-0 flex-1 items-center gap-3 text-left">
+                            <button type="button" onClick={() => openEntry(entry)} className="flex min-w-0 flex-1 items-center gap-3 text-left" aria-label={isDir ? `Open folder ${entry.name}` : `Open file ${entry.name}`}>
                                 {isDir ? (
-                                    <Folder className="size-[22px] shrink-0 text-sky-300/80" />
+                                    <Folder className="size-7 shrink-0 text-sky-300/80" />
                                 ) : icon ? (
-                                    <img src={icon} alt="" aria-hidden="true" className="size-[22px] shrink-0" draggable={false} />
+                                    <img src={icon} alt="" aria-hidden="true" className="size-7 shrink-0" draggable={false} />
                                 ) : (
-                                    <FileText className="size-[20px] shrink-0 text-ink-muted" />
+                                    <FileText className="size-6 shrink-0 text-ink-muted" />
                                 )}
-                                <span className="min-w-0">
-                                    <span className="block truncate font-mono text-[0.88rem] font-semibold">{entry.name}</span>
-                                    <span className="block font-mono text-[0.7rem] text-ink-muted sm:hidden">
-                                        {isDir ? 'Folder' : fmtSize(entry.size)}
+                                <span className="min-w-0 flex-1">
+                                    <span className="block truncate text-[0.92rem] font-semibold sm:font-mono sm:text-[0.88rem]">{entry.name}</span>
+                                    <span className="mt-0.5 block font-mono text-[0.72rem] text-ink-muted sm:hidden">
+                                        {isDir ? 'Folder' : fmtSize(entry.size)} · {fmtDate(entry.mtime)}
                                     </span>
                                 </span>
-                                <span className="ml-auto hidden shrink-0 rounded-full border border-hairline bg-veil px-2 py-0.5 font-mono text-[0.72rem] text-ink-secondary sm:block">
+                                <span className="ml-auto hidden shrink-0 rounded-full border border-hairline bg-veil px-2.5 py-0.5 font-mono text-[0.72rem] text-ink-secondary sm:block">
                                     {isDir ? 'dir' : fmtSize(entry.size)}
                                 </span>
-                                <span className="hidden w-24 shrink-0 text-right font-mono text-[0.75rem] text-ink-muted md:block">
-                                    {entry.mtime ? new Date(entry.mtime * 1000).toLocaleDateString() : '—'}
+                                <span className="hidden w-28 shrink-0 text-right font-mono text-[0.75rem] text-ink-muted md:block">
+                                    {fmtDate(entry.mtime)}
                                 </span>
                             </button>
                             <RowMenu
@@ -578,6 +718,61 @@ export default function ServerFiles({ server }) {
                     );
                 })}
             </div>
+
+            {/* unified sheet */}
+            {sheet && sheet.type !== 'discard' && (
+                <Sheet
+                    title={sheetTitle()}
+                    subtitle={sheetSubtitle()}
+                    onClose={() => setSheet(null)}
+                    onSubmit={submitSheet}
+                    submitLabel={
+                        sheet.type === 'delete' ? 'Delete' :
+                        sheet.type === 'extract' ? 'Extract' :
+                        sheet.type.startsWith('archive') ? 'Compress' :
+                        sheet.type.startsWith('new') ? 'Create' : 'Save'
+                    }
+                    danger={sheet.type === 'delete'}
+                >
+                    {sheet.type === 'delete' ? (
+                        <p className="text-[0.88rem] text-ink-secondary">
+                            {sheet.entry.type === 'dir'
+                                ? 'This folder and everything inside it will be permanently removed.'
+                                : 'This file will be permanently removed.'} This cannot be undone.
+                        </p>
+                    ) : sheet.type === 'move' ? (
+                        <>
+                            <input
+                                autoFocus
+                                value={sheet.value}
+                                onChange={(e) => setSheet((s) => ({ ...s, value: e.target.value }))}
+                                placeholder="path/inside/storage"
+                                className={cn(inputClass, 'font-mono')}
+                            />
+                            <p className="mt-2 font-mono text-[0.72rem] text-ink-muted">Full path inside storage — folders are created as needed.</p>
+                        </>
+                    ) : sheet.type === 'extract' ? (
+                        <>
+                            <input
+                                autoFocus
+                                value={sheet.value}
+                                onChange={(e) => setSheet((s) => ({ ...s, value: e.target.value }))}
+                                placeholder="destination folder"
+                                className={cn(inputClass, 'font-mono')}
+                            />
+                            <p className="mt-2 font-mono text-[0.72rem] text-ink-muted">Relative to the current folder.</p>
+                        </>
+                    ) : (
+                        <input
+                            autoFocus
+                            value={sheet.value}
+                            onChange={(e) => setSheet((s) => ({ ...s, value: e.target.value }))}
+                            placeholder={sheet.type === 'new-dir' ? 'folder-name' : sheet.type === 'new-file' ? 'file-name.js' : 'name'}
+                            className={cn(inputClass, 'font-mono')}
+                        />
+                    )}
+                </Sheet>
+            )}
         </div>
     );
 }
