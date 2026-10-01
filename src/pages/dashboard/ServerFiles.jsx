@@ -342,11 +342,11 @@ export default function ServerFiles({ server }) {
                     break;
                 }
                 case 'extract': {
-                    await extract.mutateAsync({
-                        file: relOf(sheet.entry.name),
-                        dest: join([...dir, v || '.']),
-                    });
-                    toast.success('Extracted.');
+                    // empty = extract in place (same folder as the archive)
+                    const payload = { file: relOf(sheet.entry.name) };
+                    if (v) payload.dest = join([...dir, v]);
+                    await extract.mutateAsync(payload);
+                    toast.success('Extracted here.');
                     refetch();
                     break;
                 }
@@ -450,10 +450,8 @@ export default function ServerFiles({ server }) {
             setSheet({ type: 'archive-one', entry, value: `${entry.name}.tar.gz` });
         }
         else if (key === 'extract') {
-            setSheet({
-                type: 'extract', entry,
-                value: entry.name.replace(/\.(zip|tar\.gz|tgz|tar)$/, ''),
-            });
+            // default: same folder — type a name only for a subfolder
+            setSheet({ type: 'extract', entry, value: '' });
         }
         else if (key === 'delete') setSheet({ type: 'delete', entry, value: '' });
     };
@@ -797,10 +795,10 @@ export default function ServerFiles({ server }) {
                                 autoFocus
                                 value={sheet.value}
                                 onChange={(e) => setSheet((s) => ({ ...s, value: e.target.value }))}
-                                placeholder="destination folder"
+                                placeholder="Current folder (leave empty)"
                                 className={cn(inputClass, 'font-mono')}
                             />
-                            <p className="mt-2 font-mono text-[0.72rem] text-ink-muted">Relative to the current folder.</p>
+                            <p className="mt-2 font-mono text-[0.72rem] text-ink-muted">Empty = extract here. Or type a subfolder name.</p>
                         </>
                     ) : (
                         <input
