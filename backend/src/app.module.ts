@@ -9,6 +9,7 @@ import { AdminModule } from './modules/admin/admin.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { HealthModule } from './modules/health/health.module';
+import { NodesModule } from './modules/nodes/nodes.module';
 import { PlansModule } from './modules/plans/plans.module';
 import { ServersModule } from './modules/servers/servers.module';
 import { UsersModule } from './modules/users/users.module';
@@ -28,6 +29,7 @@ import { UsersModule } from './modules/users/users.module';
     ServersModule,
     PlansModule,
     HealthModule,
+    NodesModule,
     AdminModule,
   ],
   providers: [

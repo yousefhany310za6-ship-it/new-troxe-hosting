@@ -16,6 +16,8 @@ import { JwtAuthGuard, type ReqUser } from '../auth/jwt.guard';
 import { AdminGuard } from '../auth/admin.guard';
 import { Err } from '../../common/errors';
 import { AdminService } from './admin.service';
+import { NodesService } from '../nodes/nodes.service';
+import { CreateNodeDto, UpdateNodeDto } from '../nodes/dto';
 import {
   AdminAuditQuery,
   AdminCreateServerDto,
@@ -34,7 +36,10 @@ const LIFECYCLE_ACTIONS = ['start', 'stop', 'restart', 'reinstall'] as const;
 @Controller({ path: 'admin', version: '1' })
 @UseGuards(JwtAuthGuard, AdminGuard)
 export class AdminController {
-  constructor(private admin: AdminService) {}
+  constructor(
+    private admin: AdminService,
+    private nodes: NodesService,
+  ) {}
 
   // ============ USERS ============
 
@@ -166,6 +171,42 @@ export class AdminController {
   @Get('audit')
   listAuditLogs(@Query() params: AdminAuditQuery) {
     return this.admin.listAuditLogs(params);
+  }
+
+  // ============ NODES ============
+
+  @Get('nodes')
+  listNodes() {
+    return this.nodes.list();
+  }
+
+  @Post('nodes')
+  @HttpCode(201)
+  createNode(@Body() dto: CreateNodeDto, @CurrentUser() u: ReqUser) {
+    return this.nodes.create(dto, u.sub, u.email);
+  }
+
+  @Get('nodes/:id')
+  getNode(@Param('id') id: string) {
+    return this.nodes.get(id);
+  }
+
+  @Patch('nodes/:id')
+  @HttpCode(200)
+  updateNode(@Param('id') id: string, @Body() dto: UpdateNodeDto, @CurrentUser() u: ReqUser) {
+    return this.nodes.update(id, dto, u.sub, u.email);
+  }
+
+  @Delete('nodes/:id')
+  @HttpCode(200)
+  deleteNode(@Param('id') id: string, @CurrentUser() u: ReqUser) {
+    return this.nodes.remove(id, u.sub, u.email);
+  }
+
+  @Post('nodes/:id/check')
+  @HttpCode(200)
+  checkNode(@Param('id') id: string) {
+    return this.nodes.check(id);
   }
 
   // ============ SYSTEM HEALTH ============

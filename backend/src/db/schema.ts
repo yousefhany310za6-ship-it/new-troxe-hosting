@@ -99,10 +99,31 @@ export const plans = pgTable('plans', {
   sortOrder: integer('sort_order').default(0).notNull(),
 });
 
+// ---- Nodes (docker daemons that can host sandboxes) -------------------------
+export const nodes = pgTable('nodes', {
+  /** 'local' = the API host's own daemon (socket); anything else = remote TLS */
+  id: varchar('id', { length: 32 }).primaryKey(),
+  name: varchar('name', { length: 64 }).notNull(),
+  /** null = local unix socket (config.DOCKER_SOCKET); set = remote TCP host */
+  dockerHost: varchar('docker_host', { length: 255 }),
+  dockerPort: integer('docker_port'),
+  /** AES-256-GCM encrypted JSON PEM blobs (ca/cert/key), null for local */
+  tlsCa: text('tls_ca'),
+  tlsCert: text('tls_cert'),
+  tlsKey: text('tls_key'),
+  enabled: boolean('enabled').default(true).notNull(),
+  /** drained nodes keep old servers but receive no new ones */
+  drained: boolean('drained').default(false).notNull(),
+  lastSeenAt: timestamp('last_seen_at'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
 // ---- Servers (one isolated sandbox per client) ------------------------------
 export const servers = pgTable('servers', {
   id: uuid('id').defaultRandom().primaryKey(),
   ownerId: uuid('owner_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  /** which daemon hosts this sandbox (volumes/networks are node-local) */
+  nodeId: varchar('node_id', { length: 32 }).default('local').notNull().references(() => nodes.id),
   name: varchar('name', { length: 32 }).notNull(),
   runtime: serverRuntime('runtime').notNull(),
   runtimeVersion: varchar('runtime_version', { length: 128 }),
