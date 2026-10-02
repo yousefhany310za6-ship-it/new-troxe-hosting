@@ -9,6 +9,7 @@ import {
   WebSocketServer,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
+import { config } from '../../config/env';
 import { WsTicketService } from '../auth/ws-ticket.service';
 import { AuditService } from '../audit/audit.module';
 import { ServersService } from './servers.service';
@@ -46,7 +47,7 @@ interface ExecSession {
  */
 @WebSocketGateway({
   namespace: '/ws/exec',
-  cors: { origin: '*', credentials: true },
+  cors: { origin: [...config.ALLOWED_ORIGINS], credentials: true },
   pingInterval: 20_000,
   pingTimeout: 10_000,
 })

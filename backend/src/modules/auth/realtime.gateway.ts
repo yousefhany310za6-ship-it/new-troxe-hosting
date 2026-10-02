@@ -8,8 +8,12 @@ import {
   MessageBody,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
-import { UseGuards } from '@nestjs/common';
+import { Inject, UseGuards } from '@nestjs/common';
+import { and, eq } from 'drizzle-orm';
+import { config } from '../../config/env';
 import { WsAuthGuard } from './ws-auth.guard';
+import { DB, Db } from '../../db/db.module';
+import { servers } from '../../db/schema';
 
 interface AuthenticatedSocket extends Socket {
   userId?: string;
@@ -35,7 +39,7 @@ const CHANNEL_PREFIX = {
  */
 @WebSocketGateway({
   namespace: '/ws',
-  cors: { origin: '*', credentials: true },
+  cors: { origin: [...config.ALLOWED_ORIGINS], credentials: true },
   pingInterval: 20_000,
   pingTimeout: 10_000,
 })
@@ -46,7 +50,10 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
 
   private readonly authGuard: WsAuthGuard;
 
-  constructor(authGuard: WsAuthGuard) {
+  constructor(
+    authGuard: WsAuthGuard,
+    @Inject(DB) private db: Db,
+  ) {
     this.authGuard = authGuard;
   }
 
@@ -72,17 +79,21 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
   }
 
   @SubscribeMessage('subscribe')
-  handleSubscribe(
+  async handleSubscribe(
     @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() data: { channels: string[] },
   ) {
     if (!client.userId) return { ok: false, error: 'NOT_AUTHENTICATED' };
     if (!Array.isArray(data.channels)) return { ok: false, error: 'INVALID_CHANNELS' };
 
-    const allowed = data.channels.filter((ch) => this.isAllowedChannel(client.userId!, ch));
-    for (const ch of allowed) {
-      client.join(ch);
-      client.subscriptions.add(ch);
+    const allowed: string[] = [];
+    for (const ch of data.channels) {
+      if (typeof ch !== 'string' || ch.length > 200) continue;
+      if (await this.isAllowedChannel(client.userId, ch)) {
+        client.join(ch);
+        client.subscriptions.add(ch);
+        allowed.push(ch);
+      }
     }
     return { ok: true, subscribed: allowed };
   }
@@ -127,19 +138,27 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
     this.server.to(`${CHANNEL_PREFIX.userAudit}${userId}`).emit('user:audit', event);
   }
 
-  /** Check if user is allowed to subscribe to a channel. */
-  private isAllowedChannel(userId: string, channel: string): boolean {
-    // server:stats:{id}, server:logs:{id}, server:status:{id} — require ownership (checked at broadcast time via service)
+  /**
+   * Channel authorization, enforced HERE at subscribe time (the broadcasts
+   * themselves are blind room emits). Server channels require a live
+   * ownership row — never trust the channel name alone.
+   */
+  private async isAllowedChannel(userId: string, channel: string): Promise<boolean> {
     // user:audit:{userId} — only own userId
     if (channel.startsWith(CHANNEL_PREFIX.userAudit)) {
       return channel === `${CHANNEL_PREFIX.userAudit}${userId}`;
     }
-    // For server channels, we allow subscription; services will verify ownership before broadcasting
-    // This avoids duplicate ownership checks in the gateway.
-    return (
-      channel.startsWith(CHANNEL_PREFIX.serverStats) ||
-      channel.startsWith(CHANNEL_PREFIX.serverLogs) ||
-      channel.startsWith(CHANNEL_PREFIX.serverStatus)
-    );
+    for (const prefix of [CHANNEL_PREFIX.serverStats, CHANNEL_PREFIX.serverLogs, CHANNEL_PREFIX.serverStatus]) {
+      if (!channel.startsWith(prefix)) continue;
+      const id = channel.slice(prefix.length);
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return false;
+      const [row] = await this.db
+        .select({ id: servers.id })
+        .from(servers)
+        .where(and(eq(servers.id, id), eq(servers.ownerId, userId)))
+        .limit(1);
+      return !!row;
+    }
+    return false;
   }
 }
