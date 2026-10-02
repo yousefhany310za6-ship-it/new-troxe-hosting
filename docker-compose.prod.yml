@@ -54,6 +54,9 @@ services:
       # and intentionally unset here — do not re-add it).
       - FRONTEND_URLS=https://${DOMAIN},https://www.${DOMAIN}
       - LOG_LEVEL=log
+      # Caddy always sets X-Forwarded-For: trust it so rate limits and
+      # audit IPs see real clients (never enable without a proxy in front).
+      - TRUST_PROXY=true
       # PORT must match the Dockerfile healthcheck/EXPOSE (3300); the code
       # default (3000) does NOT apply here.
       - PORT=3300

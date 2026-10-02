@@ -3,6 +3,21 @@
 
 **التاريخ:** 2026-10-02 — **النطاق:** المشروع كاملًا (backend + frontend + deploy + nodes) — **المنهجية:** 5 مسارات تدقيق متوازية + تحقق يدوي من كل ادعاء عالي الأثر (لا findings بدون دليل كود).
 
+## ملحق الإصلاح — STATUS: TOP 8 FIXED ✅ (2026-10-02)
+
+| # | البند | الـ commit | الإثبات |
+|---|---|---|---|
+| 1 | WS IDOR + CORS | `7cd3dd5` | مهاجم مُنع من قناة الضحية، المالك مقبول، بلا تسريب |
+| 2 | Compose deploy | `d659c90` | `docker-compose config` سليم (loopback PG، بلا تعارض شبكات، PORT=3300) |
+| 3 | Logout + Settings | `51661cb` | cookie مُسحت + refresh بعده 401؛ build الفرونت |
+| 4 | Demotion revocation | `9a1b98b` | توكن المُخفَّض 401 فورًا |
+| 5 | Throttle + tail | `85e3a47` | 65x logs→429s، 12x stop→429s (tail مثبّت أصلًا 1..2000) |
+| 6 | Dockerfile | `1cf5b17` | صورة 477MB تُبنى، bcrypt/drizzle تُحمَّل، PORT=3300 |
+| 7 | Indexes + quota | `1cf5b17` | الفهارس الثلاثة موجودة؛ 3 نسخ متوازية عبر 3 سيرفرات نجحت بلا deadlock |
+| 8 | node-setup + misc | (هذا الـ commit) | رفض بدون API_IP؛ TRUST_PROXY/PG_VERIFY/compose؛ خروج عند rejection |
+
+ملاحظات تدقيق مضادة (false positives المرفوضة أثناء التنفيذ): `tail` مثبّت أصلًا في الخدمة؛ `PG_SSL_REJECT_UNAUTHORIZED` الافتراضي آمن فعلًا (الاسم معكوس — أُعيدت تسميته لـ `PG_SSL_VERIFY`)؛ bcrypt تُحمَّل مع `--ignore-scripts` (prebuilds) — الفحص الجديد يمنع الانحدار بدل إصلاح عطل حي.
+
 ## Executive Summary
 
 المشروع تحسّن جذريًا منذ تدقيق 2026-09-29: العزل متقارب، الإبطال فوري، والمسارات المدمرة محمية. **لا يوجد أي ثغرة CRITICAL مؤكدة** (لا RCE، لا تجاوز مصادقة، لا استيلاء حسابات). لكن ظهرت **5 مشاكل HIGH حقيقية** — أخطرها: WS realtime يسرب حالة سيرفرات الآخرين لأي مستخدم، وملف الـ compose للإنتاج **مكسور architecturally** (الـ API لن يصل لقاعدة البيانات)، وزر Sign out لا يبطل الجلسة فعليًا، وصفحة Settings معطلة بخطأ runtime، والأدمن المُخفَّض يحتفظ بصلاحياته حتى انتهاء التوكن. الباقي بنود MEDIUM/LOW مشروعة، أغلبها صلابة إنتاج (throttling، indexes، deploy) وليست اختراقات.

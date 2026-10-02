@@ -17,19 +17,27 @@
 #
 #   SUBNET_BASE  sandbox supernet for THIS node (required, /8-/24, must not
 #                overlap other nodes or the node's own LAN/docker defaults)
-#   API_IP       public IP of the Troxe API host (optional but STRONGLY
-#                recommended — without it, :2376 is reachable by anyone with
-#                a client cert, and port-scanned by everyone without)
+#   API_IP       public IP of the Troxe API host (REQUIRED — the daemon port
+#                is locked to it; set ALLOW_OPEN_DAEMON=1 to explicitly
+#                accept an unrestricted port, e.g. lab behind NAT/VPN)
+#   NODE_IPS     extra IPs for the server cert SAN, space-separated
+#                (optional — needed when registering the node by IP)
 #
 set -euo pipefail
 
 SUBNET_BASE="${SUBNET_BASE:?set SUBNET_BASE, e.g. SUBNET_BASE=10.201.0.0/16}"
 API_IP="${API_IP:-}"
+ALLOW_OPEN_DAEMON="${ALLOW_OPEN_DAEMON:-0}"
+NODE_IPS="${NODE_IPS:-}"
 DAEMON_PORT=2376
 CERT_DIR=/etc/troxe/certs
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "run as root" >&2
+  exit 1
+fi
+if [ -z "$API_IP" ] && [ "$ALLOW_OPEN_DAEMON" != "1" ]; then
+  echo "refusing: set API_IP (the Troxe API host IP) or ALLOW_OPEN_DAEMON=1 to accept an unrestricted daemon port" >&2
   exit 1
 fi
 if [[ ! "$SUBNET_BASE" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/(8|9|1[0-9]|2[0-4])$ ]]; then
@@ -60,7 +68,9 @@ cd "$CERT_DIR"
 if [ ! -f server-cert.pem ]; then
   openssl req -new -key server-key.pem -out server.csr -subj "/CN=$(hostname -f 2>/dev/null || hostname)"
   HN=$(hostname -f 2>/dev/null || hostname)
-  printf 'subjectAltName=DNS:%s,DNS:localhost,IP:127.0.0.1\n' "$HN" > server-ext.cnf
+  SAN="DNS:${HN},DNS:localhost,IP:127.0.0.1"
+  for ip in $NODE_IPS; do SAN="${SAN},IP:${ip}"; done
+  printf 'subjectAltName=%s\n' "$SAN" > server-ext.cnf
   openssl x509 -req -days 825 -in server.csr -CA ca.pem -CAkey ca-key.pem -CAcreateserial -out server-cert.pem -sha256 -extfile server-ext.cnf
 fi
 [ -f client-key.pem ] || openssl genrsa -out client-key.pem 4096
@@ -74,6 +84,11 @@ rm -f ./*.csr ./*-ext.cnf
 
 echo "==> [3/6] dockerd with mutual TLS"
 mkdir -p /etc/docker
+# never silently clobber an existing daemon config — keep one backup
+if [ -f /etc/docker/daemon.json ] && [ ! -f /etc/docker/daemon.json.bak.troxe ]; then
+  cp /etc/docker/daemon.json /etc/docker/daemon.json.bak.troxe
+  echo "    existing daemon.json backed up to daemon.json.bak.troxe"
+fi
 cat > /etc/docker/daemon.json <<EOF
 {
   "tlsverify": true,
@@ -109,7 +124,7 @@ if [ -n "$API_IP" ]; then
     || iptables -w 5 -A INPUT -p tcp --dport "$DAEMON_PORT" -j DROP
   echo "    daemon port $DAEMON_PORT restricted to $API_IP"
 else
-  echo "    WARNING: API_IP unset — daemon port $DAEMON_PORT is NOT IP-restricted" >&2
+  echo "    WARNING: ALLOW_OPEN_DAEMON=1 — daemon port $DAEMON_PORT is NOT IP-restricted" >&2
 fi
 netfilter-persistent save
 
@@ -117,18 +132,22 @@ echo "==> [5/6] verifying local daemon"
 docker -H "tcp://127.0.0.1:$DAEMON_PORT" --tlsverify --tlscacert "$CERT_DIR/ca.pem" --tlscert "$CERT_DIR/client-cert.pem" --tlskey "$CERT_DIR/client-key.pem" version --format 'server {{.Server.Version}} OK'
 
 NODE_IP=$(hostname -I | awk '{print $1}')
+BUNDLE_DIR="$(pwd)/troxe-node-bundle"
+mkdir -p "$BUNDLE_DIR"
+chmod 700 "$BUNDLE_DIR"
+cp "$CERT_DIR/ca.pem" "$BUNDLE_DIR/ca.pem"
+cp "$CERT_DIR/client-cert.pem" "$BUNDLE_DIR/client-cert.pem"
+cp "$CERT_DIR/client-key.pem" "$BUNDLE_DIR/client-key.pem"
+chmod 600 "$BUNDLE_DIR"/*.pem
 echo
 echo "==> [6/6] register this node in the Troxe admin panel (Nodes → New node):"
 echo "    host:       $NODE_IP"
 echo "    port:       $DAEMON_PORT"
 echo "    subnetBase: $SUBNET_BASE"
-echo "    ca/cert/key: paste the contents of the files below"
+echo "    ca/cert/key: paste the CONTENTS of these files (key material is"
+echo "                 written to files below — never printed to this terminal):"
+echo "      $BUNDLE_DIR/ca.pem"
+echo "      $BUNDLE_DIR/client-cert.pem"
+echo "      $BUNDLE_DIR/client-key.pem"
 echo
-echo "--- $CERT_DIR/ca.pem ---"
-cat "$CERT_DIR/ca.pem"
-echo "--- $CERT_DIR/client-cert.pem ---"
-cat "$CERT_DIR/client-cert.pem"
-echo "--- $CERT_DIR/client-key.pem ---"
-cat "$CERT_DIR/client-key.pem"
-echo
-echo "Keep ca-key.pem + server-key.pem on this node only. Done."
+echo "Keep ca-key.pem + server-key.pem on this node only. Delete $BUNDLE_DIR after registering. Done."

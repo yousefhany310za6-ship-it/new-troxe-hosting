@@ -13,10 +13,12 @@ const LOG_LEVELS: NestLogLevel[] = (() => {
   return order.slice(order.indexOf(config.LOG_LEVEL as NestLogLevel));
 })();
 
-// last-resort crash handlers: Node 22 throws on unhandled rejections, so
-// without these a single missed `await` kills the process with no log line.
+// last-resort crash handlers: an unhandled rejection means unknown
+// in-flight state — log it and exit so the orchestrator restarts clean
+// instead of serving traffic from a corrupted process (same as exceptions).
 process.on('unhandledRejection', (reason) => {
   new Logger('UnhandledRejection').error(reason instanceof Error ? reason.stack : String(reason));
+  process.exit(1);
 });
 process.on('uncaughtException', (err) => {
   new Logger('UncaughtException').fatal(err instanceof Error ? err.stack : String(err));

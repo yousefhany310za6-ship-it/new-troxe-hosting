@@ -24,11 +24,10 @@ export type Db = NodePgDatabase<typeof schema>;
           options: `-c statement_timeout=${config.PG_STATEMENT_TIMEOUT_MS} -c idle_in_transaction_session_timeout=10000`,
           ...(config.PG_SSL
             ? {
+                // verify the server certificate by default; set
+                // PG_SSL_VERIFY=false only for self-signed dev databases.
                 ssl: {
-                  // managed PG providers ship their own CA; override with
-                  // PG_SSL_REJECT_UNAUTHORIZED=true when you pin a CA bundle.
-                  rejectUnauthorized:
-                    (process.env.PG_SSL_REJECT_UNAUTHORIZED ?? 'false').toLowerCase() !== 'true',
+                  rejectUnauthorized: (process.env.PG_SSL_VERIFY ?? 'true').toLowerCase() !== 'false',
                 },
               }
             : {}),
