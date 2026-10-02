@@ -238,8 +238,16 @@ export function blobToBase64(blob) {
 }
 
 // Auth sessions
-export function useAuthSessions() {
-  return useQuery({ queryKey: keys.authSessions(), queryFn: () => apiGet('/auth/sessions') });
+export function useAuthSessions() {  return useQuery({ queryKey: keys.authSessions(), queryFn: () => apiGet('/auth/sessions') });
+}
+
+// Own audit trail (Activity page), paged with "load more"
+export function useActivity(page = 1) {
+  return useQuery({
+    queryKey: ['activity', page],
+    queryFn: () => apiGet(`/users/me/activity?page=${page}&limit=30`),
+    keepPreviousData: true,
+  });
 }
 
 export function useActiveSessions() {

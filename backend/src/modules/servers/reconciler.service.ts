@@ -75,6 +75,7 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
   async tick(): Promise<void> {
     if (this.busy) return;
     this.busy = true;
+    const started = Date.now();
     try {
       // node inventory first: every daemon below is converged independently
       // (volumes/networks/containers are node-local). An unreachable node is
@@ -115,6 +116,7 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
       this.log.warn(`reconcile failed: ${(e as Error).message}`);
     } finally {
       this.busy = false;
+      this.log.debug(`tick done in ${Date.now() - started}ms`);
     }
   }
 

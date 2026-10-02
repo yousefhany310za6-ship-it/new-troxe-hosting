@@ -24,6 +24,7 @@ const ServicesPage = lazy(() => import('./pages/ServicesPage.jsx'));
 // Dashboard shell + sections (now wired to API).
 const DashboardLayout = lazy(() => import('./pages/dashboard/DashboardLayout.jsx'));
 const Overview = lazy(() => import('./pages/dashboard/Overview.jsx'));
+const Activity = lazy(() => import('./pages/dashboard/Activity.jsx'));
 const Servers = lazy(() => import('./pages/dashboard/Servers.jsx'));
 const ServerDetail = lazy(() => import('./pages/dashboard/ServerDetail.jsx'));
 const CreateServer = lazy(() => import('./pages/dashboard/CreateServer.jsx'));
@@ -68,6 +69,7 @@ export default function App() {
                             <Route path="servers" element={<Servers />} />
                             <Route path="servers/new" element={<CreateServer />} />
                             <Route path="servers/:id" element={<ServerDetail />} />
+                            <Route path="activity" element={<Activity />} />
                             <Route path="settings" element={<Settings />} />
                         </Route>
                         <Route element={<AdminGuard />}>

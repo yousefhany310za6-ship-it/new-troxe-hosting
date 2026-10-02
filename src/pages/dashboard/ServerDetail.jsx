@@ -412,6 +412,52 @@ export default function ServerDetail() {
 
             {tab === 'backups' && (
                 <div className="flex flex-col gap-4">
+                    <div className="flex flex-wrap items-center gap-3 rounded-xl border border-hairline bg-card p-5">
+                        <Database className="size-5 shrink-0 text-ink-muted" />
+                        <div className="min-w-0 flex-1">
+                            <p className="text-[0.92rem] font-bold">Automatic backups</p>
+                            <p className="mt-0.5 text-[0.8rem] text-ink-secondary">
+                                {server.autoBackup
+                                    ? `Daily snapshot, keeping the newest ${server.autoBackupRetain ?? 7}.`
+                                    : 'Off — only manual snapshots.'}
+                            </p>
+                        </div>
+                        <label className="flex cursor-pointer items-center gap-2 text-[0.85rem] font-semibold">
+                            <input
+                                type="checkbox"
+                                checked={!!server.autoBackup}
+                                onChange={async (e) => {
+                                    try {
+                                        await apiPatch(`/servers/${id}`, { autoBackup: e.target.checked });
+                                        setMsg({ text: `Automatic backups ${e.target.checked ? 'enabled' : 'disabled'}.`, ok: true });
+                                        fetchServer();
+                                    } catch (err) { setMsg({ text: err.message, ok: false }); }
+                                }}
+                                className="size-4 accent-white"
+                            />
+                            Auto
+                        </label>
+                        {server.autoBackup && (
+                            <label className="flex items-center gap-2 text-[0.85rem] font-semibold">
+                                Keep
+                                <select
+                                    value={server.autoBackupRetain ?? 7}
+                                    onChange={async (e) => {
+                                        try {
+                                            await apiPatch(`/servers/${id}`, { autoBackupRetain: Number(e.target.value) });
+                                            setMsg({ text: `Retention set to ${e.target.value} snapshots.`, ok: true });
+                                            fetchServer();
+                                        } catch (err) { setMsg({ text: err.message, ok: false }); }
+                                    }}
+                                    className="rounded-lg border border-hairline bg-white/10 px-2 py-1.5 font-mono text-[0.82rem] text-foreground focus:border-primary focus:outline-none"
+                                >
+                                    {[1, 3, 7, 14, 30].map((n) => (
+                                        <option key={n} value={n}>{n}</option>
+                                    ))}
+                                </select>
+                            </label>
+                        )}
+                    </div>
                     <div className="flex flex-wrap items-center justify-between gap-3">
                         <p className="text-[0.9rem] text-ink-secondary">
                             {backups.length} snapshot{backups.length === 1 ? '' : 's'} stored

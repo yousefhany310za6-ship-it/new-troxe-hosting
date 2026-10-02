@@ -1,9 +1,9 @@
 import { BadRequestException, Inject, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
-import { eq } from 'drizzle-orm';
+import { desc, eq } from 'drizzle-orm';
 import { Err } from '../../common/errors';
 import { hashPassword, verifyPassword } from '../../common/password';
 import { DB, Db } from '../../db/db.module';
-import { users } from '../../db/schema';
+import { auditLogs, users } from '../../db/schema';
 import { AuditService } from '../audit/audit.module';
 import { AuthService } from '../auth/auth.service';
 import { ServersService } from '../servers/servers.service';
@@ -29,6 +29,26 @@ export class UsersService {
     const [u] = await this.db.select().from(users).where(eq(users.id, userId)).limit(1);
     if (!u) throw Err.unauthorized('USER_GONE');
     return this.strip(u);
+  }
+
+  /** Own audit trail for the Activity page (newest first, capped). */
+  async activity(userId: string, page = 1, limit = 30) {
+    const safePage = Math.min(Math.max(Math.floor(page) || 1, 1), 100);
+    const safeLimit = Math.min(Math.max(Math.floor(limit) || 30, 1), 100);
+    const rows = await this.db
+      .select({
+        id: auditLogs.id,
+        action: auditLogs.action,
+        targetType: auditLogs.targetType,
+        targetId: auditLogs.targetId,
+        createdAt: auditLogs.createdAt,
+      })
+      .from(auditLogs)
+      .where(eq(auditLogs.actorId, userId))
+      .orderBy(desc(auditLogs.createdAt))
+      .limit(safeLimit + 1)
+      .offset((safePage - 1) * safeLimit);
+    return { data: rows.slice(0, safeLimit), hasMore: rows.length > safeLimit, page: safePage };
   }
 
   async updateProfile(userId: string, dto: UpdateProfileDto) {

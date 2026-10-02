@@ -1,0 +1,1 @@
+ALTER TABLE "servers" ADD COLUMN "auto_backup_retain" integer DEFAULT 7 NOT NULL;

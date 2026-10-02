@@ -1,4 +1,4 @@
-import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsOptional, IsString, Matches, MaxLength, MinLength, ValidateNested } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 import { config } from '../../config/env';
 import { RUNTIMES } from './provisioning/images';
@@ -49,6 +49,13 @@ export class CreateServerDto {
 
   @IsOptional() @IsBoolean() autoRestart?: boolean;
   @IsOptional() @IsBoolean() autoBackup?: boolean;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(30)
+  autoBackupRetain?: number;
 }
 
 export class UpdateServerDto {
@@ -70,4 +77,11 @@ export class UpdateServerDto {
 
   @IsOptional() @IsBoolean() autoRestart?: boolean;
   @IsOptional() @IsBoolean() autoBackup?: boolean;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(30)
+  autoBackupRetain?: number;
 }

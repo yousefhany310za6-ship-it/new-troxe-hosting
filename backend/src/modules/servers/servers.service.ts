@@ -174,6 +174,7 @@ export class ServersService {
           envEncrypted: storedEnv.length ? encryptEnv(storedEnv) : null,
           autoRestart: dto.autoRestart ?? true,
           autoBackup: dto.autoBackup ?? true,
+          autoBackupRetain: dto.autoBackupRetain ?? 7,
         } as never)
         .returning()
         .catch((e: { code?: string }) => {
@@ -283,6 +284,7 @@ export class ServersService {
         rebuild = true; // restart policy is baked into the container config
       }
       if (dto.autoBackup !== undefined) patch.autoBackup = dto.autoBackup;
+      if (dto.autoBackupRetain !== undefined) patch.autoBackupRetain = dto.autoBackupRetain;
 
       if (!Object.keys(patch).length) return this.toPublic(row);
 
@@ -722,6 +724,7 @@ export class ServersService {
       port,
       autoRestart: row.autoRestart,
       autoBackup: row.autoBackup,
+      autoBackupRetain: row.autoBackupRetain,
       hasContainer: !!row.containerId,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,

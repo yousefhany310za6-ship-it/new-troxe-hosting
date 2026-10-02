@@ -157,6 +157,8 @@ export const servers = pgTable('servers', {
 
   autoRestart: boolean('auto_restart').default(true).notNull(),
   autoBackup: boolean('auto_backup').default(true).notNull(),
+  /** keep the N newest automatic backups (manual ones are never pruned) */
+  autoBackupRetain: integer('auto_backup_retain').default(7).notNull(),
   provisionedAt: timestamp('provisioned_at'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),

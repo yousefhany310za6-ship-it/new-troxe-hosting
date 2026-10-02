@@ -364,7 +364,7 @@ export class BackupsService {
    */
   async createAutoIfDue(): Promise<void> {
     const rows = await this.db
-      .select({ id: servers.id, ownerId: servers.ownerId, createdAt: servers.createdAt })
+      .select({ id: servers.id, ownerId: servers.ownerId, createdAt: servers.createdAt, retain: servers.autoBackupRetain })
       .from(servers)
       .where(eq(servers.autoBackup, true))
       .orderBy(servers.createdAt)
@@ -372,6 +372,17 @@ export class BackupsService {
 
     for (const s of rows) {
       try {
+        // retention first (independent of creation): excess autos are pruned
+        // even when the new one is quota-blocked — and pruning frees the
+        // quota that may let the new one through.
+        const autos = await this.db
+          .select({ id: backups.id })
+          .from(backups)
+          .where(and(eq(backups.serverId, s.id), eq(backups.type, 'auto')))
+          .orderBy(desc(backups.createdAt));
+        for (const extra of autos.slice(Math.max(1, s.retain ?? 7))) {
+          await this.remove(s.ownerId, s.id, extra.id).catch(() => undefined);
+        }
         const [last] = await this.db
           .select({ at: backups.createdAt })
           .from(backups)

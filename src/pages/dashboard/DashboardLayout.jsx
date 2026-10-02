@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { Bell, LayoutDashboard, LogOut, Menu, Server, Settings, ShieldCheck, X } from 'lucide-react';
+import { Activity, Bell, LayoutDashboard, LogOut, Menu, Server, Settings, ShieldCheck, X } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/context/AuthContext.jsx';
@@ -8,6 +8,7 @@ import { useAuth } from '@/context/AuthContext.jsx';
 const NAV = [
     { to: '/dashboard', label: 'Overview', Icon: LayoutDashboard, end: true },
     { to: '/dashboard/servers', label: 'Servers', Icon: Server },
+    { to: '/dashboard/activity', label: 'Activity', Icon: Activity },
     { to: '/dashboard/settings', label: 'Settings', Icon: Settings },
 ];
 

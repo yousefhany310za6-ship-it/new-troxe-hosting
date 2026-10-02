@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
 import { ctxOf } from '../../common/request-context';
 import { CurrentUser } from '../auth/current-user';
@@ -15,6 +15,12 @@ export class UsersController {
   @Get('me')
   me(@CurrentUser() u: ReqUser) {
     return this.usersSvc.me(u.sub);
+  }
+
+  /** Own audit trail (Activity page). */
+  @Get('me/activity')
+  activity(@CurrentUser() u: ReqUser, @Query('page') page?: string, @Query('limit') limit?: string) {
+    return this.usersSvc.activity(u.sub, Number(page), Number(limit));
   }
 
   @Patch('me')
