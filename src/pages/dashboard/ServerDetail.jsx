@@ -344,6 +344,7 @@ export default function ServerDetail() {
                     {[
                         ['Status', status],
                         ['Runtime', server.runtimeLabel ?? server.runtime],
+                        ['Node', server.nodeId ?? 'local'],
                         ['Plan', server.planId],
                         ['Region', server.region],
                         ['CPU limit', `${server.cpuMilli / 1000} vCPU`],

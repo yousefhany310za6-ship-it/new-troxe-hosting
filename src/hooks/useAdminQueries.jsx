@@ -107,6 +107,46 @@ export function useAdminDeleteServer() {
   });
 }
 
+// ---- nodes ----
+export function useAdminNodes() {
+  return useQuery({ queryKey: ['admin', 'nodes'], queryFn: () => apiGet('/admin/nodes') });
+}
+
+export function useAdminNode(id) {
+  return useQuery({ queryKey: ['admin', 'nodes', id], queryFn: () => apiGet(`/admin/nodes/${id}`), enabled: !!id });
+}
+
+export function useAdminCreateNode() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data) => apiPost('/admin/nodes', data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'nodes'] }),
+  });
+}
+
+export function useAdminUpdateNode(id) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data) => apiPatch(`/admin/nodes/${id}`, data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin', 'nodes'] });
+      qc.invalidateQueries({ queryKey: ['admin', 'nodes', id] });
+    },
+  });
+}
+
+export function useAdminDeleteNode(id) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiDelete(`/admin/nodes/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'nodes'] }),
+  });
+}
+
+export function useAdminCheckNode(id) {
+  return useMutation({ mutationFn: () => apiPost(`/admin/nodes/${id}/check`) });
+}
+
 // ---- plans ----
 export function useAdminPlans() {
   return useQuery({ queryKey: adminKeys.plans(), queryFn: () => apiGet('/admin/plans') });

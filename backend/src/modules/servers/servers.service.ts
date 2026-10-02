@@ -11,6 +11,7 @@ import { AuditService } from '../audit/audit.module';
 import { DockerService } from './provisioning/docker.service';
 import { ProvisionerService, type ProvisionResult } from './provisioning/provisioner.service';
 import { RUNTIMES, runtimeImage, type Runtime, applyTemplate, labelFor, resolveEggEnv, resolveVersion } from './provisioning/images';
+import { NodesService } from '../nodes/nodes.service';
 import { CreateServerDto, UpdateServerDto } from './dto';
 import { backupDirFor, backupOwnerDir } from './backup-paths';
 import { RealtimeGateway } from '@auth/realtime.gateway';
@@ -28,6 +29,7 @@ export class ServersService {
     private docker: DockerService,
     private audit: AuditService,
     private realtime: RealtimeGateway,
+    private nodes: NodesService,
   ) {}
 
   /**
@@ -103,11 +105,14 @@ export class ServersService {
 
   // ---- create ---------------------------------------------------------------
 
-  async create(ownerId: string, dto: CreateServerDto, ctx: ReqCtx) {
+  async create(ownerId: string, dto: CreateServerDto, ctx: ReqCtx, opts?: { nodeId?: string }) {
     // The plan comes from the account, never from the request body: otherwise
     // any client could claim "enterprise" and escalate its quotas (CVE-class).
+    // Same for the node: users get placed automatically; only the admin path
+    // may request a specific node (validated inside pickNode).
     const region = dto.region ?? config.REGIONS[0];
     if (!config.REGIONS.includes(region)) throw Err.invalid('REGION_UNSUPPORTED', `Allowed regions: ${config.REGIONS.join(', ')}`);
+    const nodeId = await this.nodes.pickNode(opts?.nodeId);
 
     const storedEnv = this.cleanEnv(dto.env);
     // egg defaults apply at RESOLVE time only — storage keeps exactly what
@@ -155,6 +160,7 @@ export class ServersService {
         .insert(servers)
         .values({
           ownerId,
+          nodeId,
           name: dto.name,
           runtime: dto.runtime,
           runtimeVersion: version.image,
@@ -183,6 +189,7 @@ export class ServersService {
       const result = await this.provisioner.provision({
         id: row.id,
         ownerId,
+        nodeId,
         runtime: dto.runtime as Runtime,
         image: version.image,
         startup,
@@ -191,11 +198,11 @@ export class ServersService {
         ramMb: plan.ramMb,
         autoRestart: row.autoRestart,
       });
-      const updated = await this.persistProvision(row.id, result, { start: config.AUTO_START_ON_CREATE });
+      const updated = await this.persistProvision(row.id, result, { start: config.AUTO_START_ON_CREATE, nodeId });
       // same fast-fail as start/: a doomed entry file must surface as an
       // error state right away, not as a phantom "online".
       if (config.AUTO_START_ON_CREATE && updated.containerId) {
-        await this.settled(updated.containerId, row.id, ownerId, 'start');
+        await this.settled(updated.containerId, row.id, ownerId, 'start', nodeId);
         return this.toPublic(await this.requireOwned(ownerId, row.id));
       }
       await this.audit.record({
@@ -291,7 +298,7 @@ export class ServersService {
         });
 
       if (rebuild) {
-        const wasRunning = updated.containerId ? (await this.docker.inspect(updated.containerId))?.running ?? false : false;
+        const wasRunning = updated.containerId ? (await this.docker.inspect(updated.containerId, updated.nodeId))?.running ?? false : false;
         await this.rebuild(updated, wasRunning).catch(async (e: Error) => {
           await this.markError(updated.id, e.message);
           throw e;
@@ -328,6 +335,7 @@ export class ServersService {
       await this.db.update(servers).set({ status: 'deleting' }).where(eq(servers.id, id)).catch(() => undefined);
 
       const errors = await this.provisioner.destroy({
+        nodeId: row.nodeId,
         containerId: row.containerId,
         containerName: row.containerName,
         networkName: row.networkName,
@@ -373,6 +381,7 @@ export class ServersService {
       await this.db.update(servers).set({ status: 'restarting', lastError: null }).where(eq(servers.id, id));
       // wipe container + network + volume, then provision a clean sandbox
       await this.provisioner.destroy({
+        nodeId: row.nodeId,
         containerId: row.containerId,
         containerName: row.containerName,
         networkName: row.networkName,
@@ -383,6 +392,7 @@ export class ServersService {
       const result = await this.provisioner.provision({
         id: row.id,
         ownerId,
+        nodeId: row.nodeId,
         runtime: row.runtime as Runtime,
         image: row.runtimeVersion ?? undefined,
         startup: applyTemplate(row.startup, resolveEggEnv(row.runtime, env)),
@@ -393,18 +403,19 @@ export class ServersService {
         ramMb: row.ramMb,
         autoRestart: row.autoRestart,
       });
-      const updated = await this.persistProvision(id, result, { start: true });
+      const updated = await this.persistProvision(id, result, { start: true, nodeId: row.nodeId });
       await this.event(id, ownerId, 'reinstall', { clean: true });
       await this.audit.record({ ...actor, action: 'server.reinstall' });
       return { status: updated.status };
     }
 
-    if (!row.containerId || !(await this.docker.inspect(row.containerId))) {
+    if (!row.containerId || !(await this.docker.inspect(row.containerId, row.nodeId))) {
       // container vanished (host reboot, manual rm) → repair it first
       const env = row.envEncrypted ? this.safeDecrypt(row.envEncrypted) : [];
       const result = await this.provisioner.provision({
         id: row.id,
         ownerId,
+        nodeId: row.nodeId,
         runtime: row.runtime as Runtime,
         image: row.runtimeVersion ?? undefined,
         startup: applyTemplate(row.startup, resolveEggEnv(row.runtime, env)),
@@ -415,28 +426,28 @@ export class ServersService {
         ramMb: row.ramMb,
         autoRestart: row.autoRestart,
       });
-      row = await this.persistProvision(id, result, { start: false });
+      row = await this.persistProvision(id, result, { start: false, nodeId: row.nodeId });
     }
 
     try {
       if (action === 'start') {
         await this.setField(id, { status: 'restarting', lastError: null });
-        await this.docker.start(row.containerId!);
+        await this.docker.start(row.containerId!, row.nodeId);
       } else if (action === 'stop') {
-        await this.docker.stop(row.containerId!);
+        await this.docker.stop(row.containerId!, 15, row.nodeId);
       } else {
         await this.setField(id, { status: 'restarting', lastError: null });
-        await this.docker.restart(row.containerId!);
+        await this.docker.restart(row.containerId!, 10, row.nodeId);
       }
 
-      const state = await this.docker.inspect(row.containerId!);
+      const state = await this.docker.inspect(row.containerId!, row.nodeId);
       // fast-fail: a missing entry file (or any instant crash) exits in
       // milliseconds — report it NOW with the real stderr tail instead of
       // claiming "online" and letting the user discover the loop in logs.
-      if ((action === 'start' || action === 'restart') && !(await this.settled(row.containerId!, id, ownerId, action))) {
+      if ((action === 'start' || action === 'restart') && !(await this.settled(row.containerId!, id, ownerId, action, row.nodeId))) {
         return { status: 'error' };
       }
-      const fresh = await this.docker.inspect(row.containerId!);
+      const fresh = await this.docker.inspect(row.containerId!, row.nodeId);
       const status = fresh?.running ? 'online' : 'offline';
       await this.setField(id, { status });
       await this.event(id, ownerId, action, { status });
@@ -457,6 +468,7 @@ export class ServersService {
     const rows = await this.db.select().from(servers).where(eq(servers.ownerId, ownerId));
     for (const row of rows) {
       await this.provisioner.destroy({
+        nodeId: row.nodeId,
         containerId: row.containerId,
         containerName: row.containerName,
         networkName: row.networkName,
@@ -475,7 +487,7 @@ export class ServersService {
 
   async stats(ownerId: string, id: string) {
     const row = await this.requireOwned(ownerId, id);
-    const stats = row.containerId ? await this.docker.stats(row.containerId) : null;
+    const stats = row.containerId ? await this.docker.stats(row.containerId, row.nodeId) : null;
     return {
       ...stats,
       cpuPercent: stats?.cpuPercent ?? 0,
@@ -488,12 +500,12 @@ export class ServersService {
   async logs(ownerId: string, id: string, tail = 200) {
     const row = await this.requireOwned(ownerId, id);
     if (!row.containerId) return { logs: '' };
-    return { logs: await this.docker.logs(row.containerId, tail) };
+    return { logs: await this.docker.logs(row.containerId, tail, row.nodeId) };
   }
 
   async usage(ownerId: string, id: string) {
     const row = await this.requireOwned(ownerId, id);
-    const bytes = await this.provisioner.volumeUsage(row.volumeName ?? '', runtimeImage(row.runtime).image);
+    const bytes = await this.provisioner.volumeUsage(row.volumeName ?? '', runtimeImage(row.runtime).image, row.nodeId);
     return {
       usedBytes: bytes ?? 0,
       limitBytes: row.storageGb * 1024 * 1024 * 1024,
@@ -509,7 +521,7 @@ export class ServersService {
 
   // ---- internals ------------------------------------------------------------
 
-  private async persistProvision(id: string, result: ProvisionResult, opts: { start: boolean }): Promise<Server> {
+  private async persistProvision(id: string, result: ProvisionResult, opts: { start: boolean; nodeId: string }): Promise<Server> {
     const patch: Record<string, unknown> = {
       containerId: result.containerId || null,
       containerName: result.containerName,
@@ -525,7 +537,7 @@ export class ServersService {
 
     if (opts.start && result.containerId) {
       try {
-        await this.docker.start(result.containerId);
+        await this.docker.start(result.containerId, opts.nodeId);
         patch.status = 'online';
       } catch (e) {
         patch.status = 'error';
@@ -545,6 +557,7 @@ export class ServersService {
     const result = await this.provisioner.provision({
       id: row.id,
       ownerId: row.ownerId,
+      nodeId: row.nodeId,
       runtime: row.runtime as Runtime,
       image: row.runtimeVersion ?? undefined,
       startup: applyTemplate(row.startup, resolveEggEnv(row.runtime, env)),
@@ -555,7 +568,7 @@ export class ServersService {
       ramMb: row.ramMb,
       autoRestart: row.autoRestart,
     });
-    await this.persistProvision(row.id, result, { start });
+    await this.persistProvision(row.id, result, { start, nodeId: row.nodeId });
     await this.event(row.id, row.ownerId, 'rebuild', { start });
   }
 
@@ -576,30 +589,30 @@ export class ServersService {
    * or any new restart inside the window → stop it, record status=error
    * with the last stderr lines, return false.
    */
-  private async settled(containerId: string, serverId: string, ownerId: string, action: string): Promise<boolean> {
-    const base = await this.docker.inspect(containerId).catch(() => null);
+  private async settled(containerId: string, serverId: string, ownerId: string, action: string, nodeId = 'local'): Promise<boolean> {
+    const base = await this.docker.inspect(containerId, nodeId).catch(() => null);
     const baseRest = base?.restartCount ?? 0;
     const baseStarted = base?.startedAt ?? '';
     let clean = 0;
     for (let i = 0; i < 10; i++) {
       await new Promise((r) => setTimeout(r, 1000));
-      const s = await this.docker.inspect(containerId).catch(() => null);
+      const s = await this.docker.inspect(containerId, nodeId).catch(() => null);
       if (!s) return true; // vanished mid-check — the reconciler owns this case
       // StartedAt changes on EVERY (re)start — the airtight incarnation
       // check (counters/snapshots can straddle a restart boundary).
       if (s.restartCount > baseRest || (baseStarted && s.startedAt !== baseStarted)) {
         return this.failStart(containerId, serverId, ownerId, action,
-          `Process crashed ${Math.max(1, s.restartCount - baseRest)}x in seconds`);
+          `Process crashed ${Math.max(1, s.restartCount - baseRest)}x in seconds`, undefined, nodeId);
       }
       if (!s.running) {
         if (s.exitCode !== 0 || i >= 3) {
-          return this.failStart(containerId, serverId, ownerId, action, null, s.exitCode);
+          return this.failStart(containerId, serverId, ownerId, action, null, s.exitCode, nodeId);
         }
         continue; // exited 0 in the first seconds — keep watching the gap
       }
       if (++clean >= 3) return true;
     }
-    const s = await this.docker.inspect(containerId).catch(() => null);
+    const s = await this.docker.inspect(containerId, nodeId).catch(() => null);
     return !!s?.running && (s.restartCount <= baseRest) && (!baseStarted || s.startedAt === baseStarted);
   }
 
@@ -610,6 +623,7 @@ export class ServersService {
     action: string,
     msg: string | null,
     exitCode?: number,
+    nodeId = 'local',
   ): Promise<boolean> {
     // the user may have hit stop while we were watching — never overwrite a
     // deliberate offline/deleting state with our error.
@@ -619,10 +633,10 @@ export class ServersService {
       .where(eq(servers.id, serverId))
       .limit(1);
     if (!cur || (cur.status !== 'restarting' && cur.status !== 'online' && cur.status !== 'provisioning')) return true;
-    await this.docker.stop(containerId).catch(() => undefined);
+    await this.docker.stop(containerId, 15, nodeId).catch(() => undefined);
     let detail = msg;
     if (!detail) {
-      const tail = await this.docker.logs(containerId, 20).catch(() => '');
+      const tail = await this.docker.logs(containerId, 20, nodeId).catch(() => '');
       detail =
         tail.split('\n').map((l) => l.trim()).filter(Boolean).slice(-3).join(' / ').slice(0, 300) ||
         `Process exited with code ${exitCode ?? 'unknown'}`;
@@ -691,6 +705,7 @@ export class ServersService {
       id: row.id,
       name: row.name,
       runtime: row.runtime,
+      nodeId: row.nodeId,
       // digest refs must never reach clients — the label is the display name
       runtimeLabel: labelFor(row.runtime, row.runtimeVersion),
       runtimeVersion: row.runtimeVersion,

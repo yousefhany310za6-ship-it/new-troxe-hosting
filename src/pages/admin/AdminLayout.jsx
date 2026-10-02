@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { Activity, ArrowLeft, Database, LayoutDashboard, Menu, Server, ShieldCheck, Users, X } from 'lucide-react';
+import { Activity, ArrowLeft, Database, LayoutDashboard, Menu, Network, Server, ShieldCheck, Users, X } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/context/AuthContext.jsx';
@@ -9,6 +9,7 @@ const NAV = [
     { to: '/admin', label: 'Overview', Icon: LayoutDashboard, end: true },
     { to: '/admin/users', label: 'Users', Icon: Users },
     { to: '/admin/servers', label: 'Servers', Icon: Server },
+    { to: '/admin/nodes', label: 'Nodes', Icon: Network },
     { to: '/admin/plans', label: 'Plans', Icon: Database },
     { to: '/admin/audit', label: 'Audit log', Icon: Activity },
 ];

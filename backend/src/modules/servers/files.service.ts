@@ -54,7 +54,7 @@ export class FilesService {
   // ---- public API --------------------------------------------------------
 
   async list(ownerId: string, serverId: string, rel: string | undefined) {
-    const { volume } = await this.volumeOf(ownerId, serverId);
+    const { volume, nodeId } = await this.volumeOf(ownerId, serverId);
     const dir = this.sanitizeDir(rel ?? '');
     const script = [
       `d=${this.q(`/data/${dir}`)}`,
@@ -68,7 +68,7 @@ export class FilesService {
       `  printf '%s|%s|%s|%s\\n' "$t" "$s" "$m" "$n";`,
       `done | sort`,
     ].join('\n');
-    const res = await this.helper(volume, script, { ro: true, capture: true, timeoutMs: 30_000 });
+    const res = await this.helper(volume, script, { ro: true, capture: true, timeoutMs: 30_000, nodeId });
     this.throwIfErr(res.out, res.code);
     const entries: FileEntry[] = [];
     for (const line of res.out.split('\n')) {
@@ -93,7 +93,7 @@ export class FilesService {
   }
 
   async read(ownerId: string, serverId: string, rel: string | undefined) {
-    const { volume } = await this.volumeOf(ownerId, serverId);
+    const { volume, nodeId } = await this.volumeOf(ownerId, serverId);
     const file = this.sanitizeFile(rel ?? '');
     const script = [
       `f=${this.q(`/data/${file}`)}`,
@@ -104,7 +104,7 @@ export class FilesService {
       `if [ "$sz" -gt ${FilesService.READ_MAX} ]; then echo TROXE_ERR=TOOBIG:$sz; exit 6; fi`,
       `base64 -w0 "$r"; echo`,
     ].join('\n');
-    const res = await this.helper(volume, script, { ro: true, capture: true, timeoutMs: 30_000 });
+    const res = await this.helper(volume, script, { ro: true, capture: true, timeoutMs: 30_000, nodeId });
     this.throwIfErr(res.out, res.code);
     const buf = Buffer.from(res.out.replace(/\s+/g, ''), 'base64');
     if (buf.includes(0)) throw Err.invalid('FILE_BINARY', 'File is binary — use download instead');
@@ -121,7 +121,7 @@ export class FilesService {
       throw new AppError('FILE_TOO_LARGE', 413, `File exceeds ${cap} bytes`);
     const release = await this.serversSvc.acquire(serverId);
     try {
-      const { volume } = await this.volumeOf(ownerId, serverId);
+      const { volume, nodeId } = await this.volumeOf(ownerId, serverId);
       const file = this.sanitizeFile(rel);
       const b64 = buf.toString('base64');
       // one giant argv would hit ARG_MAX — stream in 4-char-aligned chunks
@@ -146,7 +146,7 @@ export class FilesService {
         // mv replaces a symlink itself instead of following it
         `mv -f "$f.tmp.$$" "$f" || { echo TROXE_ERR=WRITE; exit 5; }`,
       ];
-      const res = await this.helper(volume, lines.join('\n'), { capture: true, timeoutMs: 60_000 });
+      const res = await this.helper(volume, lines.join('\n'), { capture: true, timeoutMs: 60_000, nodeId });
       this.throwIfErr(res.out, res.code);
       return { path: file, size: buf.length };
     } finally {
@@ -157,7 +157,7 @@ export class FilesService {
   async mkdir(ownerId: string, serverId: string, rel: string) {
     const release = await this.serversSvc.acquire(serverId);
     try {
-      const { volume } = await this.volumeOf(ownerId, serverId);
+      const { volume, nodeId } = await this.volumeOf(ownerId, serverId);
       const dir = this.sanitizeFile(rel);
       const script = [
         `p=${this.q(`/data/${dir}`)}`,
@@ -167,7 +167,7 @@ export class FilesService {
         `mkdir -p "$p" || { echo TROXE_ERR=WRITE; exit 5; }`,
         `r=$(realpath "$p"); case "$r" in /data|/data/*) ;; *) echo TROXE_ERR=ESCAPE; exit 4;; esac`,
       ].join('\n');
-      const res = await this.helper(volume, script, { capture: true, timeoutMs: 60_000 });
+      const res = await this.helper(volume, script, { capture: true, timeoutMs: 60_000, nodeId });
       this.throwIfErr(res.out, res.code);
       return { path: dir };
     } finally {
@@ -178,7 +178,7 @@ export class FilesService {
   async remove(ownerId: string, serverId: string, rel: string | undefined) {
     const release = await this.serversSvc.acquire(serverId);
     try {
-      const { volume } = await this.volumeOf(ownerId, serverId);
+      const { volume, nodeId } = await this.volumeOf(ownerId, serverId);
       const target = this.sanitizeFile(rel ?? '');
       const script = [
         `f=${this.q(`/data/${target}`)}`,
@@ -186,7 +186,7 @@ export class FilesService {
         `r=$(realpath "$f"); case "$r" in /data/*) ;; *) echo TROXE_ERR=ESCAPE; exit 4;; esac`,
         `rm -rf "$r" || { echo TROXE_ERR=WRITE; exit 5; }`,
       ].join('\n');
-      const res = await this.helper(volume, script, { capture: true, timeoutMs: 60_000 });
+      const res = await this.helper(volume, script, { capture: true, timeoutMs: 60_000, nodeId });
       this.throwIfErr(res.out, res.code);
       return { ok: true, path: target };
     } finally {
@@ -197,7 +197,7 @@ export class FilesService {
   async rename(ownerId: string, serverId: string, from: string, to: string) {
     const release = await this.serversSvc.acquire(serverId);
     try {
-      const { volume } = await this.volumeOf(ownerId, serverId);
+      const { volume, nodeId } = await this.volumeOf(ownerId, serverId);
       const src = this.sanitizeFile(from);
       const dst = this.sanitizeFile(to);
       if (src === dst) throw Err.invalid('FILE_SAME', 'Source and destination are identical');
@@ -213,7 +213,7 @@ export class FilesService {
         `rd=$(realpath "$d"); case "$rd" in /data|/data/*) ;; *) echo TROXE_ERR=ESCAPE; exit 4;; esac`,
         `mv -f "$s" "$t" || { echo TROXE_ERR=WRITE; exit 5; }`,
       ].join('\n');
-      const res = await this.helper(volume, script, { capture: true, timeoutMs: 60_000 });
+      const res = await this.helper(volume, script, { capture: true, timeoutMs: 60_000, nodeId });
       this.throwIfErr(res.out, res.code);
       return { from: src, to: dst };
     } finally {
@@ -221,7 +221,7 @@ export class FilesService {
     }
   }
 
-  async download(ownerId: string, serverId: string, rel: string | undefined): Promise<{ filename: string; data: Buffer }> {    const { volume } = await this.volumeOf(ownerId, serverId);
+  async download(ownerId: string, serverId: string, rel: string | undefined): Promise<{ filename: string; data: Buffer }> {    const { volume, nodeId } = await this.volumeOf(ownerId, serverId);
     const target = this.sanitizeFile(rel ?? '');
     const base = target.split('/').pop()!;
     const script = [
@@ -233,11 +233,11 @@ export class FilesService {
       `if [ -d "$r" ]; then tar -czf - -C /data ${this.q(target)} | base64 -w0; echo;`,
       `else base64 -w0 "$r"; echo; fi`,
     ].join('\n');
-    const res = await this.helper(volume, script, { ro: true, capture: true, timeoutMs: 120_000, logMaxSize: '12m' });
+    const res = await this.helper(volume, script, { ro: true, capture: true, timeoutMs: 120_000, logMaxSize: '12m', nodeId });
     this.throwIfErr(res.out, res.code);
     const data = Buffer.from(res.out.replace(/\s+/g, ''), 'base64');
     // `tar -cz` of a directory vs raw file: sniff gzip magic to name it right
-    const isDir = data.length > 2 && data[0] === 0x1f && data[1] === 0x8b && (await this.isDir(volume, target));
+    const isDir = data.length > 2 && data[0] === 0x1f && data[1] === 0x8b && (await this.isDir(volume, target, nodeId));
     return { filename: isDir ? `${base}.tar.gz` : base, data };
   }
 
@@ -249,7 +249,7 @@ export class FilesService {
   async archive(ownerId: string, serverId: string, sources: string[], dest: string) {
     const release = await this.serversSvc.acquire(serverId);
     try {
-      const { volume } = await this.volumeOf(ownerId, serverId);
+      const { volume, nodeId } = await this.volumeOf(ownerId, serverId);
       const srcs = sources.map((s) => this.sanitizeFile(s));
       const dst = this.sanitizeFile(dest);
       if (!/\.tar\.gz$/.test(dst) && !/\.tgz$/.test(dst))
@@ -273,7 +273,7 @@ export class FilesService {
         `cd "$r" || exit 5;`,
         `tar -czf ${this.q(destBase)} ${bases.map((b) => this.q(b)).join(' ')} || { echo TROXE_ERR=WRITE; exit 5; }`,
       ].join('\n');
-      const res = await this.helper(volume, script, { capture: true, timeoutMs: 120_000 });
+      const res = await this.helper(volume, script, { capture: true, timeoutMs: 120_000, nodeId });
       this.throwIfErr(res.out, res.code);
       return { path: dst };
     } finally {
@@ -288,7 +288,7 @@ export class FilesService {
   async extract(ownerId: string, serverId: string, file: string, dest: string | undefined) {
     const release = await this.serversSvc.acquire(serverId);
     try {
-      const { volume } = await this.volumeOf(ownerId, serverId);
+      const { volume, nodeId } = await this.volumeOf(ownerId, serverId);
       const arc = this.sanitizeFile(file);
       const kind = /\.zip$/.test(arc) ? 'zip' : /(\.tar\.gz|\.tgz)$/.test(arc) ? 'targz' : /\.tar$/.test(arc) ? 'tar' : null;
       if (!kind) throw Err.invalid('FILE_FORMAT', 'Only .zip, .tar.gz, .tgz and .tar can be extracted');
@@ -344,7 +344,7 @@ export class FilesService {
         `  echo TROXE_ERR=ESCAPE; exit 4;`,
         `fi`,
       ].join('\n');
-      const res = await this.helper(volume, script, { capture: true, timeoutMs: 120_000 });
+      const res = await this.helper(volume, script, { capture: true, timeoutMs: 120_000, nodeId });
       this.throwIfErr(res.out, res.code);
       return { dest: outDir };
     } finally {
@@ -354,18 +354,21 @@ export class FilesService {
 
   // ---- internals ----------------------------------------------------------
 
-  private async volumeOf(ownerId: string, serverId: string): Promise<{ volume: string }> {
-    if (!this.docker.available) throw new AppError('DOCKER_UNAVAILABLE', 503, 'Container runtime is not available');
+  private async volumeOf(ownerId: string, serverId: string): Promise<{ volume: string; nodeId: string }> {
     const row = await this.serversSvc.requireOwned(ownerId, serverId);
+    if (!(await this.docker.availableOn(row.nodeId))) throw new AppError('DOCKER_UNAVAILABLE', 503, 'Container runtime is not available');
     if (!row.volumeName) throw Err.conflict('SERVER_NOT_PROVISIONED', 'Server has no volume yet');
-    return { volume: row.volumeName };
+    return { volume: row.volumeName, nodeId: row.nodeId };
   }
 
   private async helper(
     volume: string,
     script: string,
-    opts: { ro?: boolean; capture?: boolean; timeoutMs?: number; logMaxSize?: string },
+    opts: { ro?: boolean; capture?: boolean; timeoutMs?: number; logMaxSize?: string; nodeId?: string },
   ) {
+    // fresh nodes may never have pulled the helper image — inspect is cheap
+    // when present, and this keeps every file op self-sufficient.
+    await this.docker.ensureImage(config.HELPER_IMAGE, 300_000, opts.nodeId ?? 'local');
     return this.docker.runHelper({
       image: config.HELPER_IMAGE,
       cmd: [script],
@@ -375,6 +378,7 @@ export class FilesService {
       memoryMb: 256,
       captureLogs: opts.capture ?? false,
       logMaxSize: opts.logMaxSize,
+      nodeId: opts.nodeId,
     });
   }
 
@@ -429,8 +433,8 @@ export class FilesService {
     return `'${s.replace(/'/g, `'\\''`)}'`;
   }
 
-  private async isDir(volume: string, target: string): Promise<boolean> {
-    const res = await this.helper(volume, `[ -d ${this.q(`/data/${target}`)} ]`, { ro: true, timeoutMs: 15_000 });
+  private async isDir(volume: string, target: string, nodeId?: string): Promise<boolean> {
+    const res = await this.helper(volume, `[ -d ${this.q(`/data/${target}`)} ]`, { ro: true, timeoutMs: 15_000, nodeId });
     return res.code === 0;
   }
 }

@@ -1,7 +1,10 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { randomUUID } from 'crypto';
+import { createReadStream, createWriteStream } from 'fs';
 import { mkdir, rm, stat } from 'fs/promises';
 import path from 'path';
+import { pipeline } from 'stream/promises';
+import { createGzip } from 'zlib';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { config } from '../../config/env';
 import { AppError, Err } from '../../common/errors';
@@ -79,7 +82,7 @@ export class BackupsService {
     const server = await this.serversSvc.requireOwned(ownerId, serverId);
     const slots = await this.backupSlots(server);
 
-    if (!this.docker.available)
+    if (!(await this.docker.availableOn(server.nodeId)))
       throw new AppError('DOCKER_UNAVAILABLE', 503, 'Container runtime is not available');
 
     // slot count + space cap + insert are ONE transaction holding a row lock
@@ -131,17 +134,30 @@ export class BackupsService {
     await mkdir(dir, { recursive: true, mode: 0o700 });
 
     try {
-      await this.docker.ensureImage(config.HELPER_IMAGE);
-      const res = await this.docker.runHelper({
-        image: config.HELPER_IMAGE,
-        cmd: [`tar -czf /backup/${id}.tar.gz -C /data . 2>/tmp/err || { cat /tmp/err >&2; exit 1; }`],
-        binds: [`${server.volumeName}:/data:ro`, `${dir}:/backup`],
-        user: '0:0',
-        timeoutMs: 120_000,
-        memoryMb: 512,
-        captureLogs: true, // failure diagnostics come from out
-      });
-      if (res.code !== 0) throw new Error(res.out.slice(0, 300) || `tar exited ${res.code}`);
+      // local: tar straight into the archive dir via a host bind (fast path,
+      // unchanged). remote: a host bind would resolve on the NODE's host —
+      // stream the volume tar to the API host instead.
+      if (server.nodeId === 'local') {
+        await this.docker.ensureImage(config.HELPER_IMAGE, 300_000, server.nodeId);
+        const res = await this.docker.runHelper({
+          image: config.HELPER_IMAGE,
+          cmd: [`tar -czf /backup/${id}.tar.gz -C /data . 2>/tmp/err || { cat /tmp/err >&2; exit 1; }`],
+          binds: [`${server.volumeName}:/data:ro`, `${dir}:/backup`],
+          user: '0:0',
+          timeoutMs: 120_000,
+          memoryMb: 512,
+          captureLogs: true, // failure diagnostics come from out
+          nodeId: server.nodeId,
+        });
+        if (res.code !== 0) throw new Error(res.out.slice(0, 300) || `tar exited ${res.code}`);
+      } else {
+        if (!server.volumeName) throw new AppError('BACKUP_FAILED', 502, 'Backup failed');
+        await this.docker.streamVolumeToHost(server.volumeName, `${file}.streaming`, server.nodeId);
+        // normalize: getArchive yields a plain tar; recompress to the .tar.gz
+        // shape the rest of the pipeline (restore/download) expects.
+        await gzipFile(`${file}.streaming`, file);
+        await rm(`${file}.streaming`, { force: true }).catch(() => undefined);
+      }
 
       const size = (await stat(file)).size;
       await this.db.update(backups).set({ sizeBytes: size, status: 'ready' }).where(eq(backups.id, id));
@@ -207,13 +223,13 @@ export class BackupsService {
       .limit(1);
     if (!row) throw Err.notFound('BACKUP_NOT_FOUND');
     if (row.status !== 'ready') throw Err.invalid('BACKUP_NOT_READY', 'Backup is not ready');
-    if (!this.docker.available) throw new AppError('DOCKER_UNAVAILABLE', 503, 'Container runtime is not available');
+    if (!(await this.docker.availableOn(server.nodeId))) throw new AppError('DOCKER_UNAVAILABLE', 503, 'Container runtime is not available');
     this.assertContained(ownerId, serverId, path.dirname(row.storageKey), 'backup directory');
 
     const release = await this.serversSvc.acquire(serverId);
     try {
       const wasOnline = server.containerId
-        ? (await this.docker.inspect(server.containerId).catch(() => null))?.running ?? false
+        ? (await this.docker.inspect(server.containerId, server.nodeId).catch(() => null))?.running ?? false
         : false;
 
       // safety net first (best effort: quota-full accounts still restore)
@@ -229,43 +245,82 @@ export class BackupsService {
       }
 
       // storage check: current usage + archive bytes must fit the plan cap
-      const used = await this.provisioner.volumeUsage(server.volumeName ?? '', runtimeImage(server.runtime).image);
+      const used = await this.provisioner.volumeUsage(server.volumeName ?? '', runtimeImage(server.runtime).image, server.nodeId);
       const cap = server.storageGb * 1024 ** 3;
       if (used !== null && used + (row.sizeBytes ?? 0) > cap)
         throw Err.quota('QUOTA_STORAGE', 'Not enough storage headroom to unpack this backup. Free space or upgrade.');
 
-      if (server.containerId) await this.docker.stop(server.containerId);
+      if (server.containerId) await this.docker.stop(server.containerId, 15, server.nodeId);
 
-      await this.docker.ensureImage(config.HELPER_IMAGE);
-      const res = await this.docker.runHelper({
-        image: config.HELPER_IMAGE,
-        cmd: [
-          [
-            'set -e',
-            `tar --no-same-owner --no-same-permissions -xzf /backup/${path.basename(row.storageKey)} -C /data`,
-            'SYMS=$(find /data -type l | wc -l)',
-            'if [ "$SYMS" -gt 0 ]; then find /data -type l -delete; fi',
-            'echo "symlinks_removed=$SYMS"',
-            'chown -R 1000:1000 /data && chmod 750 /data',
-          ].join('\n'),
-        ],
-        binds: [`${server.volumeName}:/data`, `${path.dirname(row.storageKey)}:/backup:ro`],
-        user: '0:0',
-        timeoutMs: 120_000,
-        memoryMb: 512,
-        captureLogs: true, // symlinks_removed count + failure diagnostics
-      });
-      if (res.code !== 0) {
-        await this.serversSvc.setStatus(serverId, { status: 'error', lastError: 'Restore failed — data may be partial' });
-        this.log.warn(`restore ${backupId} for server ${serverId} failed: ${res.out.slice(0, 300)}`);
-        throw new AppError('RESTORE_FAILED', 502, 'Restore failed');
+      // local: untar with the archive dir bind-mounted (fast path). remote:
+      // stream the archive up, then run the same untar+sanitize script with
+      // only the volume bound (host binds are meaningless remotely).
+      let symlinksRemoved = 0;
+      if (server.nodeId === 'local') {
+        await this.docker.ensureImage(config.HELPER_IMAGE, 300_000, server.nodeId);
+        const res = await this.docker.runHelper({
+          image: config.HELPER_IMAGE,
+          cmd: [
+            [
+              'set -e',
+              `tar --no-same-owner --no-same-permissions -xzf /backup/${path.basename(row.storageKey)} -C /data`,
+              'SYMS=$(find /data -type l | wc -l)',
+              'if [ "$SYMS" -gt 0 ]; then find /data -type l -delete; fi',
+              'echo "symlinks_removed=$SYMS"',
+              'chown -R 1000:1000 /data && chmod 750 /data',
+            ].join('\n'),
+          ],
+          binds: [`${server.volumeName}:/data`, `${path.dirname(row.storageKey)}:/backup:ro`],
+          user: '0:0',
+          timeoutMs: 120_000,
+          memoryMb: 512,
+          captureLogs: true, // symlinks_removed count + failure diagnostics
+          nodeId: server.nodeId,
+        });
+        if (res.code !== 0) {
+          await this.serversSvc.setStatus(serverId, { status: 'error', lastError: 'Restore failed — data may be partial' });
+          this.log.warn(`restore ${backupId} for server ${serverId} failed: ${res.out.slice(0, 300)}`);
+          throw new AppError('RESTORE_FAILED', 502, 'Restore failed');
+        }
+        symlinksRemoved = Number(/symlinks_removed=(\d+)/.exec(res.out)?.[1] ?? 0);
+      } else {
+        try {
+          if (!server.volumeName) throw new AppError('RESTORE_FAILED', 502, 'Restore failed');
+          await this.docker.streamHostToVolume(row.storageKey, server.volumeName, server.nodeId);
+        } catch (e) {
+          await this.serversSvc.setStatus(serverId, { status: 'error', lastError: 'Restore failed — data may be partial' });
+          this.log.warn(`restore ${backupId} for server ${serverId} failed: ${(e as Error).message.slice(0, 300)}`);
+          throw new AppError('RESTORE_FAILED', 502, 'Restore failed');
+        }
+        const res = await this.docker.runHelper({
+          image: config.HELPER_IMAGE,
+          cmd: [
+            [
+              'set -e',
+              'SYMS=$(find /data -type l | wc -l)',
+              'if [ "$SYMS" -gt 0 ]; then find /data -type l -delete; fi',
+              'echo "symlinks_removed=$SYMS"',
+              'chown -R 1000:1000 /data && chmod 750 /data',
+            ].join('\n'),
+          ],
+          binds: [`${server.volumeName}:/data`],
+          user: '0:0',
+          timeoutMs: 120_000,
+          memoryMb: 512,
+          captureLogs: true,
+          nodeId: server.nodeId,
+        });
+        if (res.code !== 0) {
+          await this.serversSvc.setStatus(serverId, { status: 'error', lastError: 'Restore failed — data may be partial' });
+          throw new AppError('RESTORE_FAILED', 502, 'Restore failed');
+        }
+        symlinksRemoved = Number(/symlinks_removed=(\d+)/.exec(res.out)?.[1] ?? 0);
       }
-      const symlinksRemoved = Number(/symlinks_removed=(\d+)/.exec(res.out)?.[1] ?? 0);
 
       let status: 'online' | 'offline' = 'offline';
       if (wasOnline && server.containerId) {
-        await this.docker.start(server.containerId).catch(() => undefined);
-        const state = await this.docker.inspect(server.containerId).catch(() => null);
+        await this.docker.start(server.containerId, server.nodeId).catch(() => undefined);
+        const state = await this.docker.inspect(server.containerId, server.nodeId).catch(() => null);
         status = state?.running ? 'online' : 'offline';
       }
       await this.serversSvc.setStatus(serverId, { status, lastError: null });
@@ -333,4 +388,9 @@ export class BackupsService {
       }
     }
   }
+}
+
+/** gzip src → dst (used to normalize streamed volume tars to .tar.gz). */
+async function gzipFile(src: string, dst: string): Promise<void> {
+  await pipeline(createReadStream(src), createGzip(), createWriteStream(dst, { mode: 0o600 }));
 }

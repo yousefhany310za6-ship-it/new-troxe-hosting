@@ -1,0 +1,1 @@
+ALTER TABLE "nodes" ADD COLUMN "subnet_base" varchar(18);

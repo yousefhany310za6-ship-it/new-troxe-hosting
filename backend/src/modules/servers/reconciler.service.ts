@@ -2,7 +2,7 @@ import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nest
 import { eq, lt } from 'drizzle-orm';
 import { config } from '../../config/env';
 import { DB, Db } from '../../db/db.module';
-import { auditLogs, authSessions, serverEvents, servers, sessions } from '../../db/schema';
+import { auditLogs, authSessions, nodes, serverEvents, servers, sessions } from '../../db/schema';
 import { DockerService } from './provisioning/docker.service';
 import { NetworkHardeningService } from './provisioning/network-hardening.service';
 import { ProvisionerService } from './provisioning/provisioner.service';
@@ -44,9 +44,10 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
   private firstRun: NodeJS.Timeout | null = null;
   private busy = false;
   private tickCount = 0;
-  private lastPingOk = true;
   private lastStorageCheck = new Map<string, number>();
   private lastPrune = 0;
+  /** per-node liveness (a down daemon converges hardening on recovery) */
+  private readonly nodeUp = new Map<string, boolean>();
   /** restart-count velocity tracking for crash-loop detection (in-memory; single instance) */
   private restarts = new Map<string, { count: number; at: number }>();
 
@@ -75,19 +76,36 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
     if (this.busy) return;
     this.busy = true;
     try {
-      const pingOk = await this.docker.ping();
-      if (!pingOk) {
-        this.lastPingOk = false;
-        return;
+      // node inventory first: every daemon below is converged independently
+      // (volumes/networks/containers are node-local). An unreachable node is
+      // skipped for this tick — its rows are left untouched, never reaped.
+      const nodeRows = await this.db
+        .select({ id: nodes.id })
+        .from(nodes)
+        .where(eq(nodes.enabled, true));
+      const rows = await this.db.select().from(servers);
+      const byNode = new Map<string, typeof rows>();
+      for (const row of rows) {
+        const list = byNode.get(row.nodeId) ?? [];
+        list.push(row);
+        byNode.set(row.nodeId, list);
       }
-      // daemon was down and came back: DOCKER-USER was flushed, converge now
-      const recovered = !this.lastPingOk;
-      this.lastPingOk = true;
-      this.tickCount++;
-      await this.syncStatuses();
-      if (recovered || this.tickCount % 5 === 0) await this.syncHardening();
-      await this.enforceStorage();
-      await this.gcOrphans();
+      for (const n of nodeRows) {
+        const wasDown = this.nodeUp.get(n.id) === false;
+        if (!(await this.docker.ping(3000, n.id).catch(() => false))) {
+          if (!wasDown) this.log.warn(`node "${n.id}" unreachable — skipping this tick`);
+          this.nodeUp.set(n.id, false);
+          continue;
+        }
+        this.nodeUp.set(n.id, true);
+        this.tickCount++;
+        const subset = byNode.get(n.id) ?? [];
+        await this.syncStatuses(subset, n.id);
+        // daemon restarts flush DOCKER-USER: converge local rules on recovery
+        if (n.id === 'local' && (wasDown || this.tickCount % 5 === 0)) await this.syncHardening();
+        await this.enforceStorage(subset, n.id);
+        await this.gcOrphans(n.id);
+      }
       if (Date.now() - this.lastPrune > PRUNE_INTERVAL_MS) {
         this.lastPrune = Date.now();
         await this.pruneHistory();
@@ -100,8 +118,7 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async syncStatuses(): Promise<void> {
-    const rows = await this.db.select().from(servers);
+  private async syncStatuses(rows: (typeof servers.$inferSelect)[], nodeId: string): Promise<void> {
     const now = Date.now();
 
     // bounded worker pool: sequential inspects stall the tick at fleet
@@ -122,7 +139,7 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
           continue;
         }
 
-        const state = await this.docker.inspect(row.containerId);
+        const state = await this.docker.inspect(row.containerId, nodeId);
         if (!state) {
           if (row.status !== 'error') {
             await this.db
@@ -145,7 +162,7 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
             now - prev.at < 130_000 &&
             row.status !== 'error'
           ) {
-            await this.docker.stop(row.containerId).catch(() => undefined);
+            await this.docker.stop(row.containerId, 15, nodeId).catch(() => undefined);
             await this.db
               .update(servers)
               .set({
@@ -223,19 +240,11 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
    * Staggered (hourly per server, bounded per tick) so fleet size never
    * stalls the tick: each check spawns one short-lived `du` helper.
    */
-  private async enforceStorage(): Promise<void> {
+  private async enforceStorage(
+    rows: Pick<typeof servers.$inferSelect, 'id' | 'runtime' | 'status' | 'lastError' | 'containerId' | 'volumeName' | 'storageGb' | 'nodeId'>[],
+    nodeId: string,
+  ): Promise<void> {
     if (this.lastStorageCheck.size > 10_000) this.lastStorageCheck.clear();
-    const rows = await this.db
-      .select({
-        id: servers.id,
-        runtime: servers.runtime,
-        status: servers.status,
-        lastError: servers.lastError,
-        containerId: servers.containerId,
-        volumeName: servers.volumeName,
-        storageGb: servers.storageGb,
-      })
-      .from(servers);
     const now = Date.now();
     let checked = 0;
     for (const row of rows) {
@@ -246,11 +255,11 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
       this.lastStorageCheck.set(row.id, now);
       checked++;
       try {
-        const used = await this.provisioner.volumeUsage(row.volumeName, runtimeImage(row.runtime).image);
+        const used = await this.provisioner.volumeUsage(row.volumeName, runtimeImage(row.runtime).image, nodeId);
         if (used === null) continue;
         const cap = row.storageGb * 1024 ** 3;
         if (used > cap) {
-          if (row.containerId) await this.docker.stop(row.containerId).catch(() => undefined);
+          if (row.containerId) await this.docker.stop(row.containerId, 15, nodeId).catch(() => undefined);
           await this.db
             .update(servers)
             .set({
@@ -287,18 +296,18 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** Removes managed docker resources whose server row is gone. */
-  private async gcOrphans(): Promise<void> {
+  /** Removes managed docker resources whose server row is gone (per node). */
+  private async gcOrphans(nodeId: string): Promise<void> {
     const known = await this.db.select({ id: servers.id }).from(servers);
     const knownIds = new Set(known.map((r) => r.id));
-    const { containers, networks, volumes } = await this.docker.listManaged();
+    const { containers, networks, volumes } = await this.docker.listManaged(nodeId);
 
     for (const c of containers) {
       const ownerId = c.labels['troxe.server-id'];
       if (!ownerId || knownIds.has(ownerId)) continue;
       if (!oldEnough(c.labels)) continue;
       this.log.warn(`GC orphan container ${c.name}`);
-      await this.docker.remove(c.id).catch((e: Error) => this.log.warn(`gc container: ${e.message}`));
+      await this.docker.remove(c.id, true, nodeId).catch((e: Error) => this.log.warn(`gc container: ${e.message}`));
     }
 
     for (const n of networks) {
@@ -306,9 +315,13 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
       if (!serverId || knownIds.has(serverId)) continue;
       if (!oldEnough(n.labels)) continue;
       this.log.warn(`GC orphan network ${n.name}`);
-      const info = await this.docker.networkInfo(n.name).catch(() => null);
-      await this.hardening.cleanup(info?.subnet ?? '', n.name).catch(() => undefined);
-      await this.docker.removeNetwork(n.id).catch((e: Error) => this.log.warn(`gc network: ${e.message}`));
+      // remote coverage is static on the node host: never touch local
+      // netfilter for another node's subnets.
+      if (nodeId === 'local') {
+        const info = await this.docker.networkInfo(n.name, nodeId).catch(() => null);
+        await this.hardening.cleanup(info?.subnet ?? '', n.name).catch(() => undefined);
+      }
+      await this.docker.removeNetwork(n.id, nodeId).catch((e: Error) => this.log.warn(`gc network: ${e.message}`));
     }
 
     for (const v of volumes) {
@@ -316,7 +329,7 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
       if (!serverId || knownIds.has(serverId)) continue;
       if (!oldEnough(v.labels)) continue;
       this.log.warn(`GC orphan volume ${v.name}`);
-      await this.docker.removeVolume(v.name).catch((e: Error) => this.log.warn(`gc volume: ${e.message}`));
+      await this.docker.removeVolume(v.name, nodeId).catch((e: Error) => this.log.warn(`gc volume: ${e.message}`));
     }
   }
 

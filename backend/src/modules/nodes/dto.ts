@@ -42,6 +42,18 @@ export class CreateNodeDto {
   @MinLength(PEM_MIN)
   @MaxLength(20000)
   key!: string;
+
+  /**
+   * Sandbox supernet (e.g. '10.201.0.0/16', mask 8-24) — REQUIRED for
+   * remote nodes: the setup script installs it as static host firewall,
+   * and the provisioner allocates sandbox /24s from it. Never overlaps
+   * another node's base or docker defaults.
+   */
+  @Matches(/^((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\/(8|9|1\d|2[0-4])$/, {
+    message: 'subnetBase must be a CIDR like 10.201.0.0/16 (mask 8-24)',
+  })
+  @MaxLength(18)
+  subnetBase!: string;
 }
 
 export class UpdateNodeDto {
@@ -88,4 +100,15 @@ export class UpdateNodeDto {
   @IsOptional()
   @IsBoolean()
   drained?: boolean;
+
+  /**
+   * Sandbox supernet for static node firewalling (e.g. '10.201.0.0/16').
+   * Null = legacy docker-assigned subnets (local node only).
+   */
+  @IsOptional()
+  @Matches(/^((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\/(8|9|1\d|2[0-4])$/, {
+    message: 'subnetBase must be a CIDR like 10.201.0.0/16 (mask 8-24)',
+  })
+  @MaxLength(18)
+  subnetBase?: string | null;
 }

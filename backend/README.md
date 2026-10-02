@@ -177,6 +177,36 @@ The client's data lives in a named volume mounted at `/data`
 > sets ownership and keeps the directory non-empty so docker leaves it alone.
 > Do not remove the marker or this ordering.
 
+### Multi-node fleet (`nodes` table, `NodePoolService`)
+
+Sandboxes can live on extra Docker daemons, not just the API host:
+
+| concept | rule |
+|---|---|
+| `nodes` row | id, daemon host:port, mutual-TLS PEMs (AES-GCM), `subnetBase`, enabled/drained |
+| `local` node | the API host's own socket — reserved id, immutable, never deleted |
+| placement | automatic least-loaded eligible node; admin may pin `nodeId` on create |
+| drained/disabled | excluded from placement (existing servers keep running) |
+| volumes/networks | node-local; every docker call carries the server's `nodeId` |
+
+**Isolation on remote nodes is static, not per-sandbox:** the API host's
+iptables cannot cover another host, so each remote node gets ONE supernet
+(`subnetBase`, e.g. `10.201.0.0/16`, validated non-overlapping) and
+`scripts/node-setup.sh` installs it as **persistent host firewall**
+(`DOCKER-USER` drops to RFC1918/metadata/LOCAL + `INPUT` drop for the
+supernet + daemon port locked to the API IP). The provisioner allocates
+sandbox `/24`s from the supernet under a per-node mutex. The reconciler
+converges per-sandbox rules for `local` only; remote coverage is
+setup-enforced by design.
+
+**Backups stay centralized:** remote volume tars stream to the API host
+(`getArchive`/`putArchive` over the TLS daemon connection — host bind
+mounts would resolve on the *node's* host and are never used remotely).
+
+Onboarding a node: run `scripts/node-setup.sh` on the new host (it prints
+the client bundle), then `POST /admin/nodes` + `POST /admin/nodes/:id/check`.
+Manage/drain/remove from the admin **Nodes** page.
+
 ---
 
 ## Provisioning flow

@@ -76,6 +76,12 @@ export class UpdatePlanDto {
 export class AdminCreateServerDto extends CreateServerDto {
   @IsUUID('4', { message: 'ownerId must be a valid user id' })
   ownerId!: string;
+
+  /** optional placement override (validated: exists, enabled, undrained) */
+  @IsOptional()
+  @IsString()
+  @MaxLength(32)
+  nodeId?: string;
 }
 
 export class AdminUpdateServerDto extends UpdateServerDto {}

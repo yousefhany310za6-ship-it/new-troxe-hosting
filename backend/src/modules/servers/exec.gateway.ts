@@ -80,13 +80,13 @@ export class ExecGateway implements OnGatewayConnection, OnGatewayDisconnect {
       const row = await this.servers.requireOwned(userId, serverId).catch(() => null);
       if (!row) return fail('EXEC_NO_ACCESS');
       if (!row.containerId) return fail('EXEC_NO_CONTAINER');
-      const state = await this.docker.inspect(row.containerId).catch(() => null);
+      const state = await this.docker.inspect(row.containerId, row.nodeId).catch(() => null);
       if (!state?.running) return fail('EXEC_OFFLINE');
 
       if (this.byServer.has(serverId)) return fail('EXEC_BUSY');
       if ((this.perUser.get(userId) ?? 0) >= MAX_PER_USER) return fail('EXEC_LIMIT');
 
-      const shell = await this.docker.openShell(row.containerId).catch(() => null);
+      const shell = await this.docker.openShell(row.containerId, row.nodeId).catch(() => null);
       if (!shell) return fail('EXEC_FAILED');
 
       const session: ExecSession = {

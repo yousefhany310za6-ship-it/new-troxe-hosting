@@ -43,6 +43,13 @@
       "when": 1790908368781,
       "tag": "0005_safe_surge",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790909126629,
+      "tag": "0006_supreme_makkari",
+      "breakpoints": true
     }
   ]
 }

@@ -114,6 +114,13 @@ export const nodes = pgTable('nodes', {
   enabled: boolean('enabled').default(true).notNull(),
   /** drained nodes keep old servers but receive no new ones */
   drained: boolean('drained').default(false).notNull(),
+  /**
+   * Sandbox supernet for this node (e.g. '10.201.0.0/16'), enforced by the
+   * node setup script as STATIC host firewall rules. Null = legacy mode:
+   * docker-assigned subnets + per-sandbox rules from the API host
+   * (only correct for the local node).
+   */
+  subnetBase: varchar('subnet_base', { length: 18 }),
   lastSeenAt: timestamp('last_seen_at'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });

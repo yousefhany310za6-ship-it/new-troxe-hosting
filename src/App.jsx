@@ -36,6 +36,7 @@ const AdminOverview = lazy(() => import('./pages/admin/Overview.jsx'));
 const AdminUsers = lazy(() => import('./pages/admin/Users.jsx'));
 const AdminUserDetail = lazy(() => import('./pages/admin/UserDetail.jsx'));
 const AdminServers = lazy(() => import('./pages/admin/Servers.jsx'));
+const AdminNodes = lazy(() => import('./pages/admin/Nodes.jsx'));
 const AdminPlans = lazy(() => import('./pages/admin/Plans.jsx'));
 const AdminAudit = lazy(() => import('./pages/admin/Audit.jsx'));
 
@@ -76,6 +77,7 @@ export default function App() {
                                 <Route path="users/:id" element={<AdminUserDetail />} />
                                 <Route path="servers" element={<AdminServers />} />
                                 <Route path="servers/new" element={<CreateServer adminMode />} />
+                                <Route path="nodes" element={<AdminNodes />} />
                                 <Route path="plans" element={<AdminPlans />} />
                                 <Route path="audit" element={<AdminAudit />} />
                             </Route>

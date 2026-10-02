@@ -371,17 +371,18 @@ export class AdminService {
    * (ServersService.create resolves the plan server-side from the account),
    * never to the admin's — the admin cannot launder quota this way.
    */
-  async adminCreateServer(ownerId: string, dto: CreateServerDto, actorId: string, actorEmail?: string) {
+  async adminCreateServer(ownerId: string, dto: CreateServerDto & { nodeId?: string }, actorId: string, actorEmail?: string) {
     const [owner] = await this.db.select({ id: users.id }).from(users).where(eq(users.id, ownerId)).limit(1);
     if (!owner) throw new NotFoundException('OWNER_NOT_FOUND');
-    const created = await this.serversSvc.create(ownerId, dto, { ip: 'admin', device: 'admin-panel' });
+    const { nodeId: _node, ...serverDto } = dto;
+    const created = await this.serversSvc.create(ownerId, serverDto, { ip: 'admin', device: 'admin-panel' }, { nodeId: dto.nodeId });
     await this.audit.record({
       actorId,
       actorEmail: actorEmail ?? null,
       action: 'admin.server.create',
       targetType: 'server',
       targetId: created.id,
-      meta: { ownerId, runtime: dto.runtime },
+      meta: { ownerId, runtime: dto.runtime, nodeId: created.nodeId },
     });
     return created;
   }

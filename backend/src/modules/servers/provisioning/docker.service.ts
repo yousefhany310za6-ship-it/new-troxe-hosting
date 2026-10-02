@@ -1,6 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import Dockerode, { Container, ContainerCreateOptions } from 'dockerode';
+import { createReadStream, createWriteStream } from 'fs';
+import { PassThrough } from 'stream';
+import { pipeline } from 'stream/promises';
 import { config } from '../../../config/env';
+import { NodePoolService } from '../../nodes/node-pool.service';
 import { AppError, Err } from '../../../common/errors';
 
 export interface HelperResult {
@@ -86,7 +90,7 @@ export class DockerService {
   private docker: Dockerode | null = null;
   private unavailabilityLogged = false;
 
-  constructor() {
+  constructor(private pool: NodePoolService) {
     if (!config.DOCKER_ENABLED) {
       this.log.warn('Docker integration disabled by DOCKER_ENABLED=false');
       return;
@@ -102,6 +106,22 @@ export class DockerService {
     return this.docker !== null;
   }
 
+  /**
+   * Resolve the daemon client for a node. 'local' keeps the exact legacy
+   * behavior (unix socket, sync guards); anything else goes through the
+   * node pool (mutual TLS, fail-closed).
+   */
+  private async cx(nodeId = 'local'): Promise<Dockerode> {
+    if (!nodeId || nodeId === 'local') return this.d();
+    return this.pool.client(nodeId);
+  }
+
+  /** Liveness of a specific node (local stays synchronous via `available`). */
+  async availableOn(nodeId = 'local'): Promise<boolean> {
+    if (!nodeId || nodeId === 'local') return this.available;
+    return this.pool.available(nodeId);
+  }
+
   private d(): Dockerode {
     if (!this.docker) {
       if (!this.unavailabilityLogged) {
@@ -115,18 +135,19 @@ export class DockerService {
 
   // ---- lifecycle ------------------------------------------------------------
 
-  async ping(timeoutMs = 3000): Promise<boolean> {
-    if (!this.docker) return false;
+  async ping(timeoutMs = 3000, nodeId = 'local'): Promise<boolean> {
+    const d = await this.cx(nodeId).catch(() => null);
+    if (!d) return false;
     try {
-      await withTimeout(this.docker.info(), timeoutMs, 'docker info');
+      await withTimeout(d.info(), timeoutMs, 'docker info');
       return true;
     } catch {
       return false;
     }
   }
 
-  async ensureImage(image: string, timeoutMs = 300_000): Promise<void> {
-    const d = this.d();
+  async ensureImage(image: string, timeoutMs = 300_000, nodeId = 'local'): Promise<void> {
+    const d = await this.cx(nodeId);
     try {
       await withTimeout(d.getImage(image).inspect(), 10_000, `inspect ${image}`);
       return;
@@ -159,10 +180,15 @@ export class DockerService {
     this.log.log(`image ready: ${image}`);
   }
 
-  async createNetwork(name: string, labels: Record<string, string>): Promise<{ id: string; subnet: string }> {
-    const d = this.d();
+  async createNetwork(
+    name: string,
+    labels: Record<string, string>,
+    opts: { nodeId?: string; subnet?: string } = {},
+  ): Promise<{ id: string; subnet: string }> {
+    const d = await this.cx(opts.nodeId);
+    const ipam = opts.subnet ? { IPAM: { Config: [{ Subnet: opts.subnet }] } } : {};
     const network = await withTimeout(
-      d.createNetwork({ Name: name, Driver: 'bridge', Attachable: false, EnableIPv6: false, Internal: false, Labels: labels }),
+      d.createNetwork({ Name: name, Driver: 'bridge', Attachable: false, EnableIPv6: false, Internal: false, Labels: labels, ...ipam }),
       15_000,
       `create network ${name}`,
     );
@@ -176,23 +202,25 @@ export class DockerService {
     return { id: network.id ?? String(network), subnet };
   }
 
-  async removeNetwork(idOrName: string): Promise<void> {
-    if (!this.docker) return;
+  async removeNetwork(idOrName: string, nodeId = 'local'): Promise<void> {
+    const d = await this.cx(nodeId).catch(() => null);
+    if (!d) return;
     try {
-      await withTimeout(this.docker.getNetwork(idOrName).remove(), 15_000, 'network remove');
+      await withTimeout(d.getNetwork(idOrName).remove(), 15_000, 'network remove');
     } catch (e) {
       if (!isStatus(e, 404)) throw e;
     }
   }
 
-  async createVolume(name: string, labels: Record<string, string>): Promise<void> {
-    await withTimeout(this.d().createVolume({ Name: name, Labels: labels, Driver: 'local' }), 15_000, `create volume ${name}`);
+  async createVolume(name: string, labels: Record<string, string>, nodeId = 'local'): Promise<void> {
+    await withTimeout((await this.cx(nodeId)).createVolume({ Name: name, Labels: labels, Driver: 'local' }), 15_000, `create volume ${name}`);
   }
 
-  async removeVolume(name: string): Promise<void> {
-    if (!this.docker) return;
+  async removeVolume(name: string, nodeId = 'local'): Promise<void> {
+    const d = await this.cx(nodeId).catch(() => null);
+    if (!d) return;
     try {
-      await withTimeout(this.docker.getVolume(name).remove({ force: true }), 15_000, 'volume remove');
+      await withTimeout(d.getVolume(name).remove({ force: true }), 15_000, 'volume remove');
     } catch (e) {
       // 409 = still in use by a stopped helper/child → treat as gone later
       if (!isStatus(e, 404) && !isStatus(e, 409)) throw e;
@@ -200,10 +228,11 @@ export class DockerService {
   }
 
   /** Returns the network id + subnet when it already exists, else null. */
-  async networkInfo(name: string): Promise<{ id: string; subnet: string } | null> {
-    if (!this.docker) return null;
+  async networkInfo(name: string, nodeId = 'local'): Promise<{ id: string; subnet: string } | null> {
+    const d = await this.cx(nodeId).catch(() => null);
+    if (!d) return null;
     try {
-      const info: any = await withTimeout(this.docker.getNetwork(name).inspect(), 10_000, 'network inspect');
+      const info: any = await withTimeout(d.getNetwork(name).inspect(), 10_000, 'network inspect');
       return { id: info?.Id ?? name, subnet: info?.IPAM?.Config?.[0]?.Subnet ?? '' };
     } catch (e) {
       if (isStatus(e, 404)) return null;
@@ -211,10 +240,11 @@ export class DockerService {
     }
   }
 
-  async volumeExists(name: string): Promise<boolean> {
-    if (!this.docker) return false;
+  async volumeExists(name: string, nodeId = 'local'): Promise<boolean> {
+    const d = await this.cx(nodeId).catch(() => null);
+    if (!d) return false;
     try {
-      await withTimeout(this.docker.getVolume(name).inspect(), 10_000, 'volume inspect');
+      await withTimeout(d.getVolume(name).inspect(), 10_000, 'volume inspect');
       return true;
     } catch (e) {
       if (isStatus(e, 404)) return false;
@@ -222,40 +252,42 @@ export class DockerService {
     }
   }
 
-  async createContainer(opts: ContainerCreateOptions): Promise<string> {
-    const container = await withTimeout(this.d().createContainer(opts), 60_000, 'create container');
+  async createContainer(opts: ContainerCreateOptions, nodeId = 'local'): Promise<string> {
+    const container = await withTimeout((await this.cx(nodeId)).createContainer(opts), 60_000, 'create container');
     return container.id;
   }
 
-  async start(id: string): Promise<void> {
-    await withTimeout(this.d().getContainer(id).start(), 30_000, 'container start');
+  async start(id: string, nodeId = 'local'): Promise<void> {
+    await withTimeout((await this.cx(nodeId)).getContainer(id).start(), 30_000, 'container start');
   }
 
-  async stop(id: string, timeoutSec = 15): Promise<void> {
+  async stop(id: string, timeoutSec = 15, nodeId = 'local'): Promise<void> {
     try {
-      await withTimeout(this.d().getContainer(id).stop({ t: timeoutSec }), timeoutSec * 1000 + 15_000, 'container stop');
+      await withTimeout((await this.cx(nodeId)).getContainer(id).stop({ t: timeoutSec }), timeoutSec * 1000 + 15_000, 'container stop');
     } catch (e) {
       if (!isStatus(e, 304) && !isStatus(e, 404)) throw e; // already stopped
     }
   }
 
-  async restart(id: string, timeoutSec = 10): Promise<void> {
-    await withTimeout(this.d().getContainer(id).restart({ t: timeoutSec }), timeoutSec * 1000 + 15_000, 'container restart');
+  async restart(id: string, timeoutSec = 10, nodeId = 'local'): Promise<void> {
+    await withTimeout((await this.cx(nodeId)).getContainer(id).restart({ t: timeoutSec }), timeoutSec * 1000 + 15_000, 'container restart');
   }
 
-  async remove(id: string, force = true): Promise<void> {
-    if (!this.docker) return;
+  async remove(id: string, force = true, nodeId = 'local'): Promise<void> {
+    const d = await this.cx(nodeId).catch(() => null);
+    if (!d) return;
     try {
-      await withTimeout(this.d().getContainer(id).remove({ force, v: false }), 30_000, 'container remove');
+      await withTimeout(d.getContainer(id).remove({ force, v: false }), 30_000, 'container remove');
     } catch (e) {
       if (!isStatus(e, 404)) throw e;
     }
   }
 
-  async removeByName(name: string): Promise<void> {
-    if (!this.docker) return;
+  async removeByName(name: string, nodeId = 'local'): Promise<void> {
+    const d = await this.cx(nodeId).catch(() => null);
+    if (!d) return;
     try {
-      await withTimeout(this.d().getContainer(name).remove({ force: true, v: false }), 30_000, 'container remove');
+      await withTimeout(d.getContainer(name).remove({ force: true, v: false }), 30_000, 'container remove');
     } catch (e) {
       if (!isStatus(e, 404)) throw e;
     }
@@ -263,10 +295,11 @@ export class DockerService {
 
   // ---- observation ----------------------------------------------------------
 
-  async inspect(id: string): Promise<ContainerState | null> {
-    if (!this.docker) return null;
+  async inspect(id: string, nodeId = 'local'): Promise<ContainerState | null> {
+    const d = await this.cx(nodeId).catch(() => null);
+    if (!d) return null;
     try {
-      const info: any = await withTimeout(this.d().getContainer(id).inspect(), 10_000, 'container inspect');
+      const info: any = await withTimeout(d.getContainer(id).inspect(), 10_000, 'container inspect');
       const state = info?.State ?? {};
       return {
         exists: true,
@@ -284,10 +317,11 @@ export class DockerService {
     }
   }
 
-  async stats(id: string): Promise<ContainerStats | null> {
-    if (!this.docker) return null;
+  async stats(id: string, nodeId = 'local'): Promise<ContainerStats | null> {
+    const d = await this.cx(nodeId).catch(() => null);
+    if (!d) return null;
     try {
-      const s: any = await withTimeout(this.d().getContainer(id).stats({ stream: false }), 10_000, 'container stats');
+      const s: any = await withTimeout(d.getContainer(id).stats({ stream: false }), 10_000, 'container stats');
       const cpuDelta = (s?.cpu_stats?.cpu_usage?.total_usage ?? 0) - (s?.precpu_stats?.cpu_usage?.total_usage ?? 0);
       const sysDelta = (s?.cpu_stats?.system_cpu_usage ?? 0) - (s?.precpu_stats?.system_cpu_usage ?? 0);
       const cpus = s?.cpu_stats?.online_cpus ?? 1;
@@ -307,11 +341,12 @@ export class DockerService {
     }
   }
 
-  async logs(id: string, tail = 200): Promise<string> {
-    if (!this.docker) return '';
+  async logs(id: string, tail = 200, nodeId = 'local'): Promise<string> {
+    const d = await this.cx(nodeId).catch(() => null);
+    if (!d) return '';
     try {
       const buf: Buffer = await withTimeout(
-        this.d().getContainer(id).logs({ stdout: true, stderr: true, tail: Math.min(Math.max(tail || 200, 1), 2000), timestamps: false }),
+        d.getContainer(id).logs({ stdout: true, stderr: true, tail: Math.min(Math.max(tail || 200, 1), 2000), timestamps: false }),
         10_000,
         'container logs',
       );
@@ -344,8 +379,10 @@ export class DockerService {
     captureLogs?: boolean;
     /** json-file max-size (default '1m'); raise only for bounded bulk reads */
     logMaxSize?: string;
+    /** target node (volume/network names are node-local) */
+    nodeId?: string;
   }): Promise<HelperResult> {
-    const d = this.d();
+    const d = await this.cx(opts.nodeId);
     const timeout = opts.timeoutMs ?? 60_000;
     let container: Container | null = null;
     try {
@@ -389,6 +426,114 @@ export class DockerService {
     }
   }
 
+  // ---- bulk streams (node-local-host transfers) ---------------------------------
+
+  /**
+   * Stream a volume's content to a host file WITHOUT bind-mounting host
+   * paths into a helper (binds resolve on the DAEMON's host — meaningless
+   * for remote nodes). Uses getArchive through a short-lived holder +
+   * a timeout-free stream client; guarded by a 30min watchdog.
+   */
+  async streamVolumeToHost(volumeName: string, destPath: string, nodeId = 'local'): Promise<number> {
+    const d = await this.pool.client(nodeId);
+    await this.ensureImage(config.HELPER_IMAGE, 300_000, nodeId);
+    let container: Container | null = null;
+    try {
+      container = await d.createContainer({
+        Image: config.HELPER_IMAGE,
+        Entrypoint: ['/bin/sh', '-c'],
+        Cmd: ['sleep infinity'],
+        User: '0:0',
+        Labels: { 'troxe.helper': 'true' },
+        HostConfig: {
+          NetworkMode: 'none',
+          Binds: [`${volumeName}:/data:ro`],
+          AutoRemove: false,
+          ReadonlyRootfs: false,
+          CapDrop: ['ALL'],
+          SecurityOpt: ['no-new-privileges:true'],
+          Memory: 256 * 1024 * 1024,
+          NanoCpus: 500_000_000,
+          PidsLimit: 32,
+          RestartPolicy: { Name: 'no' },
+          LogConfig: { Type: 'none', Config: {} },
+        },
+      } as any);
+      await withTimeout(container.start(), 15_000, 'stream holder start');
+      // '/data/.' (not '/data'): members come out relative (a.txt), not
+      // prefixed (data/a.txt) — same layout as the local tar flow.
+      const stream = (await container.getArchive({ path: '/data/.' })) as unknown as NodeJS.ReadableStream;
+      const bytes = await this.pipeToHost(stream, destPath);
+      return bytes;
+    } finally {
+      if (container) await container.remove({ force: true }).catch(() => undefined);
+    }
+  }
+
+  /**
+   * Stream a host tarball into a volume (reverse of the above). The daemon
+   * extracts (and decompresses) the archive — verified against engine 28.
+   */
+  async streamHostToVolume(srcPath: string, volumeName: string, nodeId = 'local'): Promise<void> {
+    const d = await this.pool.client(nodeId);
+    await this.ensureImage(config.HELPER_IMAGE, 300_000, nodeId);
+    let container: Container | null = null;
+    try {
+      container = await d.createContainer({
+        Image: config.HELPER_IMAGE,
+        Entrypoint: ['/bin/sh', '-c'],
+        Cmd: ['sleep infinity'],
+        User: '0:0',
+        Labels: { 'troxe.helper': 'true' },
+        HostConfig: {
+          NetworkMode: 'none',
+          Binds: [`${volumeName}:/data`],
+          AutoRemove: false,
+          ReadonlyRootfs: false,
+          CapDrop: ['ALL'],
+          SecurityOpt: ['no-new-privileges:true'],
+          Memory: 256 * 1024 * 1024,
+          NanoCpus: 500_000_000,
+          PidsLimit: 32,
+          RestartPolicy: { Name: 'no' },
+          LogConfig: { Type: 'none', Config: {} },
+        },
+      } as any);
+      await withTimeout(container.start(), 15_000, 'stream holder start');
+      await this.pipeToVolume(srcPath, container, '/data');
+    } finally {
+      if (container) await container.remove({ force: true }).catch(() => undefined);
+    }
+  }
+
+  /** Pump a daemon stream to a host file, with a 30min absolute watchdog. */
+  private async pipeToHost(stream: NodeJS.ReadableStream, destPath: string): Promise<number> {
+    let bytes = 0;
+    stream.on('data', (c: Buffer) => {
+      bytes += c.length;
+    });
+    await Promise.race([
+      pipeline(stream as any, createWriteStream(destPath, { mode: 0o600 })),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('bulk stream timed out after 30m')), 30 * 60 * 1000)),
+    ]);
+    return bytes;
+  }
+
+  /** Pump a host file into a volume path, with a 30min absolute watchdog. */
+  private async pipeToVolume(srcPath: string, container: Container, putPath: string): Promise<number> {
+    let bytes = 0;
+    const tap = new PassThrough();
+    tap.on('data', (c: Buffer) => {
+      bytes += c.length;
+    });
+    createReadStream(srcPath).pipe(tap);
+    await Promise.race([
+      (container as any).putArchive(tap, { path: putPath }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('bulk stream timed out after 30m')), 30 * 60 * 1000)),
+    ]);
+    return bytes;
+  }
+
   // ---- interactive shells (exec gateway) --------------------------------------
 
   /**
@@ -396,8 +541,8 @@ export class DockerService {
    * ownership + running state first. With `Tty: true` the hijacked stream
    * is raw bytes (no multiplex headers).
    */
-  async openShell(containerId: string): Promise<ShellHandle> {
-    const container = this.d().getContainer(containerId);
+  async openShell(containerId: string, nodeId = 'local'): Promise<ShellHandle> {
+    const container = (await this.cx(nodeId)).getContainer(containerId);
     const exec = await container.exec({
       Cmd: ['/bin/sh'],
       AttachStdin: true,
@@ -462,12 +607,12 @@ export class DockerService {
 
   // ---- inventory (reconciler / GC) ------------------------------------------
 
-  async listManaged(): Promise<{
+  async listManaged(nodeId = 'local'): Promise<{
     containers: Array<{ id: string; name: string; labels: Record<string, string> }>;
     networks: Array<{ id: string; name: string; labels: Record<string, string> }>;
     volumes: Array<{ name: string; labels: Record<string, string> }>;
   }> {
-    const d = this.d();
+    const d = await this.cx(nodeId);
     const labelFilter = { label: ['troxe.managed=true'] };
     const [cs, ns, vs] = await Promise.all([
       d.listContainers({ all: true, filters: labelFilter }).catch(() => [] as any[]),

@@ -12,7 +12,6 @@ export interface NodeCheck {
   version?: string;
   error?: string;
 }
-
 /**
  * Per-node Docker clients. The local daemon (socket) behaves exactly like
  * the old single DockerService; remote daemons connect over mutual TLS.
@@ -52,9 +51,13 @@ export class NodePoolService {
     const d = await this.resolve(nodeId);
     if (!d) return { ok: false, error: 'node is disabled or unconfigured' };
     try {
+      // bounded explicitly: the pool client itself carries no socket timeout
+      const pong = await Promise.race([
+        d.ping(),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('ping timeout after 10s')), 10_000)),
+      ]);
       // docker-modem resolves ping to a Buffer ('OK') on some versions —
       // normalize before comparing, and never trust truthiness alone.
-      const pong = await d.ping();
       if (String(pong) !== 'OK') return { ok: false, error: `unexpected ping: ${String(pong).slice(0, 80)}` };
       const info = await d.version().catch(() => null);
       await this.db.update(nodes).set({ lastSeenAt: new Date() }).where(eq(nodes.id, nodeId)).catch(() => undefined);
@@ -83,6 +86,10 @@ export class NodePoolService {
   private async build(nodeId: string): Promise<Dockerode | null> {
     if (nodeId === 'local') {
       if (!config.DOCKER_ENABLED) return null;
+      // no socket-level timeout (same as the legacy local client): every
+      // call site carries its own withTimeout guard, and streams carry a
+      // watchdog. A fixed modem timeout would murder slow-but-valid calls
+      // (image pulls, graceful stops, bulk transfers) mid-flight.
       return new Dockerode({ socketPath: config.DOCKER_SOCKET });
     }
     const [row] = await this.db.select().from(nodes).where(and(eq(nodes.id, nodeId), eq(nodes.enabled, true))).limit(1);
@@ -91,13 +98,15 @@ export class NodePoolService {
       throw new Error('remote node is missing TLS material (mutual TLS is mandatory)');
     }
     const pem = (blob: string): Buffer => Buffer.from(decryptSecret<string>(blob), 'utf8');
+    // no socket-level timeout: call sites guard (withTimeout) and streams
+    // guard (watchdog). A fixed modem timeout would murder slow-but-valid
+    // calls (pulls, graceful stops, transfers) exactly when they matter.
     return new Dockerode({
       host: row.dockerHost,
       port: row.dockerPort ?? 2376,
       ca: pem(row.tlsCa),
       cert: pem(row.tlsCert),
       key: pem(row.tlsKey),
-      timeout: 15_000,
     });
   }
 }

@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
+import { NodesModule } from '../nodes/nodes.module';
 import { BackupsService } from './backups.service';
 import { ExecGateway } from './exec.gateway';
 import { FilesService } from './files.service';
@@ -12,7 +13,7 @@ import { ServersController } from './servers.controller';
 import { ServersService } from './servers.service';
 
 @Module({
-  imports: [AuthModule],
+  imports: [AuthModule, NodesModule],
   controllers: [ServersController],
   providers: [
     ServersService,
