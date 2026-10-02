@@ -157,9 +157,12 @@ export class AdminService {
 
   async updateUserRole(userId: string, role: 'user' | 'admin', actorId: string, actorEmail?: string) {
     if (userId === actorId) throw new ForbiddenException('CANNOT_CHANGE_OWN_ROLE');
+    // bump the token generation together with the role: outstanding access
+    // JWTs carry a stale `role` claim otherwise (guard trusts the claim),
+    // so a demoted admin would keep /admin/* until token expiry.
     const [updated] = await this.db
       .update(users)
-      .set({ role })
+      .set({ role, tokenVersion: sql`token_version + 1` })
       .where(eq(users.id, userId))
       .returning({ id: users.id, role: users.role });
     if (!updated) throw new NotFoundException('USER_NOT_FOUND');
