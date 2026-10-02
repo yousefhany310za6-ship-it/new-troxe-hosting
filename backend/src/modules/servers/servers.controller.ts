@@ -52,6 +52,7 @@ export class ServersController {
   }
 
   @Patch(':id')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @UseGuards(ServerOwnerGuard)
   update(@Param('id', ParseUuidPipe) id: string, @Body() dto: UpdateServerDto, @CurrentUser() u: ReqUser, @Req() req: Request) {
     return this.svc.update(u.sub, id, dto, ctxOf(req));
@@ -65,6 +66,7 @@ export class ServersController {
 
   @Post(':id/start')
   @HttpCode(202)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @UseGuards(ServerOwnerGuard)
   start(@Param('id', ParseUuidPipe) id: string, @CurrentUser() u: ReqUser, @Req() req: Request) {
     return this.svc.lifecycle(u.sub, id, 'start', ctxOf(req));
@@ -72,6 +74,7 @@ export class ServersController {
 
   @Post(':id/stop')
   @HttpCode(202)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @UseGuards(ServerOwnerGuard)
   stop(@Param('id', ParseUuidPipe) id: string, @CurrentUser() u: ReqUser, @Req() req: Request) {
     return this.svc.lifecycle(u.sub, id, 'stop', ctxOf(req));
@@ -79,6 +82,7 @@ export class ServersController {
 
   @Post(':id/restart')
   @HttpCode(202)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @UseGuards(ServerOwnerGuard)
   restart(@Param('id', ParseUuidPipe) id: string, @CurrentUser() u: ReqUser, @Req() req: Request) {
     return this.svc.lifecycle(u.sub, id, 'restart', ctxOf(req));
@@ -96,18 +100,21 @@ export class ServersController {
   // ---- observability --------------------------------------------------------
 
   @Get(':id/stats')
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
   @UseGuards(ServerOwnerGuard)
   stats(@Param('id', ParseUuidPipe) id: string, @CurrentUser() u: ReqUser) {
     return this.svc.stats(u.sub, id);
   }
 
   @Get(':id/usage')
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
   @UseGuards(ServerOwnerGuard)
   usage(@Param('id', ParseUuidPipe) id: string, @CurrentUser() u: ReqUser) {
     return this.svc.usage(u.sub, id);
   }
 
   @Get(':id/logs')
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
   @UseGuards(ServerOwnerGuard)
   logs(
     @Param('id', ParseUuidPipe) id: string,
@@ -120,6 +127,7 @@ export class ServersController {
   // ---- backups --------------------------------------------------------------
 
   @Get(':id/backups')
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
   @UseGuards(ServerOwnerGuard)
   listBackups(@Param('id', ParseUuidPipe) id: string, @CurrentUser() u: ReqUser) {
     return this.backups.list(u.sub, id);
@@ -134,6 +142,7 @@ export class ServersController {
   }
 
   @Delete(':id/backups/:backupId')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   @UseGuards(ServerOwnerGuard)
   deleteBackup(
     @Param('id', ParseUuidPipe) id: string,

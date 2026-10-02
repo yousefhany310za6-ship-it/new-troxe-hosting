@@ -1,4 +1,5 @@
 import { Body, Controller, Delete, Get, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import type { Request } from 'express';
 import { ctxOf } from '../../common/request-context';
 import { CurrentUser } from '../auth/current-user';
@@ -29,6 +30,7 @@ export class UsersController {
   }
 
   @Post('me/password')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   password(@CurrentUser() u: ReqUser, @Body() dto: UpdatePasswordDto, @Req() req: Request) {
     const ctx = ctxOf(req);
     return this.usersSvc.updatePassword(u.sub, dto, { ip: ctx.ip, userAgent: ctx.device });
@@ -40,6 +42,7 @@ export class UsersController {
   }
 
   @Delete('me')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   delete(@CurrentUser() u: ReqUser, @Body() dto: DeleteAccountDto, @Req() req: Request) {
     const ctx = ctxOf(req);
     return this.usersSvc.deleteAccount(u.sub, dto, { ip: ctx.ip, userAgent: ctx.device });

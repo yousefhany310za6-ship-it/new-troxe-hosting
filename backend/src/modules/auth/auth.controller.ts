@@ -81,6 +81,7 @@ export class AuthController {
 
   /** Kills every refresh session of the authenticated user. */
   @Post('logout-all')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @UseGuards(JwtAuthGuard)
   @HttpCode(204)
   async logoutAll(@CurrentUser() u: ReqUser, @Req() req: Request) {
@@ -111,6 +112,7 @@ export class AuthController {
 
   /** Issue a short-lived WebSocket ticket (30s TTL). */
   @Post('ws/token')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   @UseGuards(JwtAuthGuard)
   @HttpCode(200)
   wsToken(@CurrentUser() u: ReqUser) {

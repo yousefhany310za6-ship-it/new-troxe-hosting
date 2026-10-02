@@ -11,6 +11,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { CurrentUser } from '../auth/current-user';
 import { JwtAuthGuard, type ReqUser } from '../auth/jwt.guard';
 import { AdminGuard } from '../auth/admin.guard';
@@ -35,6 +36,7 @@ const LIFECYCLE_ACTIONS = ['start', 'stop', 'restart', 'reinstall'] as const;
 
 @Controller({ path: 'admin', version: '1' })
 @UseGuards(JwtAuthGuard, AdminGuard)
+@Throttle({ default: { limit: 30, ttl: 60_000 } })
 export class AdminController {
   constructor(
     private admin: AdminService,
