@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { apiGet, setAccessToken, authPost } from '@/lib/api.js';
+import { apiGet, apiPost, setAccessToken, authPost } from '@/lib/api.js';
 import { keys } from '@/hooks/useQueries.jsx';
 
 const AuthContext = createContext(null);
@@ -46,7 +46,9 @@ export function AuthProvider({ children }) {
   }, [loadUser]);
 
   const signOut = useCallback(async () => {
-    try { await apiGet('/auth/logout', { method: 'POST', auth: false }); } catch { /* cookie may be gone */ }
+    // POST (not apiGet — it forces GET and would 404, leaving the httpOnly
+    // cookie alive while the UI pretends the session is dead)
+    try { await apiPost('/auth/logout', null, { auth: false }); } catch { /* cookie may be gone */ }
     setAccessToken(null);
     setUser(null);
     qc.removeQueries({ queryKey: keys.user() });
