@@ -57,6 +57,13 @@
       "when": 1790927961727,
       "tag": "0007_calm_fallen_one",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1790970701293,
+      "tag": "0008_square_veda",
+      "breakpoints": true
     }
   ]
 }

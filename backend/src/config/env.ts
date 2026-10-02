@@ -196,7 +196,7 @@ export interface AppConfig {
 export const config: AppConfig = Object.freeze({
   NODE_ENV,
   IS_PROD,
-  PORT: num('PORT', 3000, 1, 65535),
+  PORT: num('PORT', 3300, 1, 65535),
   DATABASE_URL,
   PG_POOL_MAX: num('PG_POOL_MAX', 10, 1, 100),
   PG_SSL: bool('PG_SSL', /sslmode=require/.test(DATABASE_URL)),

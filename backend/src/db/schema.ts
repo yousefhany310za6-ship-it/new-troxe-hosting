@@ -166,6 +166,7 @@ export const servers = pgTable('servers', {
   uniqueIndex('servers_owner_name_idx').on(t.ownerId, t.name),
   index('servers_owner_idx').on(t.ownerId),
   index('servers_status_idx').on(t.status),
+  index('servers_node_idx').on(t.nodeId),
 ]);
 
 // ---- Backups ----------------------------------------------------------------
@@ -180,7 +181,7 @@ export const backups = pgTable('backups', {
   type: backupType('type').default('manual').notNull(),
   error: text('error'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
-}, (t) => [index('backups_server_idx').on(t.serverId)]);
+}, (t) => [index('backups_server_idx').on(t.serverId), index('backups_server_type_idx').on(t.serverId, t.type)]);
 
 // ---- Metrics rollup ---------------------------------------------------------
 // ---- Server lifecycle events (per-server audit trail) -----------------------
@@ -209,6 +210,7 @@ export const auditLogs = pgTable('audit_logs', {
 }, (t) => [
   index('audit_logs_actor_idx').on(t.actorId, t.createdAt),
   index('audit_logs_action_idx').on(t.action, t.createdAt),
+  index('audit_logs_target_idx').on(t.targetType, t.targetId),
 ]);
 
 // ---- Types ------------------------------------------------------------------

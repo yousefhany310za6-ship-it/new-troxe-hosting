@@ -29,6 +29,14 @@ import { backupDirFor } from './backup-paths';
 @Injectable()
 export class BackupsService {
   private readonly log = new Logger(BackupsService.name);
+  /**
+   * Per-owner mutex covering check→insert→tar→finalize. The txn's server
+   * row lock serializes same-server creates, but the owner-wide byte sum
+   * would still race across DIFFERENT servers (both read pre-tar NULL
+   * sizes). Single-instance by design (same constraint as the per-server
+   * and per-node locks); different owners never block each other.
+   */
+  private readonly ownerLocks = new Map<string, Promise<void>>();
 
   constructor(
     @Inject(DB) private db: Db,
@@ -37,6 +45,19 @@ export class BackupsService {
     private serversSvc: ServersService,
     private audit: AuditService,
   ) {}
+
+  private async acquireOwner(ownerId: string): Promise<() => void> {
+    const prev = this.ownerLocks.get(ownerId) ?? Promise.resolve();
+    let done!: () => void;
+    const gate = new Promise<void>((resolve) => (done = resolve));
+    const chained = prev.catch(() => undefined).then(() => gate);
+    this.ownerLocks.set(ownerId, chained);
+    await prev.catch(() => undefined);
+    return () => {
+      done();
+      if (this.ownerLocks.get(ownerId) === chained) this.ownerLocks.delete(ownerId);
+    };
+  }
 
   private dirFor(ownerId: string, serverId: string): string {
     return backupDirFor(ownerId, serverId);
@@ -85,9 +106,24 @@ export class BackupsService {
     if (!(await this.docker.availableOn(server.nodeId)))
       throw new AppError('DOCKER_UNAVAILABLE', 503, 'Container runtime is not available');
 
-    // slot count + space cap + insert are ONE transaction holding a row lock
-    // on the server: concurrent creates cannot both pass the checks (TOCTOU).
-    // The tar run stays outside (saga: failed rows are marked, files rm'd).
+    // owner-serialized end to end (see acquireOwner): the byte-sum check
+    // below must observe finalized sizes, and sizes land only after tar.
+    const releaseOwner = await this.acquireOwner(ownerId);
+    try {
+      return await this.createInner(ownerId, serverId, opts, ctx, server, slots);
+    } finally {
+      releaseOwner();
+    }
+  }
+
+  private async createInner(
+    ownerId: string,
+    serverId: string,
+    opts: { name?: string; type?: 'manual' | 'auto' },
+    ctx: ReqCtx | undefined,
+    server: Server,
+    slots: number,
+  ) {
     const id = randomUUID();
     const dir = this.dirFor(ownerId, serverId);
     const file = this.fileFor(ownerId, serverId, id);

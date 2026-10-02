@@ -24,7 +24,8 @@
 # Build: docker build -t troxe-api:latest ./backend
 
 # ---------- builder: full toolchain, compiles dist ----------
-FROM node:22-bookworm-slim AS builder
+# Pinned by digest (never a mutable tag): see rotation runbook in backend README.
+FROM node@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS builder
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -36,8 +37,10 @@ RUN npm run build \
  && npm cache clean --force
 
 # ---------- runtime: minimal, non-root ----------
-FROM node:22-bookworm-slim AS runtime
+FROM node@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS runtime
 ENV NODE_ENV=production
+# PORT unified with the code default (3300) and the healthcheck below.
+ENV PORT=3300
 RUN apt-get update \
  && apt-get install -y --no-install-recommends iptables tini ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
@@ -48,7 +51,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts \
  && npm cache clean --force \
- && npm ls bcrypt >/dev/null
+ && node -e "require('bcrypt'); require('drizzle-orm'); console.log('native + orm load ok')"
 COPY --from=builder --chown=1000:1000 /app/dist ./dist
 COPY --from=builder --chown=1000:1000 /app/drizzle ./drizzle
 USER 1000:1000
