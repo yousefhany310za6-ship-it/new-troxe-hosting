@@ -192,6 +192,12 @@ sudo PG_CONTAINER=troxe-postgres BACKUP_DIR=/var/backups/troxe-postgres \
 - no spam: a failing check re-alerts only every `ALERT_REPEAT_H` (default 6h),
   and recovering clears the state so the next failure alerts immediately
 - thresholds: `DISK_WARN=80 DISK_CRIT=90 BACKUP_MAX_AGE_H=26`
+- the probe watches **this** host; the API separately guards every node:
+  placement refuses new servers on a node at/above `DISK_BLOCK_PCT`
+  (default 90, `507 DISK_FULL`), and the reconciler logs
+  `node "<id>" disk is N% full …` once an hour from the first tick past the
+  threshold — the same measurement, taken on the node itself (`df` through a
+  read-only helper), so remote nodes are covered too
 
 ---
 

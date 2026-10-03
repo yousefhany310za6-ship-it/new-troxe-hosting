@@ -28,7 +28,8 @@
 | 12 | smoke للفرونت (25 صفحة) — **وجد white-screen حقيقي** | `b59be58` | 25/25 خضراء + إثبات عكسي بردّ الخطأ (`<Plus>` بلا import) |
 | 13 | Caddy على شبكة المضيف (كان 502 دائمًا لكل استدعاء API) | `55fc51a` | bridge=502 ← host=200؛ SPA fallback 200؛ `/api/*` proxy 200 |
 | 14 | فصل مفتاح توكن WS عن مفتاح JWT + اضمحلال إقفال الدخول | `8f0e72c` | توكن WS ≠ HMAC(JWT) وتذاكر السياقات لا تتبادل؛ 5 فشل → تراجع 20د → العدّاد يبدأ من 1 بلا قفل، والهجوم الفعلي داخل النافذة يقفل (429) |
-| 15 | سقوف بايتات: streams النسخ + السجلات (مع إصلاح crash حقيقي) | (هذا الـ commit) | نسخة 40MB/سقف 16MB → `413 ARCHIVE_TOO_LARGE` بلا ملف متبقي، ونسخة تحت السقف `201 ready`؛ سطر واحد 5MB → استجابة 4,194,337 حرف بالعلامة؛ وحدة `ulimit -f` مُقيسة = 512B؛ وحدات 5 خضراء |
+| 15 | سقوف بايتات: streams النسخ + السجلات (مع إصلاح crash حقيقي) | `900e7fb` | نسخة 40MB/سقف 16MB → `413 ARCHIVE_TOO_LARGE` بلا ملف متبقي، ونسخة تحت السقف `201 ready`؛ سطر واحد 5MB → استجابة 4,194,337 حرف بالعلامة؛ وحدة `ulimit -f` مُقيسة = 512B؛ وحدات 5 خضراء |
+| 16 | حصة قرص: حارس مكانية العقد + تنبيه القرص لكل عقدة | (هذا الـ commit) | `df` حيّ على العقدة = 20% / 45.7GB مطابق للمضيف؛ `DISK_BLOCK_PCT=1` → `507 DISK_FULL` بلا صف في DB؛ الافتراضي 90 → `201` يعود؛ سطر reconciler `node "local" disk is 20% full` |
 
 تصحيحات جانبية كشفها العمل نفسه: قراءة ملف ناقص أثناء الاستعادة كانت تُطلق `error` غير معالَج **وتسقط العملية كاملة** (أُصلحت + فحص سلامة `bytes === size`)، ومؤقّت الـ 30 دقيقة لكل stream كان يُبقي العملية حيّة بلا داعٍ (يُلغى الآن)، وقيمة `BACKUP_MAX_MB` تحت الحد الأدنى (16) أُسقطت الإقلاع برسالة واضحة — أي أن التحقق المانع للإعدادات يعمل فعلًا.
 
@@ -197,7 +198,7 @@ TLS مشفر بدون توثيق لـ Postgres المدارة — MITM في مس
 ## Production Readiness
 
 - Security: [x] إصلاح الـ 5 HIGH — [x] throttle للطرق المكلفة — [x] حدود WS/filenames — [x] لا أسرار في الريبو — [x] صفر ثغرات تبعيات باكند
-- Reliability: [x] إسقاط العملية عند rejection غير معالَج — [x] فهارس hot paths — [ ] disk quota أو مراقبة قرص — [x] إصلاح compose
+- Reliability: [x] إسقاط العملية عند rejection غير معالَج — [x] فهارس hot paths — [x] disk quota أو مراقبة قرص — [x] إصلاح compose
 - Performance: [x] حد `tail` وصفحات الأدمن — [ ] pool sizing مقابل reconciler — [x] تجمع 8-way
 - Observability: [x] `TRUST_PROXY` خلف Caddy — [x] request IDs + health + tick logs
 - Deployment: [x] تثبيت أساس Dockerfile — [x] توحيد PORT/healthcheck — [x] إصلاح bcrypt build — [x] node-setup (مفتاح/SAN/API_IP)

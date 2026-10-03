@@ -16,6 +16,36 @@ export interface HelperResult {
 /** Ceiling for a single logs read (tail bounds lines, not bytes). */
 const LOG_TEXT_MAX_BYTES = 4 * 1024 * 1024;
 
+/** Free/used space of the filesystem a node's Docker root lives on. */
+export interface DiskUsage {
+  totalBytes: number;
+  usedBytes: number;
+  freeBytes: number;
+  /** 0..100, as reported by df (validated) */
+  percent: number;
+}
+
+/**
+ * Parse ONE line of `df -P` (POSIX format, one filesystem per line):
+ *   Filesystem 1024-blocks Used Available Capacity Mounted
+ * Fields are read from the END because a device label may contain spaces.
+ * Pure and unit-tested — the disk guard must never misread a full disk.
+ */
+export function parseDfLine(line: string): DiskUsage | null {
+  const t = (line ?? '').trim().split(/\s+/);
+  if (t.length < 6) return null;
+  const capacity = Number.parseInt(t[t.length - 2], 10);
+  const avail = Number(t[t.length - 3]);
+  const used = Number(t[t.length - 4]);
+  const blocks = Number(t[t.length - 5]);
+  if (![avail, used, blocks].every((n) => Number.isFinite(n) && n >= 0) || blocks <= 0) return null;
+  const totalBytes = blocks * 1024;
+  const usedBytes = used * 1024;
+  const computed = Math.round((usedBytes / totalBytes) * 100);
+  const percent = Number.isFinite(capacity) && capacity >= 0 && capacity <= 100 ? capacity : computed;
+  return { totalBytes, usedBytes, freeBytes: avail * 1024, percent: Math.min(100, percent) };
+}
+
 export interface ContainerState {
   exists: boolean;
   status: string;
@@ -109,6 +139,8 @@ function withDeadline<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
 export class DockerService {
   private readonly log = new Logger(DockerService.name);
   private docker: Dockerode | null = null;
+  /** df snapshot per node (a helper run is expensive — reuse it for a minute) */
+  private readonly diskCache = new Map<string, { at: number; usage: DiskUsage }>();
   private unavailabilityLogged = false;
 
   constructor(private pool: NodePoolService) {
@@ -141,6 +173,49 @@ export class DockerService {
   async availableOn(nodeId = 'local'): Promise<boolean> {
     if (!nodeId || nodeId === 'local') return this.available;
     return this.pool.available(nodeId);
+  }
+
+  /**
+   * Disk usage of a node's filesystem (its Docker root) — measured ON the node
+   * by binding the node's `/` read-only into a helper: `df` on the API host
+   * would only ever describe the API host, and remote nodes have no agent.
+   * Cached for 60s; `null` means "could not measure" (callers fail open, and
+   * never block provisioning on a measurement failure).
+   */
+  async diskUsage(nodeId = 'local'): Promise<DiskUsage | null> {
+    const hit = this.diskCache.get(nodeId);
+    if (hit && Date.now() - hit.at < 60_000) return hit.usage;
+    if (!(await this.availableOn(nodeId).catch(() => false))) return null;
+    try {
+      await this.ensureImage(config.HELPER_IMAGE, 300_000, nodeId);
+      const res = await this.runHelper({
+        image: config.HELPER_IMAGE,
+        cmd: ['df -P /host | tail -1'],
+        // binds resolve on the DAEMON's host — this is the node's own `/`
+        binds: ['/:/host:ro'],
+        user: '0:0',
+        timeoutMs: 20_000,
+        memoryMb: 64,
+        captureLogs: true, // out is parsed — log-driver `none` yields ''
+        nodeId,
+      });
+      const usage = parseDfLine(res.out.trim().split('\n').pop() ?? '');
+      if (!usage) {
+        this.log.warn(`df on node "${nodeId}" returned no parseable line: ${res.out.slice(0, 120)}`);
+        return null;
+      }
+      this.diskCache.set(nodeId, { at: Date.now(), usage });
+      return usage;
+    } catch (e) {
+      this.log.warn(`disk usage on node "${nodeId}" unavailable: ${(e as Error).message.slice(0, 160)}`);
+      return null;
+    }
+  }
+
+  /** Drop a node's df snapshot (admin actions can change the picture). */
+  invalidateDiskCache(nodeId?: string) {
+    if (nodeId) this.diskCache.delete(nodeId);
+    else this.diskCache.clear();
   }
 
   private d(): Dockerode {

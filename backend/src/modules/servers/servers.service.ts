@@ -3,7 +3,7 @@ import { rm } from 'fs/promises';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { config } from '../../config/env';
 import { decryptEnv, encryptEnv, maskEnv } from '../../common/crypto';
-import { Err } from '../../common/errors';
+import { AppError, Err } from '../../common/errors';
 import { ReqCtx } from '../../common/request-context';
 import { DB, Db } from '../../db/db.module';
 import { plans, servers, serverEvents, users, type EnvVar, type Server } from '../../db/schema';
@@ -105,6 +105,45 @@ export class ServersService {
 
   // ---- create ---------------------------------------------------------------
 
+  /**
+   * Placement + host-disk guard. A node at/above DISK_BLOCK_PCT is never
+   * given new work: provisioning more data onto a nearly-full disk is how a
+   * full host turns into a dead host (every tenant's containers then fail to
+   * write). Auto-placement skips to the next node; an explicit admin pin
+   * fails loudly (507) instead of silently relocating the server. A failed
+   * measurement fails OPEN — provisioning must never break because `df` was
+   * unreachable (the per-server storage fence and the health probe still hold).
+   */
+  private async pickWithDiskGuard(preferred?: string): Promise<string> {
+    const skipped: string[] = [];
+    for (;;) {
+      let candidate: string;
+      try {
+        candidate = await this.nodes.pickNode(preferred, skipped);
+      } catch (e) {
+        if (skipped.length)
+          throw new AppError(
+            'DISK_FULL',
+            507,
+            `No node with free disk: ${skipped.join(', ')} all at or above ${config.DISK_BLOCK_PCT}%.`,
+          );
+        throw e;
+      }
+      const disk = await this.docker.diskUsage(candidate).catch(() => null);
+      if (!disk) return candidate; // unknown → fail open (diskUsage logged it)
+      if (disk.percent < config.DISK_BLOCK_PCT) return candidate;
+      if (preferred)
+        throw new AppError(
+          'DISK_FULL',
+          507,
+          `Node "${candidate}" is ${disk.percent}% full (limit ${config.DISK_BLOCK_PCT}%). Free space first.`,
+        );
+      skipped.push(candidate);
+      if (skipped.length >= 10)
+        throw new AppError('DISK_FULL', 507, `No node with free disk: ${skipped.join(', ')} are full.`);
+    }
+  }
+
   async create(ownerId: string, dto: CreateServerDto, ctx: ReqCtx, opts?: { nodeId?: string }) {
     // The plan comes from the account, never from the request body: otherwise
     // any client could claim "enterprise" and escalate its quotas (CVE-class).
@@ -112,7 +151,7 @@ export class ServersService {
     // may request a specific node (validated inside pickNode).
     const region = dto.region ?? config.REGIONS[0];
     if (!config.REGIONS.includes(region)) throw Err.invalid('REGION_UNSUPPORTED', `Allowed regions: ${config.REGIONS.join(', ')}`);
-    const nodeId = await this.nodes.pickNode(opts?.nodeId);
+    const nodeId = await this.pickWithDiskGuard(opts?.nodeId);
 
     const storedEnv = this.cleanEnv(dto.env);
     // egg defaults apply at RESOLVE time only — storage keeps exactly what

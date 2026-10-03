@@ -193,10 +193,11 @@ export class NodesService {
 
   /**
    * Placement: explicit node must exist, be enabled and undrained;
-   * otherwise least-loaded eligible node. Throws 503 when the fleet has
-   * no capacity (better than silently queueing on a dead node).
+   * otherwise least-loaded eligible node (minus `exclude`, so a caller can
+   * steer around a node it just measured as full). Throws 503 when the fleet
+   * has no capacity (better than silently queueing on a dead node).
    */
-  async pickNode(preferredId?: string): Promise<string> {
+  async pickNode(preferredId?: string, exclude: string[] = []): Promise<string> {
     if (preferredId) {
       const [n] = await this.db.select().from(nodes).where(eq(nodes.id, preferredId)).limit(1);
       if (!n) throw new NotFoundException('NODE_NOT_FOUND');
@@ -210,9 +211,10 @@ export class NodesService {
       .leftJoin(servers, eq(servers.nodeId, nodes.id))
       .where(and(eq(nodes.enabled, true), eq(nodes.drained, false)))
       .groupBy(nodes.id);
-    if (!rows.length) throw Err.unavailable('NO_CAPACITY', 'No enabled node available for new servers');
-    rows.sort((a, b) => a.n - b.n);
-    return rows[0].id;
+    const eligible = rows.filter((r) => !exclude.includes(r.id));
+    if (!eligible.length) throw Err.unavailable('NO_CAPACITY', 'No enabled node available for new servers');
+    eligible.sort((a, b) => a.n - b.n);
+    return eligible[0].id;
   }
 
   /** Supernet overlap guard: two nodes must never claim the same space. */

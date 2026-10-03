@@ -45,6 +45,9 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
   private busy = false;
   private tickCount = 0;
   private lastStorageCheck = new Map<string, number>();
+  /** disk: measurement cadence (10min) and warn throttle (hourly) per node */
+  private readonly lastDiskCheck = new Map<string, number>();
+  private readonly lastDiskWarn = new Map<string, number>();
   private lastPrune = 0;
   /** per-node liveness (a down daemon converges hardening on recovery) */
   private readonly nodeUp = new Map<string, boolean>();
@@ -101,6 +104,7 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
         this.nodeUp.set(n.id, true);
         this.tickCount++;
         const subset = byNode.get(n.id) ?? [];
+        await this.warnIfDiskFull(n.id);
         await this.syncStatuses(subset, n.id);
         // daemon restarts flush DOCKER-USER: converge local rules on recovery
         if (n.id === 'local' && (wasDown || this.tickCount % 5 === 0)) await this.syncHardening();
@@ -232,6 +236,27 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
         this.log.debug(`hardening sync ${row.id}: ${(e as Error).message}`);
       }
     }
+  }
+
+  /**
+   * Host-level disk guard. The fence below protects the node from a single
+   * tenant; this protects the node from ITSELF (backups, images, logs): the
+   * measurement is what the placement guard refuses new servers on, so the
+   * log line explains an otherwise mysterious DISK_FULL. One df helper per
+   * node per 10min, warned at most hourly.
+   */
+  private async warnIfDiskFull(nodeId: string): Promise<void> {
+    const now = Date.now();
+    if (now - (this.lastDiskCheck.get(nodeId) ?? 0) < 10 * 60 * 1000) return;
+    this.lastDiskCheck.set(nodeId, now);
+    const disk = await this.docker.diskUsage(nodeId).catch(() => null);
+    if (!disk || disk.percent < config.DISK_BLOCK_PCT) return;
+    if (now - (this.lastDiskWarn.get(nodeId) ?? 0) < 60 * 60 * 1000) return;
+    this.lastDiskWarn.set(nodeId, now);
+    this.log.warn(
+      `node "${nodeId}" disk is ${disk.percent}% full (${(disk.freeBytes / 1024 ** 3).toFixed(1)} GB free) — ` +
+        `placement refuses new servers above ${config.DISK_BLOCK_PCT}%`,
+    );
   }
 
   /**
