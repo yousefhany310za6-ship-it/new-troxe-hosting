@@ -16,6 +16,8 @@
  * `user` is a numeric uid/gid: every sandbox runs as an unprivileged user
  * even if a future image drops its own non-root account.
  */
+import type { Starter } from './starter';
+
 export type Runtime = 'Node.js' | 'Python' | 'Bun' | 'PHP';
 
 /** One selectable version of a runtime (egg-style `docker_images` entry). */
@@ -58,7 +60,41 @@ export interface RuntimeImage {
   env: Record<string, string>;
   /** fallback startup when the client did not provide one */
   defaultStartup: string;
+  /**
+   * File seeded into a volume that holds NO client files yet, so a brand-new
+   * server boots to `online` instead of `Process crashed` on an empty /data.
+   * Never written when anything else is present — the client's files win.
+   */
+  starter?: Starter;
 }
+
+const JS_STARTER = [
+  '// Troxe starter file - replace this with your bot.',
+  '// It is written only while the server has no files at all.',
+  "console.log('troxe starter: edit index.js, then restart your server.');",
+  'setInterval(() => {}, 1 << 30);',
+  '',
+].join('\n');
+
+const PY_STARTER = [
+  '# Troxe starter file - replace this with your bot.',
+  '# It is written only while the server has no files at all.',
+  'import time',
+  '',
+  "print('troxe starter: edit main.py, then restart your server.', flush=True)",
+  'while True:',
+  '    time.sleep(3600)',
+  '',
+].join('\n');
+
+const PHP_STARTER = [
+  '<?php',
+  '// Troxe starter file - replace this with your code.',
+  '// It is written only while the server has no files at all.',
+  'echo "troxe starter: edit index.php, then restart your server.\n";',
+  'while (true) { sleep(3600); }',
+  '',
+].join('\n');
 
 export const RUNTIME_IMAGES: Record<Runtime, RuntimeImage> = {
   'Node.js': {
@@ -91,6 +127,7 @@ export const RUNTIME_IMAGES: Record<Runtime, RuntimeImage> = {
       NPM_CONFIG_FUND: 'false',
       NPM_CONFIG_AUDIT: 'false',
     },
+    starter: { path: 'index.js', content: JS_STARTER },
     defaultStartup: 'node {{MAIN_FILE}} {{NODE_ARGS}}',
   },
   Python: {
@@ -123,6 +160,7 @@ export const RUNTIME_IMAGES: Record<Runtime, RuntimeImage> = {
       PIP_DISABLE_PIP_VERSION_CHECK: '1',
       PIP_NO_CACHE_DIR: '1',
     },
+    starter: { path: 'main.py', content: PY_STARTER },
     defaultStartup: 'python {{MAIN_FILE}} {{PY_ARGS}}',
   },
   Bun: {
@@ -144,6 +182,7 @@ export const RUNTIME_IMAGES: Record<Runtime, RuntimeImage> = {
     workdir: '/data',
     port: 3000,
     env: { HOME: '/data', NODE_ENV: 'production' },
+    starter: { path: 'index.js', content: JS_STARTER },
     defaultStartup: 'bun run {{MAIN_FILE}} {{BUN_ARGS}}',
   },
   PHP: {
@@ -165,6 +204,7 @@ export const RUNTIME_IMAGES: Record<Runtime, RuntimeImage> = {
     workdir: '/data',
     port: 8080,
     env: { HOME: '/data' },
+    starter: { path: 'index.php', content: PHP_STARTER },
     defaultStartup: 'php {{MAIN_FILE}} {{PHP_ARGS}}',
   },
 };

@@ -8,6 +8,7 @@ import { eq } from 'drizzle-orm';
 import { DockerService } from './docker.service';
 import { NetworkHardeningService } from './network-hardening.service';
 import { runtimeImage, type Runtime } from './images';
+import { starterSeed } from './starter';
 import { intToIp, ipToInt } from '../../nodes/nodes.service';
 import { buildSandboxConfig, resourceNames } from './sandbox';
 
@@ -246,7 +247,7 @@ export class ProvisionerService {
       // preparing WorkingDir (/data) at create time, so the helper must
       // guarantee ownership + a non-empty dir first (see chownVolume).
       await this.getOrCreateVolume(input.nodeId, names.volumeName, labels).then((v) => (created.volume = v));
-      await this.chownVolume(input.nodeId, names.volumeName, image);
+      await this.chownVolume(input.nodeId, names.volumeName, image, spec.starter);
 
       // 4. the sandbox container itself (replaces any previous one)
       await this.docker.removeByName(names.containerName, input.nodeId).catch(() => undefined);
@@ -380,15 +381,32 @@ export class ProvisionerService {
     return true;
   }
 
-  /** `chown -R 1000:1000 /data` through a network-less helper container. */
-  private async chownVolume(nodeId: string, volumeName: string, image: string): Promise<void> {
+  /**
+   * `chown -R 1000:1000 /data` through a network-less helper container — and
+   * seed the runtime's starter file when the volume holds NO client files at
+   * all. Without it a brand-new server runs `node index.js` against an empty
+   * /data and reports `Process crashed` until the client uploads something.
+   *
+   * The emptiness test runs on EVERY re-provision (create, reinstall — which
+   * wipes the volume first — and repair of a vanished container; same helper
+   * round trip as the chown): a volume with anything in it belongs to the
+   * client and is never written to, so uploads and rebuilds can't be clobbered.
+   */
+  private async chownVolume(
+    nodeId: string,
+    volumeName: string,
+    image: string,
+    starter?: { path: string; content: string },
+  ): Promise<void> {
+    const seed = starterSeed(starter);
+    if (starter && seed === ':') this.log.warn(`starter NOT seeded for path "${starter.path}" (empty content or invalid path)`);
     try {
       const res = await this.docker.runHelper({
         image,
         // .troxe-init must exist before the sandbox container is created:
         // dockerd resets an EMPTY volume dir to root:root 0755 while
         // preparing WorkingDir (/data), stripping the client's ownership.
-        cmd: ['touch /data/.troxe-init && chown -R 1000:1000 /data && chmod 750 /data'],
+        cmd: [`touch /data/.troxe-init && { ${seed}; } && chown -R 1000:1000 /data && chmod 750 /data`],
         binds: [`${volumeName}:/data`],
         user: '0:0',
         timeoutMs: 30_000,

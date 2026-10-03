@@ -8,6 +8,7 @@ import { testStreamByteCaps } from './streams.test';
 import { testParseDf } from './df.test';
 import { testHardeningEvaluation } from './hardening.test';
 import { testDaemonDecoding, testDaemonShapeGuards } from './daemon.test';
+import { testStarterSeeding } from './starter.test';
 
 const suites: Array<[string, () => void]> = [
   ['images (template/version/label/env)', testImages],
@@ -19,6 +20,7 @@ const suites: Array<[string, () => void]> = [
   ['hardening evaluation', testHardeningEvaluation],
   ['daemon decode (log cap + resync)', testDaemonDecoding],
   ['daemon shape guards', testDaemonShapeGuards],
+  ['starter seed (real sh)', testStarterSeeding],
 ];
 
 let failed = 0;
