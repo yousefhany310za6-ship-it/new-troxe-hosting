@@ -119,27 +119,42 @@ Zero-downtime for frontend; API restarts (~5s).
 
 ## Backup & Restore
 
-### Backup all data (Postgres + backup archives)
+Use the shipped scripts — they were proven end-to-end (dump → validate →
+restore round-trip). The one-liner previously documented here used a bare
+`alpine` image, which has **no `pg_dump`** and would have failed silently
+on the day you needed it.
+
+### Backup (scheduled)
 ```bash
-# One-liner
-docker run --rm -v troxe-pgdata:/pgdata -v troxe-backups:/backups -v $(pwd):/out alpine \
-  sh -c "pg_dump -U postgres -d troxe -h postgres > /out/db-$(date +%F).sql && tar czf /out/backups-$(date +%F).tar.gz /backups"
-```
+# one-off
+sudo PG_CONTAINER=troxe-postgres BACKUP_DIR=/var/backups/troxe-postgres \
+  RETAIN_DAYS=7 ./scripts/pg-backup.sh
 
-### Restore
+# daily 03:00 (root crontab)
+0 3 * * * PG_CONTAINER=troxe-postgres /opt/new-troxe-hosting/scripts/pg-backup.sh >>/var/log/troxe-pg-backup.log 2>&1
+```
+Dumps are `pg_dump -Fc` (compressed, restorable), written `0600`, the newest
+`RETAIN_DAYS` are kept, truncated/empty dumps are never published, and
+overlapping runs are refused via `flock`.
+
+> **Copy the dump off this host.** A backup that only lives on the machine it
+> backs up is not a backup — `rsync`/`rclone` it to another box or object
+> storage. `scripts/healthcheck.sh` alerts when dumps go stale.
+
+### Restore (disaster)
 ```bash
-# 1. Stop API
-docker compose stop api
-
-# 2. Restore Postgres
-cat db-2026-01-15.sql | docker exec -i troxe-postgres psql -U postgres -d troxe
-
-# 3. Restore backup archives
-tar xzf backups-2026-01-15.tar.gz -C /
-
-# 4. Start API
-docker compose start api
+sudo ./scripts/pg-restore.sh /var/backups/troxe-postgres/troxe-YYYYMMDD-HHMMSS.dump
 ```
+The script validates the archive inside the container (the host needs no pg
+client), takes a **pre-restore safety dump**, asks you to type the database
+name, stops the API so no writes land mid-restore, and restores with
+`--if-exists -c`. It does **not** restart the API: verify first, then
+`docker start troxe-api`. Schema migrations re-run on API boot, so the
+restored schema is re-checked automatically.
+
+> Client files (per-server sandboxes) and `troxe-backups` archives are Docker
+> volumes — back them up too:
+> `docker run --rm -v troxe-backups:/b -v $(pwd):/out alpine tar czf /out/backups-$(date +%F).tar.gz /b`
 
 ---
 
@@ -156,6 +171,27 @@ docker compose -f /opt/troxe-hosting/docker-compose.prod.yml logs -f api
 curl https://api.yourdomain.com/api/v1/health/ready
 # {"status":"ok","checks":[{"name":"postgres","ok":true},{"name":"docker","ok":true}]}
 ```
+
+### Health probe + alerting (do this — nobody reads logs at 3am)
+
+`scripts/healthcheck.sh` checks API readiness, a **real** Postgres query,
+disk %, backup freshness and container states, then alerts on failure:
+
+```bash
+# one-off
+sudo PG_CONTAINER=troxe-postgres BACKUP_DIR=/var/backups/troxe-postgres \
+  ALERT_WEBHOOK='https://discord.com/api/webhooks/...' ./scripts/healthcheck.sh
+
+# every 5 minutes (root crontab)
+*/5 * * * * PG_CONTAINER=troxe-postgres BACKUP_DIR=/var/backups/troxe-postgres ALERT_WEBHOOK='...' /opt/new-troxe-hosting/scripts/healthcheck.sh >>/var/log/troxe-health.log 2>&1
+```
+
+- exit codes: `0` healthy, `1` warning, `2` critical (usable by any monitor)
+- alert channels: `ALERT_WEBHOOK` (any JSON POST, Discord-compatible) **or**
+  `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`
+- no spam: a failing check re-alerts only every `ALERT_REPEAT_H` (default 6h),
+  and recovering clears the state so the next failure alerts immediately
+- thresholds: `DISK_WARN=80 DISK_CRIT=90 BACKUP_MAX_AGE_H=26`
 
 ---
 
