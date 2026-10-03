@@ -202,7 +202,7 @@ export class AdminService {
   async resetUserFailedLogins(userId: string, actorId: string, actorEmail?: string) {
     const [updated] = await this.db
       .update(users)
-      .set({ failedLogins: 0, lockedUntil: null })
+      .set({ failedLogins: 0, lockedUntil: null, failedSince: null })
       .where(eq(users.id, userId))
       .returning({ id: users.id });
     if (!updated) throw new NotFoundException('USER_NOT_FOUND');

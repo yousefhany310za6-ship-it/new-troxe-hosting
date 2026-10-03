@@ -15,9 +15,13 @@ export class WsTicketService {
   private readonly ttlSec = 30;
 
   constructor() {
+    // env.ts derives a purpose-separated key (HKDF from the access secret) —
+    // never the raw JWT signing bytes. Keyed as utf8 so any operator-supplied
+    // string keeps its full entropy (base64-decoding an arbitrary secret
+    // silently drops characters it cannot map).
     const raw = config.WS_TICKET_SECRET ?? config.JWT_ACCESS_SECRET;
     if (!raw) throw new Error('WS_TICKET_SECRET or JWT_ACCESS_SECRET must be set');
-    this.secret = Buffer.from(raw, 'base64');
+    this.secret = Buffer.from(raw, 'utf8');
   }
 
   /** Issue a short-lived WS ticket (HMAC-SHA256, base64url). */
@@ -54,7 +58,14 @@ export class WsTicketService {
   }
 
   private sign(data: string): string {
-    return crypto.createHmac('sha256', this.secret).update(data).digest('base64url');
+    // Domain separation: even if this key ever collided with another HMAC use
+    // (e.g. the JWT signing key), a signature produced in a different context
+    // can never validate as a WS ticket.
+    return crypto
+      .createHmac('sha256', this.secret)
+      .update('troxe/ws-ticket/v1 ')
+      .update(data)
+      .digest('base64url');
   }
 
   private timingSafeEqual(a: string, b: string): boolean {

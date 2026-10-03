@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { randomBytes } from 'crypto';
+import { hkdfSync, randomBytes } from 'crypto';
 import type { StringValue } from 'ms';
 
 /**
@@ -112,7 +112,14 @@ let ENV_KEY = need('ENV_ENCRYPTION_KEY', {
 });
 
 let WS_TICKET_SECRET = raw.WS_TICKET_SECRET?.trim();
-if (!WS_TICKET_SECRET) WS_TICKET_SECRET = ACCESS_SECRET ?? raw.JWT_ACCESS_SECRET?.trim();
+if (WS_TICKET_SECRET && WS_TICKET_SECRET.length < 32)
+  errors.push('WS_TICKET_SECRET must be at least 32 characters when set (omit it to derive one automatically).');
+// Purpose-separated key: HKDF from the access secret, so the WS-ticket HMAC
+// key is NEVER the same bytes as the access-token signing key (cross-protocol
+// signature reuse). Deterministic, so restarts do not invalidate tickets and
+// no extra secret has to be provisioned.
+if (!WS_TICKET_SECRET && ACCESS_SECRET)
+  WS_TICKET_SECRET = Buffer.from(hkdfSync('sha256', ACCESS_SECRET, 'troxe', 'ws-ticket/v1', 32)).toString('base64');
 if (!WS_TICKET_SECRET) WS_TICKET_SECRET = ephemeralSecret();
 
 if (IS_PROD) {
@@ -190,6 +197,8 @@ export interface AppConfig {
   readonly RATE_LIMIT_MAX: number;
   readonly AUTH_RATE_LIMIT_MAX: number;
   readonly LOCKOUT_THRESHOLD: number;
+  /** Failures older than this no longer count toward the lockout (seconds). */
+  readonly LOCKOUT_DECAY_SEC: number;
   readonly LOG_LEVEL: LogLevel;
 }
 
@@ -232,6 +241,7 @@ export const config: AppConfig = Object.freeze({
   RATE_LIMIT_MAX: num('RATE_LIMIT_MAX', 300, 10, 100000),
   AUTH_RATE_LIMIT_MAX: num('AUTH_RATE_LIMIT_MAX', 8, 3, 1000),
   LOCKOUT_THRESHOLD: num('LOCKOUT_THRESHOLD', 6, 3, 100),
+  LOCKOUT_DECAY_SEC: num('LOCKOUT_DECAY_SEC', 600, 60, 86_400),
 
   LOG_LEVEL: logLevel(raw.LOG_LEVEL),
 });

@@ -3,11 +3,13 @@
 import { testImages } from './images.test';
 import { testNet } from './net.test';
 import { testUuidPipe } from './uuid.test';
+import { testWsTicket } from './ws.test';
 
 const suites: Array<[string, () => void]> = [
   ['images (template/version/label/env)', testImages],
   ['nodes (cidr/ip math)', testNet],
   ['uuid pipe', testUuidPipe],
+  ['ws ticket (key separation)', testWsTicket],
 ];
 
 let failed = 0;

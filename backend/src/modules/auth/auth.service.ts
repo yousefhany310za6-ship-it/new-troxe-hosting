@@ -148,8 +148,11 @@ export class AuthService {
       throw Err.invalidCredentials();
     }
 
-    if (user.failedLogins || user.lockedUntil) {
-      await this.db.update(users).set({ failedLogins: 0, lockedUntil: null }).where(eq(users.id, user.id));
+    if (user.failedLogins || user.lockedUntil || user.failedSince) {
+      await this.db
+        .update(users)
+        .set({ failedLogins: 0, lockedUntil: null, failedSince: null })
+        .where(eq(users.id, user.id));
     }
 
     await this.recordLogin(user.id, ctx, 'success');
@@ -332,11 +335,21 @@ export class AuthService {
   }
 
   private async registerFailure(user: User): Promise<number> {
-    // atomic increment + RETURNING: concurrent failures cannot overwrite
-    // each other and dodge the lockout threshold (lost update).
+    // Decay-aware, fully atomic increment in ONE statement:
+    //  - failures older than LOCKOUT_DECAY_SEC restart the streak (count 1,
+    //    new streak start), so scattered typos never accumulate into a lock;
+    //  - a burst inside the window increments as before (lost-update safe:
+    //    concurrent failures cannot overwrite each other and dodge the
+    //    threshold), and streak start + counter always move together.
+    // All clock values are DB-side (`now()`), never mixed with the API clock.
+    const windowSec = Number(config.LOCKOUT_DECAY_SEC);
+    const stale = sql`(failed_since is null or failed_since < now() - interval '${sql.raw(String(windowSec))} second')`;
     const [updated] = await this.db
       .update(users)
-      .set({ failedLogins: sql`failed_logins + 1` })
+      .set({
+        failedSince: sql`case when ${stale} then now() else failed_since end`,
+        failedLogins: sql`case when ${stale} then 1 else failed_logins + 1 end`,
+      })
       .where(eq(users.id, user.id))
       .returning({ failedLogins: users.failedLogins, lockedUntil: users.lockedUntil });
     const count = updated?.failedLogins ?? user.failedLogins + 1;

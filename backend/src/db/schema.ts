@@ -29,6 +29,13 @@ export const users = pgTable('users', {
   // progressive account lockout
   failedLogins: integer('failed_logins').default(0).notNull(),
   lockedUntil: timestamp('locked_until'),
+  /**
+   * When the CURRENT failure streak began. Failures older than
+   * LOCKOUT_DECAY_SEC no longer count toward the threshold, so a handful of
+   * typos spread over weeks can never lock an account — while a real burst
+   * (all inside the window) still trips the lockout exactly as before.
+   */
+  failedSince: timestamp('failed_since'),
   passwordChangedAt: timestamp('password_changed_at').defaultNow().notNull(),
   /**
    * Access-token generation. Embedded as `v` in every access JWT and checked

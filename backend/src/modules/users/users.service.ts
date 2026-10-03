@@ -124,6 +124,7 @@ export class UsersService {
         passwordChangedAt: new Date(),
         failedLogins: 0,
         lockedUntil: null,
+        failedSince: null,
       })
       .where(eq(users.id, userId));
 
