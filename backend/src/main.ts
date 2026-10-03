@@ -3,8 +3,11 @@ import { NestFactory } from '@nestjs/core';
 import cookieParser from 'cookie-parser';
 import { json } from 'express';
 import helmet from 'helmet';
+import * as path from 'node:path';
+import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { AppModule } from './app.module';
 import { config } from './config/env';
+import { DB } from './db/db.module';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 
 /** Nest log levels at/above the configured LOG_LEVEL. */
@@ -77,6 +80,17 @@ async function bootstrap() {
 
   // correct client IPs for rate limiting / audit when behind a reverse proxy
   app.getHttpAdapter().getInstance().set('trust proxy', config.TRUST_PROXY);
+
+  // ---- schema migrations, applied on boot ---------------------------------
+  // drizzle-kit is a devDependency and the runtime image installs --omit=dev,
+  // so the old `npx drizzle-kit migrate` deploy step could never run there
+  // (and was `|| true`-swallowed): a fresh VPS used to boot "healthy" against
+  // an EMPTY database. The drizzle migrator itself ships with drizzle-orm,
+  // which IS a runtime dep — and `drizzle/` is copied into the image. Boot
+  // fails fast if this fails, so we never serve traffic from a stale schema.
+  const db = app.get(DB);
+  await migrate(db, { migrationsFolder: path.join(process.cwd(), 'drizzle') });
+  new Logger('Bootstrap').log('schema migrations up to date');
 
   app.enableShutdownHooks();
 

@@ -88,6 +88,9 @@ services:
       - "443:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # deploy.sh builds the frontend into HOST /var/www/html — without this
+      # mount the container's own empty /var/www/html is served (404 SPA).
+      - /var/www/html:/var/www/html:ro
       - caddy-data:/data
       - caddy-config:/config
     environment:

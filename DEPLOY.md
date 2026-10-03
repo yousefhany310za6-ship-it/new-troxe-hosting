@@ -13,8 +13,8 @@ That's it. The script:
 3. Generates **cryptographically secure secrets**
 4. Builds frontend + API images
 5. Starts: Postgres + API (host netns, NET_ADMIN) + Caddy (auto HTTPS)
-6. Runs migrations
-7. Health-checks everything
+6. Applies schema migrations on API boot (idempotent, fails the boot if broken)
+7. Verifies the schema + health-checks everything
 
 You get:
 - **Frontend**: `https://yourdomain.com`
@@ -166,7 +166,7 @@ curl https://api.yourdomain.com/api/v1/health/ready
 | `docker.sock` permission denied | `deploy.sh` maps socket GID via `group_add`. If manual: `usermod -aG docker $USER && newgrp docker` |
 | API health `docker: false` | Check Docker daemon running; API needs host netns + NET_ADMIN |
 | Caddy TLS fails | Ensure DNS A record propagated; ports 80/443 open on firewall |
-| Migration errors | `docker compose exec api npx drizzle-kit migrate` manually |
+| Migration errors | Migrations run on API boot — `docker compose logs api | grep -i migrat`; a failure exits the process. Never use `npx drizzle-kit migrate` in the container (drizzle-kit is a devDependency, absent from the image). |
 | Port 3300 in use | API uses host port 3300; ensure nothing else binds it |
 
 ---

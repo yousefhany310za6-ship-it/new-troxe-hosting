@@ -104,8 +104,8 @@ sed -i "s/admin@\${DOMAIN}/admin@$ROOT_DOMAIN/g" "$CADDYFILE"
 # ---------------------------------------------------------
 echo "🏗 Building frontend..."
 cd "$REPO_DIR"
-# Use node:22 to build (matches backend Dockerfile)
-docker run --rm -v "$PWD:/app" -w /app node:22-bookworm-slim \
+# Use the same digest-pinned base as backend/Dockerfile (audit-6)
+docker run --rm -v "$PWD:/app" -w /app node@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c \
   sh -c "npm ci && npm run build"
 
 # Copy built assets to where Caddy expects them
@@ -160,10 +160,29 @@ for i in {1..30}; do
 done
 
 # ---------------------------------------------------------
-# 9. Run DB migrations
+# 9. Verify schema (migrations run on API boot — see below)
 # ---------------------------------------------------------
-echo "🗄 Running database migrations..."
-docker compose -f docker-compose.prod.yml exec -T api npx drizzle-kit migrate || true
+echo "🗄 Verifying database schema..."
+# Migrations are applied by the API itself at boot (drizzle migrator ships
+# with drizzle-orm, a runtime dep). The previous
+# `exec api npx drizzle-kit migrate || true` could NEVER work: drizzle-kit
+# is a devDependency and the image is built with `npm ci --omit=dev`, so it
+# silently skipped — a fresh VPS came up "healthy" against an empty schema.
+# Here we assert the newest migration's table/column actually exists.
+for i in {1..15}; do
+  # newest migration (0008) only exists if the whole journal applied
+  if docker compose -f docker-compose.prod.yml exec -T postgres \
+      psql -U postgres -d troxe -tAc "select 1 from pg_indexes where indexname='servers_node_idx'" 2>/dev/null | grep -q 1; then
+    echo "✅ schema present (journal fully applied)"
+    break
+  fi
+  sleep 2
+  if [[ $i -eq 15 ]]; then
+    echo "❌ schema missing — API boot migrations did not run"
+    docker compose -f docker-compose.prod.yml logs api --tail=50
+    exit 1
+  fi
+done
 
 # ---------------------------------------------------------
 # 10. Final status
