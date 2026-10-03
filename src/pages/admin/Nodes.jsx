@@ -24,6 +24,8 @@ export default function AdminNodes() {
     const [showNew, setShowNew] = useState(false);
     const [form, setForm] = useState(blank);
     const [checking, setChecking] = useState({});
+    // last firewall report per node (`ok: null` = unreadable, NOT the same as drift)
+    const [fw, setFw] = useState({});
     const [editTls, setEditTls] = useState(null); // node id being rotated
 
     const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
@@ -76,12 +78,22 @@ export default function AdminNodes() {
                         key={n.id}
                         node={n}
                         checking={!!checking[n.id]}
+                        fw={fw[n.id]}
                         onCheck={async (check) => {
                             setChecking((c) => ({ ...c, [n.id]: true }));
                             try {
                                 const res = await check.mutateAsync();
-                                toast[res.ok ? 'success' : 'error'](
-                                    res.ok ? `${n.id} reachable (docker ${res.version ?? '?'})` : `Unreachable: ${res.error}`,
+                                setFw((c) => ({ ...c, [n.id]: res.firewall ?? null }));
+                                const f = res.firewall;
+                                let suffix = '';
+                                if (f) {
+                                    if (f.mode === 'none') suffix = ' · firewall off (HARDEN_NETWORK=0)';
+                                    else if (f.ok === true) suffix = ` · firewall ok (${f.found}/${f.expected} rules)`;
+                                    else if (f.ok === false) suffix = ` · FIREWALL DRIFT — ${f.missing.length}/${f.expected} rule(s) missing`;
+                                    else suffix = ' · firewall unreadable (that is not the same as drift)';
+                                }
+                                toast[f?.ok === false ? 'error' : res.ok ? 'success' : 'error'](
+                                    res.ok ? `${n.id} reachable (docker ${res.version ?? '?'})${suffix}` : `Unreachable: ${res.error}${suffix}`,
                                 );
                                 refetch();
                             } catch (e) { toast.error(e.message); }
@@ -150,7 +162,7 @@ export default function AdminNodes() {
     );
 }
 
-function NodeCard({ node, checking, onCheck, onRotate }) {
+function NodeCard({ node, checking, fw, onCheck, onRotate }) {
     const toast = useToast();
     const check = useAdminCheckNode(node.id);
     const update = useAdminUpdateNode(node.id);
@@ -207,6 +219,24 @@ function NodeCard({ node, checking, onCheck, onRotate }) {
                 <span>supernet: {node.subnetBase ?? '— (legacy)'}</span>
                 <span>servers: {node.serverCount ?? '—'}</span>
                 <span>last seen: {node.lastSeenAt ? new Date(node.lastSeenAt).toLocaleString() : 'never'}</span>
+                {fw && (
+                    <span
+                        className={cn(
+                            fw.ok === false && 'font-bold text-red-400',
+                            fw.ok === true && 'text-emerald-400',
+                            fw.ok === null && fw.mode !== 'none' && 'text-amber-400',
+                        )}
+                    >
+                        firewall:{' '}
+                        {fw.mode === 'none'
+                            ? 'off (HARDEN_NETWORK=0)'
+                            : fw.ok === true
+                                ? `ok · ${fw.found}/${fw.expected} rules`
+                                : fw.ok === false
+                                    ? `DRIFT · ${fw.missing.length}/${fw.expected} missing`
+                                    : 'unreadable (≠ drift)'}
+                    </span>
+                )}
             </div>
         </div>
     );
