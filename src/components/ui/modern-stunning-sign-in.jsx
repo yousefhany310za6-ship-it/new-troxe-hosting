@@ -42,8 +42,9 @@ function SignIn1({ className, onSignIn, onGoogleSignIn, onDiscordSignIn, brandNa
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState(false);
+  const [pending, setPending] = useState(false);
 
-  const handleSignIn = (e) => {
+  const handleSignIn = async (e) => {
     e?.preventDefault();
     if (!email || !password) {
       setError("Please enter both email and password.");
@@ -56,12 +57,21 @@ function SignIn1({ className, onSignIn, onGoogleSignIn, onDiscordSignIn, brandNa
       return;
     }
     setError("");
-    setSuccess(true);
-    if (onSignIn) {
-      onSignIn({ email, password });
+    setSuccess(false);
+    setPending(true);
+    try {
+      if (onSignIn) {
+        await onSignIn({ email, password });
+      }
+      setSuccess(true);
+      // Real auth — head to the dashboard after a beat so the success shows.
+      setTimeout(() => navigate("/dashboard"), 600);
+    } catch (err) {
+      setError(err?.message || "Sign in failed. Please try again.");
+      setSuccess(false);
+    } finally {
+      setPending(false);
     }
-    // Head to the dashboard after a beat so the success shows.
-    setTimeout(() => navigate("/dashboard"), 900);
   };
 
   const handleGoogle = () => {
@@ -133,13 +143,14 @@ function SignIn1({ className, onSignIn, onGoogleSignIn, onDiscordSignIn, brandNa
               </div>
             )}
             {success && !error && (
-              <div className="text-sm text-emerald-400">Sign in successful!</div>
+              <div className="text-sm text-emerald-400">Sign in successful! Redirecting…</div>
             )}
             <button
               type="submit"
-              className="w-full rounded-full bg-white px-5 py-4 text-base font-medium text-black shadow transition hover:bg-gray-200"
+              disabled={pending}
+              className="w-full rounded-full bg-white px-5 py-4 text-base font-medium text-black shadow transition hover:bg-gray-200 disabled:opacity-60"
             >
-              Sign in
+              {pending ? "Signing in…" : "Sign in"}
             </button>
           </div>
 

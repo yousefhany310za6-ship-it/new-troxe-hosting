@@ -11,6 +11,27 @@ const BASE = (import.meta.env.VITE_API_URL || '/api/v1').replace(/\/+$/, '');
 let accessToken = null;
 export const setAccessToken = (t) => { accessToken = t || null; };
 export const getAccessToken = () => accessToken;
+export const apiBase = () => BASE;
+
+/**
+ * Same-origin relative path only — mirrors the backend allowlist so a
+ * tampered `next` can never bounce the user (or a token-bearing URL) off-site.
+ */
+export function sanitizeNextPath(v, fallback = '/dashboard') {
+  if (typeof v !== 'string') return fallback;
+  const s = v.trim();
+  if (!s || s.length > 512) return fallback;
+  if (!s.startsWith('/')) return fallback;
+  if (s.startsWith('//')) return fallback;
+  if (/[\\\r\n\t]/.test(s)) return fallback;
+  return s;
+}
+
+/** Browser-navigation entry to an OAuth flow (the provider redirect needs a GET). */
+export function oauthStartUrl(provider, next) {
+  const n = sanitizeNextPath(next);
+  return `${BASE}/auth/oauth/${provider}/start?next=${encodeURIComponent(n)}`;
+}
 
 export class ApiError extends Error {
   constructor(status, code, message) {

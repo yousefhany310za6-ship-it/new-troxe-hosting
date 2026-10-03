@@ -155,6 +155,40 @@ if (IS_PROD && ALLOWED_ORIGINS.some((o) => o.startsWith('http://')))
 // --- Regions -----------------------------------------------------------------
 const REGIONS = (raw.REGIONS ?? 'fra-de').split(',').map((s) => s.trim()).filter(Boolean);
 
+// --- OAuth (Google + Discord) --------------------------------------------------
+// Each provider is enabled only when its full credential set is present.
+// In production a half-configured provider refuses to boot (fail closed);
+// in development a missing set simply disables that provider's buttons.
+const GOOGLE_CLIENT_ID = (raw.GOOGLE_CLIENT_ID ?? '').trim();
+const GOOGLE_CLIENT_SECRET = (raw.GOOGLE_CLIENT_SECRET ?? '').trim();
+const DISCORD_CLIENT_ID = (raw.DISCORD_CLIENT_ID ?? '').trim();
+const DISCORD_CLIENT_SECRET = (raw.DISCORD_CLIENT_SECRET ?? '').trim();
+const DISCORD_BOT_TOKEN = (raw.DISCORD_BOT_TOKEN ?? '').trim();
+const DISCORD_GUILD_ID = (raw.DISCORD_GUILD_ID ?? '').trim();
+const OAUTH_REDIRECT_BASE_URL = (raw.OAUTH_REDIRECT_BASE_URL ?? '').trim().replace(/\/+$/, '');
+
+const googleOAuth = !!(GOOGLE_CLIENT_ID || GOOGLE_CLIENT_SECRET);
+const discordOAuth = !!(DISCORD_CLIENT_ID || DISCORD_CLIENT_SECRET);
+const discordGuildJoin = !!(DISCORD_BOT_TOKEN || DISCORD_GUILD_ID);
+
+if (googleOAuth && (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET))
+  errors.push('GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must both be set (or both be empty to disable Google login).');
+if (discordOAuth && (!DISCORD_CLIENT_ID || !DISCORD_CLIENT_SECRET))
+  errors.push('DISCORD_CLIENT_ID and DISCORD_CLIENT_SECRET must both be set (or both be empty to disable Discord login).');
+if (discordGuildJoin && (!DISCORD_BOT_TOKEN || !DISCORD_GUILD_ID))
+  errors.push('DISCORD_BOT_TOKEN and DISCORD_GUILD_ID must both be set (or both be empty to disable guild auto-join).');
+if ((googleOAuth || discordOAuth) && !OAUTH_REDIRECT_BASE_URL)
+  errors.push('OAUTH_REDIRECT_BASE_URL is required when any OAuth provider is enabled (bare public API origin, e.g. https://api.example.com).');
+if (OAUTH_REDIRECT_BASE_URL && !/^https?:\/\/[^/]+$/.test(OAUTH_REDIRECT_BASE_URL))
+  errors.push('OAUTH_REDIRECT_BASE_URL must be a bare origin with no path (e.g. https://api.example.com).');
+
+// The browser landing page after the backend callback: must be one of the
+// CORS-allowed frontend origins, otherwise a misconfiguration could bounce
+// users (or tokens-in-URL, which we never put there) at an attacker origin.
+const OAUTH_FRONTEND_URL = (raw.OAUTH_FRONTEND_URL ?? ALLOWED_ORIGINS[0] ?? '').trim().replace(/\/+$/, '');
+if ((googleOAuth || discordOAuth) && !ALLOWED_ORIGINS.includes(OAUTH_FRONTEND_URL))
+  errors.push('OAUTH_FRONTEND_URL must be one of FRONTEND_URLS.');
+
 if (errors.length) {
   const body = ['Invalid environment configuration — refusing to start:', ...errors.map((e) => `  • ${e}`)].join('\n');
   throw new Error(body);
@@ -204,6 +238,17 @@ export interface AppConfig {
   /** Failures older than this no longer count toward the lockout (seconds). */
   readonly LOCKOUT_DECAY_SEC: number;
   readonly LOG_LEVEL: LogLevel;
+  readonly GOOGLE_CLIENT_ID: string;
+  readonly GOOGLE_CLIENT_SECRET: string;
+  readonly GOOGLE_ENABLED: boolean;
+  readonly DISCORD_CLIENT_ID: string;
+  readonly DISCORD_CLIENT_SECRET: string;
+  readonly DISCORD_ENABLED: boolean;
+  readonly DISCORD_BOT_TOKEN: string;
+  readonly DISCORD_GUILD_ID: string;
+  readonly DISCORD_GUILD_JOIN_ENABLED: boolean;
+  readonly OAUTH_REDIRECT_BASE_URL: string;
+  readonly OAUTH_FRONTEND_URL: string;
 }
 
 export const config: AppConfig = Object.freeze({
@@ -248,6 +293,18 @@ export const config: AppConfig = Object.freeze({
   AUTH_RATE_LIMIT_MAX: num('AUTH_RATE_LIMIT_MAX', 8, 3, 1000),
   LOCKOUT_THRESHOLD: num('LOCKOUT_THRESHOLD', 6, 3, 100),
   LOCKOUT_DECAY_SEC: num('LOCKOUT_DECAY_SEC', 600, 60, 86_400),
+
+  GOOGLE_CLIENT_ID,
+  GOOGLE_CLIENT_SECRET,
+  GOOGLE_ENABLED: googleOAuth && !!GOOGLE_CLIENT_ID && !!GOOGLE_CLIENT_SECRET,
+  DISCORD_CLIENT_ID,
+  DISCORD_CLIENT_SECRET,
+  DISCORD_ENABLED: discordOAuth && !!DISCORD_CLIENT_ID && !!DISCORD_CLIENT_SECRET,
+  DISCORD_BOT_TOKEN,
+  DISCORD_GUILD_ID,
+  DISCORD_GUILD_JOIN_ENABLED: discordGuildJoin && !!DISCORD_BOT_TOKEN && !!DISCORD_GUILD_ID,
+  OAUTH_REDIRECT_BASE_URL,
+  OAUTH_FRONTEND_URL,
 
   LOG_LEVEL: logLevel(raw.LOG_LEVEL),
 });

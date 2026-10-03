@@ -125,9 +125,11 @@ export class AuthService {
       throw Err.accountLocked(seconds);
     }
 
-    // always run a bcrypt comparison so unknown emails take the same time
-    const hash = user ? user.passwordHash : await this.dummyHash;
-    const ok = await this.checkPassword(dto.password, hash);
+    // always run a bcrypt comparison so unknown emails take the same time.
+    // OAuth-only accounts have a NULL hash: they can never pass a password
+    // check (the dummy comparison still runs to keep timing flat).
+    const hash = user?.passwordHash ?? (await this.dummyHash);
+    const ok = !!user?.passwordHash && (await this.checkPassword(dto.password, hash));
 
     if (!user || !ok) {
       if (user) {
@@ -161,6 +163,43 @@ export class AuthService {
       actorId: user.id,
       actorEmail: user.email,
       action: 'auth.login.success',
+      targetType: 'user',
+      targetId: user.id,
+      ip: ctx.ip,
+      userAgent: ctx.device,
+    });
+    return {
+      user: { id: user.id, name: user.name, email: user.email, role: user.role },
+      accessToken: issued.accessToken,
+      refreshToken: issued.refreshToken,
+      expiresAt: issued.expiresAt,
+    };
+  }
+
+  // ---- OAuth session issuance ----------------------------------------------
+
+  /**
+   * Open a full session for an already-verified OAuth identity. The provider
+   * did the authentication; this only mints our own tokens (same rotation
+   * family mechanics as password login) and records login history + audit.
+   * Callers must have verified the provider tokens server-side first.
+   */
+  async openSession(userId: string, ctx: ReqCtx, provider: 'google' | 'discord') {
+    const [user] = await this.db.select().from(users).where(eq(users.id, userId)).limit(1);
+    if (!user) throw Err.unauthorized('USER_GONE');
+
+    // a locked account stays locked no matter which door is used
+    if (user.lockedUntil && user.lockedUntil.getTime() > Date.now()) {
+      const seconds = Math.ceil((user.lockedUntil.getTime() - Date.now()) / 1000);
+      throw Err.accountLocked(seconds);
+    }
+
+    await this.recordLogin(user.id, ctx, 'success');
+    const issued = await this.newRefreshSession(user, ctx);
+    await this.audit.record({
+      actorId: user.id,
+      actorEmail: user.email,
+      action: `auth.oauth.${provider}.login`,
       targetType: 'user',
       targetId: user.id,
       ip: ctx.ip,

@@ -12,7 +12,8 @@
     "db:studio": "drizzle-kit studio",
     "db:seed": "ts-node --transpile-only src/db/seed.ts",
     "test:unit": "ts-node --transpile-only test-unit/run.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:unit": "DATABASE_URL=postgresql://test:test@localhost:5432/test node --experimental-strip-types --loader ./test/loader.mjs --test test/unit/oauth-helpers.test.ts test/unit/oauth-service.test.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.2.6",

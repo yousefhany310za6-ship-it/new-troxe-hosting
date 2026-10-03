@@ -43,6 +43,41 @@ export function useDeleteAccount() {
   return useMutation({ mutationFn: (data) => apiPost('/users/me', data) });
 }
 
+export function useSetPassword() {
+  return useMutation({ mutationFn: (data) => apiPost('/users/me/password-set', data) });
+}
+
+// OAuth linked accounts (Settings → Linked accounts)
+export function useOAuthStatus() {
+  return useQuery({ queryKey: ['auth', 'oauth'], queryFn: () => apiGet('/auth/oauth/status') });
+}
+
+export function useOAuthLinkStart() {
+  return useMutation({ mutationFn: (provider) => apiPost('/auth/oauth/link/start', { provider }) });
+}
+
+export function useOAuthLinkConfirm() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (linkToken) => apiPost('/auth/oauth/link/confirm', { linkToken }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['auth', 'oauth'] });
+      qc.invalidateQueries({ queryKey: keys.user() });
+    },
+  });
+}
+
+export function useOAuthUnlink() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (provider) => apiDelete(`/auth/oauth/${provider}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['auth', 'oauth'] });
+      qc.invalidateQueries({ queryKey: keys.user() });
+    },
+  });
+}
+
 // Servers
 export function useServers() {
   return useQuery({ queryKey: keys.servers(), queryFn: () => apiGet('/servers') });

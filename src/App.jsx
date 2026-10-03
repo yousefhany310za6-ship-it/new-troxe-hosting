@@ -10,6 +10,7 @@ import RequireAuth, { GuestOnly } from './components/guards.jsx';
 // Auth pages (and their `motion` dependency) stay out of the landing bundle.
 const SignIn = lazy(() => import('./pages/SignIn.jsx'));
 const SignUp = lazy(() => import('./pages/SignUp.jsx'));
+const OAuthCallback = lazy(() => import('./pages/OAuthCallback.jsx'));
 
 // Content pages are also split out so the landing page stays lean.
 const About = lazy(() => import('./pages/About.jsx'));
@@ -55,6 +56,8 @@ export default function App() {
                     <Route path="/signin" element={<GuestOnly><SignIn /></GuestOnly>} />
                     <Route path="/login" element={<GuestOnly><SignIn /></GuestOnly>} />
                     <Route path="/signup" element={<GuestOnly><SignUp /></GuestOnly>} />
+                    {/* OAuth landing: the backend 302s here after the provider round-trip */}
+                    <Route path="/oauth/callback" element={<OAuthCallback />} />
                     <Route path="/about" element={<About />} />
                     <Route path="/contact" element={<Contact />} />
                     <Route path="/terms" element={<Terms />} />

@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { AlertCircle, Eye, EyeOff, Lock, Mail, ShieldCheck, User } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 
@@ -53,10 +53,12 @@ function SignUp1({
   const [passwordFocused, setPasswordFocused] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState(false);
+  const [pending, setPending] = useState(false);
+  const navigate = useNavigate();
 
   const showStrength = passwordFocused || password.length > 0;
 
-  const handleSignUp = (e) => {
+  const handleSignUp = async (e) => {
     e?.preventDefault();
     if (!username.trim() || !email || !password || !confirmPassword) {
       setError("Please fill in all fields.");
@@ -84,9 +86,20 @@ function SignUp1({
       return;
     }
     setError("");
-    setSuccess(true);
-    if (onSignUp) {
-      onSignUp({ username: username.trim(), email, password });
+    setSuccess(false);
+    setPending(true);
+    try {
+      if (onSignUp) {
+        await onSignUp({ username: username.trim(), email, password });
+      }
+      setSuccess(true);
+      // Real auth — head to the dashboard so the session shows.
+      setTimeout(() => navigate("/dashboard"), 600);
+    } catch (err) {
+      setError(err?.message || "Sign up failed. Please try again.");
+      setSuccess(false);
+    } finally {
+      setPending(false);
     }
   };
 
@@ -212,13 +225,14 @@ function SignUp1({
               </div>
             )}
             {success && !error && (
-              <div className="text-sm text-emerald-400">Account created!</div>
+              <div className="text-sm text-emerald-400">Account created! Redirecting…</div>
             )}
             <button
               type="submit"
-              className="w-full rounded-full bg-white px-5 py-4 text-base font-medium text-black shadow transition hover:bg-gray-200"
+              disabled={pending}
+              className="w-full rounded-full bg-white px-5 py-4 text-base font-medium text-black shadow transition hover:bg-gray-200 disabled:opacity-60"
             >
-              Create account
+              {pending ? "Creating account…" : "Create account"}
             </button>
           </div>
 

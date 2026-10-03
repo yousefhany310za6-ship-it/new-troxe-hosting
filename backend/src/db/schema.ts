@@ -14,13 +14,19 @@ export const serverStatus = pgEnum('server_status', [
 export const serverRuntime = pgEnum('server_runtime', ['Node.js', 'Python', 'Bun', 'PHP']);
 export const backupType = pgEnum('backup_type', ['auto', 'manual']);
 export const backupStatus = pgEnum('backup_status', ['pending', 'ready', 'failed']);
+export const oauthProvider = pgEnum('oauth_provider', ['google', 'discord']);
 
 // ---- Users ------------------------------------------------------------------
 export const users = pgTable('users', {
   id: uuid('id').defaultRandom().primaryKey(),
   name: varchar('name', { length: 30 }).notNull(),
   email: varchar('email', { length: 255 }).notNull().unique(),
-  passwordHash: text('password_hash').notNull(),
+  /**
+   * Nullable: OAuth-only accounts have no password until the owner sets one
+   * via password-set. Every password check must treat NULL as "no password",
+   * never as an empty string (see UsersService / AuthService guards).
+   */
+  passwordHash: text('password_hash'),
   avatarUrl: text('avatar_url'),
   role: userRole('role').default('user').notNull(),
   /** Server-side plan assignment — the client can NEVER choose its plan.
@@ -49,6 +55,27 @@ export const users = pgTable('users', {
   notifyMarketing: boolean('notify_marketing').default(false).notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
+
+// ---- OAuth linked accounts (Google / Discord) ---------------------------------
+export const oauthAccounts = pgTable('oauth_accounts', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  provider: oauthProvider('provider').notNull(),
+  /** stable provider identifier: Google `sub`, Discord user id — never email */
+  providerUserId: varchar('provider_user_id', { length: 128 }).notNull(),
+  /** last snapshot from the provider (may be null — Discord emails can be) */
+  email: varchar('email', { length: 255 }),
+  emailVerified: boolean('email_verified').default(false).notNull(),
+  avatarUrl: text('avatar_url'),
+  /** Discord guild auto-join bookkeeping: set once the member is confirmed */
+  discordGuildJoinedAt: timestamp('discord_guild_joined_at'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (t) => [
+  // identity anchor: one provider account maps to exactly one user, and the
+  // unique index is what makes concurrent first-logins safe (23505 → re-read)
+  uniqueIndex('oauth_accounts_provider_uid_idx').on(t.provider, t.providerUserId),
+  index('oauth_accounts_user_idx').on(t.userId),
+]);
 
 // ---- Login history (Overview page / security telemetry) ---------------------
 export const sessions = pgTable('sessions', {
@@ -223,6 +250,7 @@ export const auditLogs = pgTable('audit_logs', {
 // ---- Types ------------------------------------------------------------------
 export type EnvVar = { k: string; v: string };
 export type User = typeof users.$inferSelect;
+export type OAuthAccount = typeof oauthAccounts.$inferSelect;
 export type Server = typeof servers.$inferSelect;
 export type Plan = typeof plans.$inferSelect;
 

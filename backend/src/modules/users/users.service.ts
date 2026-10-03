@@ -4,10 +4,11 @@ import { Err } from '../../common/errors';
 import { hashPassword, verifyPassword } from '../../common/password';
 import { DB, Db } from '../../db/db.module';
 import { auditLogs, users } from '../../db/schema';
+import { httpsUrlOk } from '../auth/oauth/oauth.helpers';
 import { AuditService } from '../audit/audit.module';
 import { AuthService } from '../auth/auth.service';
 import { ServersService } from '../servers/servers.service';
-import { UpdateNotificationsDto, UpdatePasswordDto, UpdateProfileDto, DeleteAccountDto } from './dto';
+import { UpdateNotificationsDto, UpdatePasswordDto, UpdateProfileDto, DeleteAccountDto, SetPasswordDto } from './dto';
 
 @Injectable()
 export class UsersService {
@@ -58,7 +59,9 @@ export class UsersService {
 
     // an email change re-points recovery: it must be confirmed with the
     // password (a stolen short-lived token alone cannot persist a hijack).
+    // OAuth-only accounts have no password — they must set one first.
     if (email !== existing.email) {
+      if (!existing.passwordHash) throw Err.invalid('PASSWORD_REQUIRED', 'Set a password before changing your email');
       if (!dto.current || !(await verifyPassword(dto.current, existing.passwordHash))) {
         await this.audit.record({
           actorId: userId,
@@ -75,9 +78,19 @@ export class UsersService {
       // role change does, so outstanding access JWTs (which carry the old
       // email claim) die instead of lingering up to TTL.
       const emailChanged = email !== existing.email;
+      const patch: { name: string; email: string; avatarUrl?: string | null } = { name: dto.name.trim(), email };
+      if (dto.avatarUrl !== undefined) {
+        if (dto.avatarUrl === '') {
+          patch.avatarUrl = null; // explicit clear
+        } else {
+          const ok = httpsUrlOk(dto.avatarUrl);
+          if (!ok) throw new BadRequestException('AVATAR_URL_INVALID');
+          patch.avatarUrl = ok;
+        }
+      }
       const [u] = await this.db
         .update(users)
-        .set(emailChanged ? { name: dto.name.trim(), email, tokenVersion: sql`token_version + 1` } : { name: dto.name.trim(), email })
+        .set(emailChanged ? { ...patch, tokenVersion: sql`token_version + 1` } : patch)
         .where(eq(users.id, userId))
         .returning();
       if (!u) throw Err.unauthorized('USER_GONE');
@@ -104,7 +117,18 @@ export class UsersService {
     if (dto.next !== dto.confirm) throw new BadRequestException('PASSWORDS_MISMATCH');
 
     const [u] = await this.db.select().from(users).where(eq(users.id, userId)).limit(1);
-    if (!u || !(await verifyPassword(dto.current, u.passwordHash))) {
+    if (!u?.passwordHash) {
+      await this.audit.record({
+        actorId: userId,
+        actorEmail: u?.email,
+        action: 'user.password.fail',
+        targetType: 'user',
+        targetId: userId,
+        ip: ctx.ip,
+      });
+      throw new BadRequestException('PASSWORD_NOT_SET');
+    }
+    if (!(await verifyPassword(dto.current, u.passwordHash))) {
       await this.audit.record({
         actorId: userId,
         actorEmail: u?.email,
@@ -143,6 +167,31 @@ export class UsersService {
     return { ok: true, revokedSessions: revoked };
   }
 
+  /**
+   * First password for OAuth-only accounts (passwordHash IS NULL). Requires a
+   * live authenticated session — that IS the proof of ownership here. Once
+   * set, the normal password flows (change, email change, delete) apply.
+   */
+  async setPassword(userId: string, dto: SetPasswordDto, ctx: { ip: string; userAgent?: string }) {
+    if (dto.next !== dto.confirm) throw new BadRequestException('PASSWORDS_MISMATCH');
+    const [u] = await this.db.select().from(users).where(eq(users.id, userId)).limit(1);
+    if (!u) throw Err.unauthorized('USER_GONE');
+    if (u.passwordHash) throw Err.conflict('PASSWORD_ALREADY_SET', 'A password is already set — use password change instead');
+    await this.db
+      .update(users)
+      .set({ passwordHash: await hashPassword(dto.next), passwordChangedAt: new Date() })
+      .where(eq(users.id, userId));
+    await this.audit.record({
+      actorId: userId,
+      actorEmail: u.email,
+      action: 'user.password.set',
+      targetType: 'user',
+      targetId: userId,
+      ip: ctx.ip,
+    });
+    return { ok: true };
+  }
+
   async updateNotifications(userId: string, dto: UpdateNotificationsDto) {
     const patch: Record<string, boolean> = {};
     if (dto.restarts !== undefined) patch.notifyRestarts = dto.restarts;
@@ -167,6 +216,7 @@ export class UsersService {
   async deleteAccount(userId: string, dto: DeleteAccountDto, ctx: { ip: string; userAgent?: string }) {
     const [u] = await this.db.select().from(users).where(eq(users.id, userId)).limit(1);
     if (!u) throw Err.unauthorized('USER_GONE');
+    if (!u.passwordHash) throw new BadRequestException('PASSWORD_NOT_SET');
     if (!(await verifyPassword(dto.current, u.passwordHash))) {
       await this.audit.record({
         actorId: userId,

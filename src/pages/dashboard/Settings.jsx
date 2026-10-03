@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 
 import { cn } from '@/lib/utils';
-import { apiGet, apiPatch, apiPost } from '@/lib/api.js';
+import { apiPatch, apiPost } from '@/lib/api.js';
 import { useAuth } from '@/context/AuthContext.jsx';
+import { useOAuthLinkConfirm, useOAuthLinkStart, useOAuthStatus, useOAuthUnlink, useSetPassword } from '@/hooks/useQueries.jsx';
 
 const inputClass =
     'w-full rounded-xl border border-hairline bg-white/10 px-5 py-3 text-[0.92rem] text-foreground placeholder-ink-muted transition focus:border-primary focus:ring-2 focus:ring-ring/40 focus:outline-none';
@@ -51,7 +53,15 @@ export default function Settings() {
     const { user, reloadUser } = useAuth();
     const [profile, setProfile] = useState({ name: '', email: '' });
     const [avatar, setAvatar] = useState(null);
+    const [avatarUrl, setAvatarUrl] = useState('');
     const fileRef = useRef(null);
+    const [searchParams, setSearchParams] = useSearchParams();
+    const oauth = useOAuthStatus();
+    const linkStart = useOAuthLinkStart();
+    const linkConfirm = useOAuthLinkConfirm();
+    const unlinkOAuth = useOAuthUnlink();
+    const setPassword = useSetPassword();
+    const [newPw, setNewPw] = useState({ next: '', confirm: '' });
     const [passwords, setPasswords] = useState({ current: '', next: '', confirm: '' });
     const [notif, setNotif] = useState({ restarts: true, invoices: true, marketing: false });
     const [msg, setMsg] = useState({ text: '', ok: true });
@@ -60,6 +70,7 @@ export default function Settings() {
     useEffect(() => {
         if (user) {
             setProfile({ name: user.name, email: user.email });
+            setAvatarUrl(user.avatarUrl || '');
             setNotif({
                 restarts: user.notifyRestarts ?? true,
                 invoices: user.notifyInvoices ?? true,
@@ -68,6 +79,25 @@ export default function Settings() {
             setLoading(false);
         }
     }, [user]);
+
+    // Returning from a provider link flow (?oauth_link=…&provider=…): confirm
+    // once under the live session, then drop the token from the URL.
+    useEffect(() => {
+        const token = searchParams.get('oauth_link');
+        const provider = searchParams.get('provider');
+        if (!token || !provider) return;
+        (async () => {
+            try {
+                await linkConfirm.mutateAsync(token);
+                setMsg({ text: `${provider} account linked.`, ok: true });
+            } catch (err) {
+                setMsg({ text: err.message, ok: false });
+            } finally {
+                setSearchParams({}, { replace: true });
+            }
+        })();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     const handleAvatar = (e) => {
         const file = e.target.files?.[0];
@@ -88,6 +118,7 @@ export default function Settings() {
     const removeAvatar = () => {
         if (avatar) URL.revokeObjectURL(avatar);
         setAvatar(null);
+        setAvatarUrl('');
         if (fileRef.current) fileRef.current.value = '';
         setMsg({ text: 'Avatar removed. Save profile to persist.', ok: true });
     };
@@ -98,8 +129,12 @@ export default function Settings() {
             setMsg({ text: 'Please enter a valid name and email.', ok: false });
             return;
         }
+        if (avatarUrl && !/^https:\/\/[^/\s]+(\/\S*)?$/.test(avatarUrl.trim())) {
+            setMsg({ text: 'Avatar URL must be a valid https:// link (or empty to clear).', ok: false });
+            return;
+        }
         try {
-            await apiPatch('/users/me', profile);
+            await apiPatch('/users/me', { ...profile, avatarUrl: avatarUrl.trim() });
             setMsg({ text: 'Profile saved.', ok: true });
             reloadUser();
         } catch (err) {
@@ -136,6 +171,37 @@ export default function Settings() {
             await apiPatch('/users/me/notifications', notif);
             setMsg({ text: 'Notifications updated.', ok: true });
             reloadUser();
+        } catch (err) {
+            setMsg({ text: err.message, ok: false });
+        }
+    };
+
+    const startLink = async (provider) => {
+        try {
+            const { url } = await linkStart.mutateAsync(provider);
+            window.location.assign(url);
+        } catch (err) {
+            setMsg({ text: err.message, ok: false });
+        }
+    };
+
+    const doUnlink = async (provider) => {
+        if (!window.confirm(`Unlink ${provider} from your account?`)) return;
+        try {
+            await unlinkOAuth.mutateAsync(provider);
+            setMsg({ text: `${provider} unlinked.`, ok: true });
+        } catch (err) {
+            setMsg({ text: err.message, ok: false });
+        }
+    };
+
+    const doSetPassword = async (e) => {
+        e.preventDefault();
+        try {
+            await setPassword.mutateAsync(newPw);
+            setMsg({ text: 'Password set. You can now sign in with email + password too.', ok: true });
+            setNewPw({ next: '', confirm: '' });
+            oauth.refetch();
         } catch (err) {
             setMsg({ text: err.message, ok: false });
         }
@@ -178,8 +244,8 @@ export default function Settings() {
             <Section title="Profile" subtitle="How you appear across Troxe Host.">
                 <div className="mb-6 flex items-center gap-4">
                     <div className="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-full bg-white/10 text-xl font-bold text-white">
-                        {avatar ? (
-                            <img src={avatar} alt="Profile photo" className="size-full object-cover" />
+                        {avatar || avatarUrl ? (
+                            <img src={avatar || avatarUrl} alt="Profile photo" className="size-full object-cover" />
                         ) : (
                             (profile.name.charAt(0) || 'U').toUpperCase()
                         )}
@@ -209,6 +275,21 @@ export default function Settings() {
                             </button>
                         )}
                     </div>
+                </div>
+                <div className="mb-4">
+                    <label className="flex flex-col gap-1.5 text-[0.85rem] font-semibold">
+                        Avatar image URL
+                        <input
+                            value={avatarUrl}
+                            onChange={(e) => setAvatarUrl(e.target.value)}
+                            placeholder="https://… (empty clears it)"
+                            inputMode="url"
+                            className={inputClass}
+                        />
+                    </label>
+                    <p className="mt-1 text-[0.8rem] text-ink-muted">
+                        Set once manually, it is never replaced by Google/Discord pictures again.
+                    </p>
                 </div>
                 <form onSubmit={saveProfile} className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
                     <label className="flex flex-col gap-1.5 text-[0.85rem] font-semibold">
@@ -276,6 +357,82 @@ export default function Settings() {
                         </button>
                     </div>
                 </form>
+            </Section>
+
+            <Section title="Sign-in methods" subtitle="Google and Discord live next to your password. Linking never merges accounts by email alone.">
+                {oauth.isLoading ? (
+                    <p className="text-[0.88rem] text-ink-muted">Loading…</p>
+                ) : (
+                    <div className="flex flex-col gap-3">
+                        {['google', 'discord'].map((p) => {
+                            const row = (oauth.data?.providers || []).find((r) => r.provider === p);
+                            const label = p === 'google' ? 'Google' : 'Discord';
+                            return (
+                                <div key={p} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-hairline px-4 py-3">
+                                    <div>
+                                        <p className="text-[0.92rem] font-semibold capitalize">{label}</p>
+                                        <p className="text-[0.8rem] text-ink-muted">
+                                            {row
+                                                ? `Linked${row.email ? ` as ${row.email}` : ''}${p === 'discord' ? (row.guildJoined ? ' · in our Discord server' : ' · not in our server yet') : ''}`
+                                                : 'Not linked'}
+                                        </p>
+                                    </div>
+                                    {row ? (
+                                        <button
+                                            type="button"
+                                            onClick={() => doUnlink(p)}
+                                            disabled={unlinkOAuth.isPending}
+                                            className="rounded-full border border-hairline px-5 py-2 text-[0.83rem] font-bold text-ink-secondary transition hover:border-hairline-hover hover:text-foreground disabled:opacity-60"
+                                        >
+                                            Unlink
+                                        </button>
+                                    ) : (
+                                        <button
+                                            type="button"
+                                            onClick={() => startLink(p)}
+                                            disabled={linkStart.isPending}
+                                            className="rounded-full bg-white px-5 py-2 text-[0.83rem] font-bold text-black transition hover:bg-gray-200 disabled:opacity-60"
+                                        >
+                                            Link {label}
+                                        </button>
+                                    )}
+                                </div>
+                            );
+                        })}
+                    </div>
+                )}
+                {oauth.data && !oauth.data.hasPassword && (
+                    <form onSubmit={doSetPassword} className="mt-5 grid grid-cols-2 gap-4 max-md:grid-cols-1">
+                        <p className="col-span-2 text-[0.85rem] text-ink-secondary max-md:col-span-1">
+                            You signed up with a provider and have no password yet — set one to enable email + password sign-in.
+                        </p>
+                        <input
+                            type="password"
+                            placeholder="New password"
+                            autoComplete="new-password"
+                            value={newPw.next}
+                            onChange={(e) => setNewPw({ ...newPw, next: e.target.value })}
+                            className={inputClass}
+                        />
+                        <input
+                            type="password"
+                            placeholder="Confirm new password"
+                            autoComplete="new-password"
+                            value={newPw.confirm}
+                            onChange={(e) => setNewPw({ ...newPw, confirm: e.target.value })}
+                            className={inputClass}
+                        />
+                        <div className="col-span-2 max-md:col-span-1">
+                            <button
+                                type="submit"
+                                disabled={setPassword.isPending}
+                                className="rounded-full bg-white px-6 py-2.5 text-sm font-bold text-black transition hover:bg-gray-200 disabled:opacity-60"
+                            >
+                                Set password
+                            </button>
+                        </div>
+                    </form>
+                )}
             </Section>
 
             <Section title="Notifications" subtitle="Choose what lands in your inbox.">

@@ -4,7 +4,7 @@ import type { Request } from 'express';
 import { ctxOf } from '../../common/request-context';
 import { CurrentUser } from '../auth/current-user';
 import { JwtAuthGuard, type ReqUser } from '../auth/jwt.guard';
-import { UpdateNotificationsDto, UpdatePasswordDto, UpdateProfileDto, DeleteAccountDto } from './dto';
+import { UpdateNotificationsDto, UpdatePasswordDto, UpdateProfileDto, DeleteAccountDto, SetPasswordDto } from './dto';
 import { UsersService } from './users.service';
 
 /** Routes → /api/v1/users/me ... */
@@ -34,6 +34,12 @@ export class UsersController {
   password(@CurrentUser() u: ReqUser, @Body() dto: UpdatePasswordDto, @Req() req: Request) {
     const ctx = ctxOf(req);
     return this.usersSvc.updatePassword(u.sub, dto, { ip: ctx.ip, userAgent: ctx.device });
+  }
+
+  @Post('me/password-set')
+  setPassword(@CurrentUser() u: ReqUser, @Body() dto: SetPasswordDto, @Req() req: Request) {
+    const ctx = ctxOf(req);
+    return this.usersSvc.setPassword(u.sub, dto, { ip: ctx.ip, userAgent: ctx.device });
   }
 
   @Patch('me/notifications')
