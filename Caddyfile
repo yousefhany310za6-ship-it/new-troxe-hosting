@@ -23,6 +23,9 @@
 }
 
 # ---- API reverse proxy ----
+# NOTE: the API runs with `network_mode: host`, so compose MUST put Caddy on
+# the host netns too — otherwise this 127.0.0.1 is Caddy's own loopback and
+# every API call returns 502. See docker-compose.prod.yml (caddy service).
 api.{DOMAIN} {
     reverse_proxy http://127.0.0.1:3300 {
         header_up Host {host}

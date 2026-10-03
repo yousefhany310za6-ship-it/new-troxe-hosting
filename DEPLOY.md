@@ -99,8 +99,8 @@ sudo ./deploy.sh api.yourdomain.com yourdomain.com
 ```
 
 - **API** runs in **host network namespace** (`network_mode: host`) with `NET_ADMIN` — required for iptables hardening (DOCKER-USER/INPUT chains).
-- **Postgres** isolated in internal bridge network.
-- **Caddy** terminates TLS, reverse-proxies `/api/*` to API, serves static frontend.
+- **Caddy also runs in the host netns** (mandatory): the Caddyfile proxies to `127.0.0.1:3300`, which is only the API when Caddy shares the host's loopback — on a bridge network it is Caddy's *own* loopback and every API call returns 502 (verified both ways). It binds 80/443 directly and mounts the host's `/var/www/html` read-only.
+- **Postgres** isolated in the internal bridge network, publishing loopback-only `127.0.0.1:5432` so the host-netns API reaches it via `DATABASE_URL` (never on LAN interfaces).
 - **Backups** persisted in `troxe-backups` volume.
 
 ---
