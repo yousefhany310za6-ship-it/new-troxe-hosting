@@ -61,7 +61,9 @@ export class NodePoolService {
       if (String(pong) !== 'OK') return { ok: false, error: `unexpected ping: ${String(pong).slice(0, 80)}` };
       const info = await d.version().catch(() => null);
       await this.db.update(nodes).set({ lastSeenAt: new Date() }).where(eq(nodes.id, nodeId)).catch(() => undefined);
-      return { ok: true, version: info?.Version };
+      // bounded: the version string is echoed back to the admin UI verbatim
+      const version = typeof info?.Version === 'string' ? info.Version.slice(0, 40) : undefined;
+      return { ok: true, version };
     } catch (e) {
       return { ok: false, error: (e as Error).message.slice(0, 200) };
     }

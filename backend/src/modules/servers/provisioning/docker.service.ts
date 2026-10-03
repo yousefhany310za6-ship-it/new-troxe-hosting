@@ -15,6 +15,22 @@ export interface HelperResult {
 
 /** Ceiling for a single logs read (tail bounds lines, not bytes). */
 const LOG_TEXT_MAX_BYTES = 4 * 1024 * 1024;
+/**
+ * Raw frame stream kept before decoding. `tail` bounds the line COUNT, so a
+ * daemon (or a rogue node) can hand back an arbitrarily large buffer — cap the
+ * bytes FIRST, then decode, so the 4MB text ceiling below is never reached by
+ * materialising 400MB of frames.
+ */
+const LOG_RAW_MAX_BYTES = 8 * 1024 * 1024;
+
+/** Finite number from a daemon field: NaN/Infinity never reach a response. */
+export const finiteNum = (v: unknown): number => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+};
+
+/** Daemon-provided strings are unbounded: bound whatever we store or send. */
+export const boundedStr = (v: unknown, max: number): string => (typeof v === 'string' ? v.slice(0, max) : '');
 
 /** Free/used space of the filesystem a node's Docker root lives on. */
 export interface DiskUsage {
@@ -81,18 +97,36 @@ export interface ShellHandle {
 const isStatus = (e: unknown, code: number) => (e as { statusCode?: number })?.statusCode === code;
 
 /** Docker frames logs as `type(1) | zero(3) | len(4 BE) | payload`. */
-function decodeDockerLogs(buf: Buffer): string {
+export function decodeDockerLogs(buf: Buffer): string {
   const chunks: string[] = [];
   let offset = 0;
   while (offset + 8 <= buf.length) {
     const len = buf.readUInt32BE(offset + 4);
     const start = offset + 8;
     const end = start + len;
-    if (end > buf.length) break;
+    // plausible header: stream byte 0..3, three zero bytes, non-zero length
+    // that fits inside the buffer
+    const ok =
+      len > 0 && buf[offset] <= 3 && buf[offset + 1] === 0 && buf[offset + 2] === 0 && buf[offset + 3] === 0 && end <= buf.length;
+    if (!ok) {
+      if (chunks.length) break; // strict once frames are flowing — no mid-stream jumps
+      offset++; // head may be a TAIL slice (raw bytes capped above): resync
+      continue;
+    }
     chunks.push(buf.subarray(start, end).toString('utf8'));
     offset = end;
   }
   return chunks.length ? chunks.join('') : buf.toString('utf8');
+}
+
+/**
+ * Cap-then-decode. Keeps the LAST `LOG_RAW_MAX_BYTES` of the frame stream so
+ * a normal short log is byte-identical while a hostile/huge one cannot make
+ * the API materialise it whole.
+ */
+export function decodeLogsBounded(raw: unknown): string {
+  const buf = Buffer.isBuffer(raw) ? raw : Buffer.from((raw ?? '') as ArrayBuffer);
+  return decodeDockerLogs(buf.length > LOG_RAW_MAX_BYTES ? buf.subarray(buf.length - LOG_RAW_MAX_BYTES) : buf);
 }
 
 function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
@@ -375,7 +409,11 @@ export class DockerService {
     if (!d) return null;
     try {
       const info: any = await withTimeout(d.getNetwork(name).inspect(), 10_000, 'network inspect');
-      return { id: info?.Id ?? name, subnet: info?.IPAM?.Config?.[0]?.Subnet ?? '' };
+      const subnet = boundedStr(info?.IPAM?.Config?.[0]?.Subnet, 64);
+      // a CIDR shape only: this string is stored in the row and later passed
+      // as an iptables argument — junk from a rogue node is treated as
+      // "subnet unknown" (hardening skipped + logged), never as a rule
+      return { id: boundedStr(info?.Id, 64) || name, subnet: /^[0-9a-fA-F:.]{3,45}\/\d{1,3}$/.test(subnet) ? subnet : '' };
     } catch (e) {
       if (isStatus(e, 404)) return null;
       throw e;
@@ -443,15 +481,17 @@ export class DockerService {
     try {
       const info: any = await withTimeout(d.getContainer(id).inspect(), 10_000, 'container inspect');
       const state = info?.State ?? {};
+      // shape + bounds: a daemon is untrusted input — status/error/startedAt
+      // are strings we store in `lastError` and broadcast to the owner
       return {
         exists: true,
-        status: state.Status ?? 'unknown',
+        status: boundedStr(state.Status, 32) || 'unknown',
         running: !!state.Running,
-        exitCode: state.ExitCode ?? 0,
+        exitCode: Math.trunc(finiteNum(state.ExitCode)),
         oomKilled: !!state.OOMKilled,
-        error: state.Error ?? '',
-        restartCount: state.RestartCount ?? 0,
-        startedAt: state.StartedAt ?? '',
+        error: boundedStr(state.Error, 500),
+        restartCount: Math.max(0, Math.trunc(finiteNum(state.RestartCount))),
+        startedAt: boundedStr(state.StartedAt, 40),
       };
     } catch (e) {
       if (isStatus(e, 404)) return null;
@@ -464,16 +504,18 @@ export class DockerService {
     if (!d) return null;
     try {
       const s: any = await withTimeout(d.getContainer(id).stats({ stream: false }), 10_000, 'container stats');
-      const cpuDelta = (s?.cpu_stats?.cpu_usage?.total_usage ?? 0) - (s?.precpu_stats?.cpu_usage?.total_usage ?? 0);
-      const sysDelta = (s?.cpu_stats?.system_cpu_usage ?? 0) - (s?.precpu_stats?.system_cpu_usage ?? 0);
-      const cpus = s?.cpu_stats?.online_cpus ?? 1;
+      // every field below comes from the node: coerce to finite numbers so a
+      // malformed/rogue payload yields 0 instead of NaN/Infinity in JSON
+      const cpuDelta = finiteNum(s?.cpu_stats?.cpu_usage?.total_usage) - finiteNum(s?.precpu_stats?.cpu_usage?.total_usage);
+      const sysDelta = finiteNum(s?.cpu_stats?.system_cpu_usage) - finiteNum(s?.precpu_stats?.system_cpu_usage);
+      const cpus = Math.max(1, finiteNum(s?.cpu_stats?.online_cpus) || 1);
       const cpuPercent = sysDelta > 0 ? Math.round((cpuDelta / sysDelta) * cpus * 1000) / 10 : 0;
       const mem = s?.memory_stats ?? {};
-      const cache = mem?.stats?.cache ?? 0;
+      const cache = finiteNum(mem?.stats?.cache);
       return {
-        cpuPercent,
-        memBytes: Math.max(0, (mem.usage ?? 0) - cache),
-        memLimitBytes: mem.limit ?? 0,
+        cpuPercent: cpuPercent > 0 ? cpuPercent : 0,
+        memBytes: Math.max(0, finiteNum(mem.usage) - cache),
+        memLimitBytes: Math.max(0, finiteNum(mem.limit)),
         netRxBytes: sumNet(s?.networks, 'rx_bytes'),
         netTxBytes: sumNet(s?.networks, 'tx_bytes'),
       };
@@ -492,7 +534,7 @@ export class DockerService {
         10_000,
         'container logs',
       );
-      const text = decodeDockerLogs(Buffer.isBuffer(buf) ? buf : Buffer.from(buf as unknown as ArrayBuffer));
+      const text = decodeLogsBounded(buf);
       // hard ceiling: `tail` bounds the line COUNT, not bytes — a single line
       // can be huge, so a client can never pull an unbounded payload (also
       // caps what a rogue node can make us materialise in memory).
@@ -572,7 +614,7 @@ export class DockerService {
       const logs: any = opts.captureLogs
         ? await container.logs({ stdout: true, stderr: true, tail: 500 }).catch(() => Buffer.alloc(0))
         : Buffer.alloc(0);
-      const out = logs ? decodeDockerLogs(Buffer.isBuffer(logs) ? logs : Buffer.from(logs)) : '';
+      const out = logs ? decodeLogsBounded(logs) : '';
       return { code: res?.StatusCode ?? 1, out };
     } finally {
       if (container) await container.remove({ force: true }).catch(() => undefined);
@@ -817,8 +859,8 @@ export class DockerService {
 }
 
 function sumNet(nets: Record<string, { rx_bytes?: number; tx_bytes?: number }> | undefined, key: 'rx_bytes' | 'tx_bytes') {
-  if (!nets) return 0;
-  return Object.values(nets).reduce((acc, n) => acc + (n?.[key] ?? 0), 0);
+  if (!nets || typeof nets !== 'object') return 0;
+  return Object.values(nets).reduce((acc, n) => acc + finiteNum((n ?? {})[key]), 0);
 }
 
 /** Small helper so callers can map daemon failures to app errors. */

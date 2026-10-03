@@ -22,6 +22,18 @@ const MAX_PER_USER = 3;
 // >600 input frames in 10s = paste-loop/flood, not a human
 const FLOOD_WINDOW_MS = 10_000;
 const FLOOD_MAX = 600;
+/**
+ * OUTPUT side of an exec. The bytes come from the daemon and are forwarded
+ * into socket.io, which queues per client — a rogue node (or `yes`) streaming
+ * forever grows API memory while the client is slow. Bound both dimensions:
+ * no single WS frame above 64KB (base64 => ~87KB), and no more than 4MB in
+ * any rolling second. 3 consecutive over-windows closes the session — the
+ * exit reason reaches the client, and a legitimate `cat` burst is under the
+ * ceiling for one second at a time.
+ */
+const OUT_CHUNK_MAX = 64 * 1024;
+const OUT_BPS_MAX = 4 * 1024 * 1024;
+const OUT_FLOOD_WINDOWS = 3;
 
 interface ExecSession {
   userId: string;
@@ -31,6 +43,11 @@ interface ExecSession {
   maxTimer: NodeJS.Timeout;
   inputAt: number[];
   closed: boolean;
+  /** output budget: rolling 1s window + consecutive over-window counter */
+  outWindowAt: number;
+  outWindowBytes: number;
+  outOver: number;
+  outPaused: boolean;
 }
 
 /**
@@ -42,8 +59,9 @@ interface ExecSession {
  * cgroup limits still apply.
  *
  * Guardrails: owner-only, container must be online, 1 session per server,
- * 3 per user, 4KB input cap, 5min idle kill, 30min max life, open/close
- * audited (content is never logged — keystrokes may carry secrets).
+ * 3 per user, 4KB input cap, 4MB/s + 64KB-frame output budget (paused, then
+ * closed after 3s of sustained flood), 5min idle kill, 30min max life,
+ * open/close audited (content is never logged — keystrokes may carry secrets).
  */
 @WebSocketGateway({
   namespace: '/ws/exec',
@@ -98,14 +116,43 @@ export class ExecGateway implements OnGatewayConnection, OnGatewayDisconnect {
         maxTimer: setTimeout(() => this.close(client, 'max-time'), MAX_SESSION_MS),
         inputAt: [],
         closed: false,
+        outWindowAt: Date.now(),
+        outWindowBytes: 0,
+        outOver: 0,
+        outPaused: false,
       };
       this.bySocket.set(client.id, session);
       this.byServer.set(serverId, client.id);
       this.perUser.set(userId, (this.perUser.get(userId) ?? 0) + 1);
 
       shell.onOutput((data) => {
+        if (session.closed) return;
         this.touch(session);
-        client.emit('output', { data: data.toString('base64') });
+        const now = Date.now();
+        if (now - session.outWindowAt >= 1000) {
+          session.outOver = session.outWindowBytes > OUT_BPS_MAX ? session.outOver + 1 : 0;
+          session.outWindowAt = now;
+          session.outWindowBytes = 0;
+          if (session.outOver >= OUT_FLOOD_WINDOWS) {
+            this.close(client, 'output-flood');
+            return;
+          }
+          session.outPaused = false;
+        }
+        session.outWindowBytes += data.length;
+        if (session.outWindowBytes > OUT_BPS_MAX) {
+          // pause, don't queue: keeping only one marker line per window
+          if (!session.outPaused) {
+            session.outPaused = true;
+            client.emit('output', {
+              data: Buffer.from(`\r\n[troxe] paused: console exceeded ${OUT_BPS_MAX / 1024 / 1024} MB/s\r\n`).toString('base64'),
+            });
+          }
+          return;
+        }
+        // slice into bounded WS frames (base64 of 64KB ≈ 87KB per message)
+        for (let i = 0; i < data.length; i += OUT_CHUNK_MAX)
+          client.emit('output', { data: data.subarray(i, i + OUT_CHUNK_MAX).toString('base64') });
       });
       shell.onEnd((code) => this.close(client, 'exit', code));
 

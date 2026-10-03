@@ -7,6 +7,7 @@ import { testWsTicket } from './ws.test';
 import { testStreamByteCaps } from './streams.test';
 import { testParseDf } from './df.test';
 import { testHardeningEvaluation } from './hardening.test';
+import { testDaemonDecoding, testDaemonShapeGuards } from './daemon.test';
 
 const suites: Array<[string, () => void]> = [
   ['images (template/version/label/env)', testImages],
@@ -16,6 +17,8 @@ const suites: Array<[string, () => void]> = [
   ['stream byte caps', testStreamByteCaps],
   ['df parse (disk guard)', testParseDf],
   ['hardening evaluation', testHardeningEvaluation],
+  ['daemon decode (log cap + resync)', testDaemonDecoding],
+  ['daemon shape guards', testDaemonShapeGuards],
 ];
 
 let failed = 0;
