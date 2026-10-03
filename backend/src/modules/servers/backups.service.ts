@@ -127,7 +127,7 @@ export class BackupsService {
     const id = randomUUID();
     const dir = this.dirFor(ownerId, serverId);
     const file = this.fileFor(ownerId, serverId, id);
-    const [row] = await this.db.transaction(async (tx) => {
+    const { row, usedBytes } = await this.db.transaction(async (tx) => {
       const locked = await tx.select({ id: servers.id }).from(servers).where(eq(servers.id, serverId)).for('update').limit(1);
       if (!locked.length) throw Err.notFound('SERVER_NOT_FOUND');
 
@@ -142,12 +142,13 @@ export class BackupsService {
       const ownedIds = (await tx.select({ id: servers.id }).from(servers).where(eq(servers.ownerId, ownerId))).map(
         (r) => r.id,
       );
+      let usedBytes = 0;
       if (ownedIds.length) {
         const sizes = await tx
           .select({ sizeBytes: backups.sizeBytes })
           .from(backups)
           .where(inArray(backups.serverId, ownedIds));
-        const usedBytes = sizes.reduce((acc, r) => acc + (r.sizeBytes ?? 0), 0);
+        usedBytes = sizes.reduce((acc, r) => acc + (r.sizeBytes ?? 0), 0);
         if (usedBytes >= config.BACKUP_MAX_TOTAL_MB * 1024 * 1024)
           throw Err.quota(
             'QUOTA_BACKUP_SPACE',
@@ -155,7 +156,7 @@ export class BackupsService {
           );
       }
 
-      return tx
+      const inserted = await tx
         .insert(backups)
         .values({
           id,
@@ -166,8 +167,18 @@ export class BackupsService {
           type: opts.type ?? 'manual',
         } as never)
         .returning();
+      return { row: inserted[0], usedBytes };
     });
     await mkdir(dir, { recursive: true, mode: 0o700 });
+
+    // single-archive ceiling — never more than what is left of the owner's
+    // total quota. Both backup paths enforce it WHILE writing (ulimit in the
+    // helper / a byte guard on the getArchive stream), so one oversized
+    // volume can never fill the API host's disk mid-backup.
+    const archiveCapBytes = Math.max(
+      1,
+      (Math.min(config.BACKUP_MAX_MB, config.BACKUP_MAX_TOTAL_MB) - usedBytes / (1024 * 1024)) * 1024 * 1024,
+    );
 
     try {
       // local: tar straight into the archive dir via a host bind (fast path,
@@ -175,9 +186,28 @@ export class BackupsService {
       // stream the volume tar to the API host instead.
       if (server.nodeId === 'local') {
         await this.docker.ensureImage(config.HELPER_IMAGE, 300_000, server.nodeId);
+        // `ulimit -f` is measured in 512-byte blocks in the helper's /bin/sh
+        // (verified against the pinned image), so the archive physically
+        // cannot grow past the ceiling: tar dies with SIGXFSZ (153) / EFBIG
+        // and we surface that as ARCHIVE_TOO_LARGE instead of a generic error.
+        const limitBytes = Math.max(512, Math.floor(archiveCapBytes / 512) * 512);
+        const blocks = limitBytes / 512;
+        const tarCmd =
+          `ulimit -f ${blocks} || exit 9\n` +
+          `tar -czf /backup/${id}.tar.gz -C /data . 2>/tmp/err\n` +
+          `rc=$?\n` +
+          `if [ $rc -ne 0 ]; then\n` +
+          `  cat /tmp/err >&2\n` +
+          `  sz=$(stat -c %s /backup/${id}.tar.gz 2>/dev/null || echo 0)\n` +
+          `  if [ $rc -eq 153 ] || grep -q "File too large" /tmp/err || [ "$sz" -ge ${limitBytes} ]; then\n` +
+          `    echo ARCHIVE_TOO_LARGE >&2\n` +
+          `    exit 413\n` +
+          `  fi\n` +
+          `  exit $rc\n` +
+          `fi`;
         const res = await this.docker.runHelper({
           image: config.HELPER_IMAGE,
-          cmd: [`tar -czf /backup/${id}.tar.gz -C /data . 2>/tmp/err || { cat /tmp/err >&2; exit 1; }`],
+          cmd: [tarCmd],
           binds: [`${server.volumeName}:/data:ro`, `${dir}:/backup`],
           user: '0:0',
           timeoutMs: 120_000,
@@ -185,10 +215,18 @@ export class BackupsService {
           captureLogs: true, // failure diagnostics come from out
           nodeId: server.nodeId,
         });
-        if (res.code !== 0) throw new Error(res.out.slice(0, 300) || `tar exited ${res.code}`);
+        if (res.code !== 0) {
+          if (res.out.includes('ARCHIVE_TOO_LARGE'))
+            throw new AppError(
+              'ARCHIVE_TOO_LARGE',
+              413,
+              `This backup exceeds the ${config.BACKUP_MAX_MB} MB archive limit. Free space on the server first.`,
+            );
+          throw new Error(res.out.slice(0, 300) || `tar exited ${res.code}`);
+        }
       } else {
         if (!server.volumeName) throw new AppError('BACKUP_FAILED', 502, 'Backup failed');
-        await this.docker.streamVolumeToHost(server.volumeName, `${file}.streaming`, server.nodeId);
+        await this.docker.streamVolumeToHost(server.volumeName, `${file}.streaming`, server.nodeId, archiveCapBytes);
         // normalize: getArchive yields a plain tar; recompress to the .tar.gz
         // shape the rest of the pipeline (restore/download) expects.
         await gzipFile(`${file}.streaming`, file);
@@ -212,6 +250,10 @@ export class BackupsService {
       this.log.warn(`backup ${id} for server ${serverId} failed: ${message}`);
       await this.db.update(backups).set({ status: 'failed', error: 'Backup failed' }).where(eq(backups.id, id));
       await rm(file, { force: true }).catch(() => undefined);
+      await rm(`${file}.streaming`, { force: true }).catch(() => undefined);
+      // quota/cap failures are actionable — keep their code instead of
+      // collapsing everything into a generic 502
+      if (e instanceof AppError) throw e;
       throw new AppError('BACKUP_FAILED', 502, 'Backup failed');
     }
   }
@@ -286,6 +328,18 @@ export class BackupsService {
       if (used !== null && used + (row.sizeBytes ?? 0) > cap)
         throw Err.quota('QUOTA_STORAGE', 'Not enough storage headroom to unpack this backup. Free space or upgrade.');
 
+      // defense in depth: an archive bigger than the current ceiling is
+      // refused before a single byte moves (covers archives created before a
+      // lowered cap, or a tampered file in BACKUP_DIR) — and before we stop
+      // the container, so a refusal never leaves the server offline.
+      const archiveBytes = (await stat(row.storageKey).catch(() => ({ size: 0 }))).size;
+      if (archiveBytes > config.BACKUP_MAX_MB * 1024 * 1024)
+        throw new AppError(
+          'ARCHIVE_TOO_LARGE',
+          413,
+          `This archive is larger than the ${config.BACKUP_MAX_MB} MB restore limit.`,
+        );
+
       if (server.containerId) await this.docker.stop(server.containerId, 15, server.nodeId);
 
       // local: untar with the archive dir bind-mounted (fast path). remote:
@@ -322,7 +376,12 @@ export class BackupsService {
       } else {
         try {
           if (!server.volumeName) throw new AppError('RESTORE_FAILED', 502, 'Restore failed');
-          await this.docker.streamHostToVolume(row.storageKey, server.volumeName, server.nodeId);
+          await this.docker.streamHostToVolume(
+            row.storageKey,
+            server.volumeName,
+            server.nodeId,
+            config.BACKUP_MAX_MB * 1024 * 1024,
+          );
         } catch (e) {
           await this.serversSvc.setStatus(serverId, { status: 'error', lastError: 'Restore failed — data may be partial' });
           this.log.warn(`restore ${backupId} for server ${serverId} failed: ${(e as Error).message.slice(0, 300)}`);

@@ -18,6 +18,20 @@
 
 ملاحظات تدقيق مضادة (false positives المرفوضة أثناء التنفيذ): `tail` مثبّت أصلًا في الخدمة؛ `PG_SSL_REJECT_UNAUTHORIZED` الافتراضي آمن فعلًا (الاسم معكوس — أُعيدت تسميته لـ `PG_SSL_VERIFY`)؛ bcrypt تُحمَّل مع `--ignore-scripts` (prebuilds) — الفحص الجديد يمنع الانحدار بدل إصلاح عطل حي.
 
+## ملحق الإصلاح (2) — ما بعد الـ Top 8 — STATUS: FIXED ✅ (2026-10-03)
+
+| # | البند | الـ commit | الإثبات |
+|---|---|---|---|
+| 9 | صلاحيات متأخرة: activity للعميل، جدولة auto-backup، retention يسبق الإنشاء | `b549238` | feed + paging، حدود `retain` 400s، التقليم الحيّ إلى 1 |
+| 10 | حواجز النشر: ترحيلات عند الإقلاع + SPA تُقدَّم + بناء مثبّت بـ digest | `d3305f7` | API على DB صفر-جداول أنشأ 9 جداول + فهرس 0008؛ idempotent على DB حقيقي |
+| 11 | sonar: فحص صحة تنبيهي + إصلاح وثائق النسخ الاحتياطي الميتة | `d0eac7a` | API/PG/قرص/حداثة النسخ/حالة الحاويات؛ تنبيه + كتم 6h مع تعافي |
+| 12 | smoke للفرونت (25 صفحة) — **وجد white-screen حقيقي** | `b59be58` | 25/25 خضراء + إثبات عكسي بردّ الخطأ (`<Plus>` بلا import) |
+| 13 | Caddy على شبكة المضيف (كان 502 دائمًا لكل استدعاء API) | `55fc51a` | bridge=502 ← host=200؛ SPA fallback 200؛ `/api/*` proxy 200 |
+| 14 | فصل مفتاح توكن WS عن مفتاح JWT + اضمحلال إقفال الدخول | `8f0e72c` | توكن WS ≠ HMAC(JWT) وتذاكر السياقات لا تتبادل؛ 5 فشل → تراجع 20د → العدّاد يبدأ من 1 بلا قفل، والهجوم الفعلي داخل النافذة يقفل (429) |
+| 15 | سقوف بايتات: streams النسخ + السجلات (مع إصلاح crash حقيقي) | (هذا الـ commit) | نسخة 40MB/سقف 16MB → `413 ARCHIVE_TOO_LARGE` بلا ملف متبقي، ونسخة تحت السقف `201 ready`؛ سطر واحد 5MB → استجابة 4,194,337 حرف بالعلامة؛ وحدة `ulimit -f` مُقيسة = 512B؛ وحدات 5 خضراء |
+
+تصحيحات جانبية كشفها العمل نفسه: قراءة ملف ناقص أثناء الاستعادة كانت تُطلق `error` غير معالَج **وتسقط العملية كاملة** (أُصلحت + فحص سلامة `bytes === size`)، ومؤقّت الـ 30 دقيقة لكل stream كان يُبقي العملية حيّة بلا داعٍ (يُلغى الآن)، وقيمة `BACKUP_MAX_MB` تحت الحد الأدنى (16) أُسقطت الإقلاع برسالة واضحة — أي أن التحقق المانع للإعدادات يعمل فعلًا.
+
 ## Executive Summary
 
 المشروع تحسّن جذريًا منذ تدقيق 2026-09-29: العزل متقارب، الإبطال فوري، والمسارات المدمرة محمية. **لا يوجد أي ثغرة CRITICAL مؤكدة** (لا RCE، لا تجاوز مصادقة، لا استيلاء حسابات). لكن ظهرت **5 مشاكل HIGH حقيقية** — أخطرها: WS realtime يسرب حالة سيرفرات الآخرين لأي مستخدم، وملف الـ compose للإنتاج **مكسور architecturally** (الـ API لن يصل لقاعدة البيانات)، وزر Sign out لا يبطل الجلسة فعليًا، وصفحة Settings معطلة بخطأ runtime، والأدمن المُخفَّض يحتفظ بصلاحياته حتى انتهاء التوكن. الباقي بنود MEDIUM/LOW مشروعة، أغلبها صلابة إنتاج (throttling، indexes، deploy) وليست اختراقات.
@@ -182,12 +196,12 @@ TLS مشفر بدون توثيق لـ Postgres المدارة — MITM في مس
 
 ## Production Readiness
 
-- Security: [ ] إصلاح الـ 5 HIGH — [ ] throttle للطرق المكلفة — [ ] حدود WS/filenames — [x] لا أسرار في الريبو — [x] صفر ثغرات تبعيات باكند
-- Reliability: [ ] إسقاط العملية عند rejection غير معالَج — [ ] فهارس hot paths — [ ] disk quota أو مراقبة قرص — [ ] إصلاح compose
-- Performance: [ ] حد `tail` وصفحات الأدمن — [ ] pool sizing مقابل reconciler — [x] تجمع 8-way
-- Observability: [ ] `TRUST_PROXY` خلف Caddy — [x] request IDs + health + tick logs
-- Deployment: [ ] تثبيت أساس Dockerfile — [ ] توحيد PORT/healthcheck — [ ] إصلاح bcrypt build — [ ] node-setup (مفتاح/SAN/API_IP)
-- Testing: [x] smoke renders للفرونت (25 صفحة) — [x] unit للمنطق الخالص — [x] تكاملية 88
+- Security: [x] إصلاح الـ 5 HIGH — [x] throttle للطرق المكلفة — [x] حدود WS/filenames — [x] لا أسرار في الريبو — [x] صفر ثغرات تبعيات باكند
+- Reliability: [x] إسقاط العملية عند rejection غير معالَج — [x] فهارس hot paths — [ ] disk quota أو مراقبة قرص — [x] إصلاح compose
+- Performance: [x] حد `tail` وصفحات الأدمن — [ ] pool sizing مقابل reconciler — [x] تجمع 8-way
+- Observability: [x] `TRUST_PROXY` خلف Caddy — [x] request IDs + health + tick logs
+- Deployment: [x] تثبيت أساس Dockerfile — [x] توحيد PORT/healthcheck — [x] إصلاح bcrypt build — [x] node-setup (مفتاح/SAN/API_IP)
+- Testing: [x] smoke renders للفرونت (25 صفحة) — [x] unit للمنطق الخالص (5 مجموعات) — [x] تكاملية 88
 
 ## Attack Surface Map
 

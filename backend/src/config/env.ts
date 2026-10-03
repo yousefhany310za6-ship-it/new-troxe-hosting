@@ -193,6 +193,8 @@ export interface AppConfig {
   readonly CONTAINER_PIDS_LIMIT: number;
   readonly BACKUP_DIR: string;
   readonly BACKUP_MAX_TOTAL_MB: number;
+  /** Hard ceiling for a SINGLE archive (stream/tar is aborted past it). */
+  readonly BACKUP_MAX_MB: number;
   readonly RATE_LIMIT_WINDOW_MS: number;
   readonly RATE_LIMIT_MAX: number;
   readonly AUTH_RATE_LIMIT_MAX: number;
@@ -236,6 +238,7 @@ export const config: AppConfig = Object.freeze({
 
   BACKUP_DIR: raw.BACKUP_DIR ?? './data/backups',
   BACKUP_MAX_TOTAL_MB: num('BACKUP_MAX_TOTAL_MB', 2048, 16, 1024 * 1024),
+  BACKUP_MAX_MB: num('BACKUP_MAX_MB', 2048, 16, 1024 * 1024),
 
   RATE_LIMIT_WINDOW_MS: num('RATE_LIMIT_WINDOW_MS', 60000, 1000, 3600000),
   RATE_LIMIT_MAX: num('RATE_LIMIT_MAX', 300, 10, 100000),

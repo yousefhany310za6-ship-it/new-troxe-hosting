@@ -4,12 +4,14 @@ import { testImages } from './images.test';
 import { testNet } from './net.test';
 import { testUuidPipe } from './uuid.test';
 import { testWsTicket } from './ws.test';
+import { testStreamByteCaps } from './streams.test';
 
 const suites: Array<[string, () => void]> = [
   ['images (template/version/label/env)', testImages],
   ['nodes (cidr/ip math)', testNet],
   ['uuid pipe', testUuidPipe],
   ['ws ticket (key separation)', testWsTicket],
+  ['stream byte caps', testStreamByteCaps],
 ];
 
 let failed = 0;

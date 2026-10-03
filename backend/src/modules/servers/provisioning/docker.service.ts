@@ -1,7 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import Dockerode, { Container, ContainerCreateOptions } from 'dockerode';
 import { createReadStream, createWriteStream } from 'fs';
-import { PassThrough } from 'stream';
+import { rm, stat } from 'fs/promises';
+import { PassThrough, Transform } from 'stream';
 import { pipeline } from 'stream/promises';
 import { config } from '../../../config/env';
 import { NodePoolService } from '../../nodes/node-pool.service';
@@ -11,6 +12,9 @@ export interface HelperResult {
   code: number;
   out: string;
 }
+
+/** Ceiling for a single logs read (tail bounds lines, not bytes). */
+const LOG_TEXT_MAX_BYTES = 4 * 1024 * 1024;
 
 export interface ContainerState {
   exists: boolean;
@@ -74,6 +78,23 @@ function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
         reject(e);
       },
     );
+  });
+}
+
+/**
+ * Absolute deadline for a bulk stream. Same contract as `withTimeout`, but the
+ * message is prose and the timer is always cleared — otherwise every backup
+ * leaves a 30-minute timer behind (thousands in a busy process, and a test
+ * runner that never exits).
+ */
+function withDeadline<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  let t: NodeJS.Timeout | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    t = setTimeout(() => reject(new Error(`${what} timed out after ${Math.round(ms / 60_000)}m`)), ms);
+    t.unref?.();
+  });
+  return Promise.race([p, deadline]).finally(() => {
+    if (t) clearTimeout(t);
   });
 }
 
@@ -350,7 +371,13 @@ export class DockerService {
         10_000,
         'container logs',
       );
-      return decodeDockerLogs(Buffer.isBuffer(buf) ? buf : Buffer.from(buf as unknown as ArrayBuffer));
+      const text = decodeDockerLogs(Buffer.isBuffer(buf) ? buf : Buffer.from(buf as unknown as ArrayBuffer));
+      // hard ceiling: `tail` bounds the line COUNT, not bytes — a single line
+      // can be huge, so a client can never pull an unbounded payload (also
+      // caps what a rogue node can make us materialise in memory).
+      if (text.length > LOG_TEXT_MAX_BYTES)
+        return '…[log truncated to the last 4MB]\n' + text.slice(-LOG_TEXT_MAX_BYTES);
+      return text;
     } catch (e) {
       if (isStatus(e, 404)) return '';
       throw e;
@@ -434,7 +461,7 @@ export class DockerService {
    * for remote nodes). Uses getArchive through a short-lived holder +
    * a timeout-free stream client; guarded by a 30min watchdog.
    */
-  async streamVolumeToHost(volumeName: string, destPath: string, nodeId = 'local'): Promise<number> {
+  async streamVolumeToHost(volumeName: string, destPath: string, nodeId = 'local', maxBytes?: number): Promise<number> {
     const d = await this.pool.client(nodeId);
     await this.ensureImage(config.HELPER_IMAGE, 300_000, nodeId);
     let container: Container | null = null;
@@ -463,7 +490,7 @@ export class DockerService {
       // '/data/.' (not '/data'): members come out relative (a.txt), not
       // prefixed (data/a.txt) — same layout as the local tar flow.
       const stream = (await container.getArchive({ path: '/data/.' })) as unknown as NodeJS.ReadableStream;
-      const bytes = await this.pipeToHost(stream, destPath);
+      const bytes = await this.pipeToHost(stream, destPath, maxBytes);
       return bytes;
     } finally {
       if (container) await container.remove({ force: true }).catch(() => undefined);
@@ -474,7 +501,7 @@ export class DockerService {
    * Stream a host tarball into a volume (reverse of the above). The daemon
    * extracts (and decompresses) the archive — verified against engine 28.
    */
-  async streamHostToVolume(srcPath: string, volumeName: string, nodeId = 'local'): Promise<void> {
+  async streamHostToVolume(srcPath: string, volumeName: string, nodeId = 'local', maxBytes?: number): Promise<void> {
     const d = await this.pool.client(nodeId);
     await this.ensureImage(config.HELPER_IMAGE, 300_000, nodeId);
     let container: Container | null = null;
@@ -500,37 +527,69 @@ export class DockerService {
         },
       } as any);
       await withTimeout(container.start(), 15_000, 'stream holder start');
-      await this.pipeToVolume(srcPath, container, '/data');
+      await this.pipeToVolume(srcPath, container, '/data', maxBytes);
     } finally {
       if (container) await container.remove({ force: true }).catch(() => undefined);
     }
   }
 
-  /** Pump a daemon stream to a host file, with a 30min absolute watchdog. */
-  private async pipeToHost(stream: NodeJS.ReadableStream, destPath: string): Promise<number> {
+  /**
+   * Pump a daemon stream to a host file, with a 30min absolute watchdog and a
+   * HARD byte ceiling: a rogue/oversized volume can never fill the host disk.
+   * On breach the source is destroyed, the partial file is removed and the
+   * call fails with ARCHIVE_TOO_LARGE.
+   */
+  private async pipeToHost(stream: NodeJS.ReadableStream, destPath: string, maxBytes?: number): Promise<number> {
+    const cap = maxBytes && maxBytes > 0 ? maxBytes : Number.POSITIVE_INFINITY;
     let bytes = 0;
-    stream.on('data', (c: Buffer) => {
-      bytes += c.length;
+    const guard = new Transform({
+      transform(c: Buffer, _enc, cb) {
+        bytes += c.length;
+        if (bytes > cap) {
+          cb(new AppError('ARCHIVE_TOO_LARGE', 413, `archive exceeds the ${Math.round(cap / 1024 / 1024)}MB limit`));
+          return;
+        }
+        cb(null, c);
+      },
     });
-    await Promise.race([
-      pipeline(stream as any, createWriteStream(destPath, { mode: 0o600 })),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('bulk stream timed out after 30m')), 30 * 60 * 1000)),
-    ]);
+    try {
+      await withDeadline(
+        pipeline(stream as any, guard, createWriteStream(destPath, { mode: 0o600 })),
+        30 * 60 * 1000,
+        'bulk stream',
+      );
+    } catch (e) {
+      await rm(destPath, { force: true }).catch(() => undefined);
+      throw e;
+    }
     return bytes;
   }
 
   /** Pump a host file into a volume path, with a 30min absolute watchdog. */
-  private async pipeToVolume(srcPath: string, container: Container, putPath: string): Promise<number> {
+  private async pipeToVolume(srcPath: string, container: Container, putPath: string, maxBytes?: number): Promise<number> {
+    // stat FIRST: the source must exist and (when a ceiling is configured)
+    // must fit — both verified before a single byte is pushed into the volume.
+    const size = (await stat(srcPath).catch(() => null))?.size;
+    if (size === null || size === undefined) throw Err.notFound('ARCHIVE_FILE_MISSING');
+    if (maxBytes && maxBytes > 0 && size > maxBytes)
+      throw new AppError('ARCHIVE_TOO_LARGE', 413, `archive exceeds the ${Math.max(1, Math.round(maxBytes / 1024 / 1024))}MB limit`);
     let bytes = 0;
     const tap = new PassThrough();
     tap.on('data', (c: Buffer) => {
       bytes += c.length;
     });
-    createReadStream(srcPath).pipe(tap);
-    await Promise.race([
-      (container as any).putArchive(tap, { path: putPath }),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('bulk stream timed out after 30m')), 30 * 60 * 1000)),
-    ]);
+    // a read failure (file vanished / permissions) must NEVER surface as an
+    // unhandled 'error' event — that takes the whole API process down. It is
+    // forwarded into the archive stream instead, so putArchive above fails
+    // and the caller gets a normal rejected promise.
+    tap.on('error', () => undefined);
+    const reader = createReadStream(srcPath);
+    reader.on('error', (e: Error) => tap.destroy(e));
+    reader.pipe(tap);
+    await withDeadline((container as any).putArchive(tap, { path: putPath }), 30 * 60 * 1000, 'bulk stream');
+    // integrity: the archive we pushed must be the archive on disk
+    if (bytes !== size)
+      throw new AppError('ARCHIVE_TRUNCATED', 502, `archive stream sent ${bytes} of ${size} bytes`);
     return bytes;
   }
 
