@@ -298,6 +298,9 @@ export class ServersService {
           if (e?.code === '23505') throw Err.conflict('SERVER_NAME_TAKEN', 'You already have a server with this name');
           throw e;
         });
+      // the row can vanish between the guard read and this write (parallel
+      // delete) — 404, not a 500 TypeError on `updated.containerId`.
+      if (!updated) throw Err.notFound('SERVER_NOT_FOUND');
 
       if (rebuild) {
         const wasRunning = updated.containerId ? (await this.docker.inspect(updated.containerId, updated.nodeId))?.running ?? false : false;

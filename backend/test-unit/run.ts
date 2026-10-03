@@ -1,0 +1,27 @@
+/* Zero-dependency unit runner: node:assert + ts-node (no jest/vitest).
+ * Run: npm run test:unit  (from backend/) */
+import { testImages } from './images.test';
+import { testNet } from './net.test';
+import { testUuidPipe } from './uuid.test';
+
+const suites: Array<[string, () => void]> = [
+  ['images (template/version/label/env)', testImages],
+  ['nodes (cidr/ip math)', testNet],
+  ['uuid pipe', testUuidPipe],
+];
+
+let failed = 0;
+for (const [name, fn] of suites) {
+  try {
+    fn();
+    console.log(`ok - ${name}`);
+  } catch (e) {
+    failed++;
+    console.error(`FAIL - ${name}:`, (e as Error).message);
+  }
+}
+if (failed) {
+  console.error(`${failed} suite(s) failed`);
+  process.exit(1);
+}
+console.log('all unit suites passed');

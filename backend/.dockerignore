@@ -4,6 +4,7 @@ data
 *.log
 npm-debug.log*
 .env
+.env.*
 .git
 .gitignore
 Dockerfile

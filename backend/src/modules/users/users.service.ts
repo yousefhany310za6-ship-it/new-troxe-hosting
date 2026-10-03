@@ -1,5 +1,5 @@
 import { BadRequestException, Inject, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
-import { desc, eq } from 'drizzle-orm';
+import { desc, eq, sql } from 'drizzle-orm';
 import { Err } from '../../common/errors';
 import { hashPassword, verifyPassword } from '../../common/password';
 import { DB, Db } from '../../db/db.module';
@@ -71,13 +71,17 @@ export class UsersService {
       }
     }
     try {
+      // email change re-points recovery: bump the token generation like a
+      // role change does, so outstanding access JWTs (which carry the old
+      // email claim) die instead of lingering up to TTL.
+      const emailChanged = email !== existing.email;
       const [u] = await this.db
         .update(users)
-        .set({ name: dto.name.trim(), email })
+        .set(emailChanged ? { name: dto.name.trim(), email, tokenVersion: sql`token_version + 1` } : { name: dto.name.trim(), email })
         .where(eq(users.id, userId))
         .returning();
       if (!u) throw Err.unauthorized('USER_GONE');
-      if (email !== existing.email) {
+      if (emailChanged) {
         await this.audit.record({
           actorId: userId,
           actorEmail: email,
