@@ -218,6 +218,52 @@ export class DockerService {
     else this.diskCache.clear();
   }
 
+  /**
+   * Read a node's LIVE host iptables ruleset (`iptables -S`).
+   *
+   * The pinned helper image ships no iptables, so it chroots into the node's
+   * own root (bind-mounted read-only) and runs the node's own binary — in the
+   * node's host network namespace, with NET_ADMIN to open the xtables socket.
+   * Identical code path for the local socket and a remote mTLS daemon, and it
+   * observes the RUNNING ruleset, not the persisted file (a node whose
+   * persistence service died after a reboot reads as drifted here).
+   *
+   * Returns `null` when it cannot read (never throws) — callers must fail
+   * OPEN on `null`, never treat "unreadable" as "hardened".
+   */
+  async readHostIptables(nodeId = 'local'): Promise<string | null> {
+    if (!(await this.availableOn(nodeId).catch(() => false))) return null;
+    try {
+      await this.ensureImage(config.HELPER_IMAGE, 300_000, nodeId);
+      const res = await this.runHelper({
+        image: config.HELPER_IMAGE,
+        cmd: [
+          'for p in /usr/sbin/iptables /sbin/iptables /usr/bin/iptables; do\n' +
+            '  if chroot /host "$p" -S >/tmp/rules 2>/tmp/rules.err; then cat /tmp/rules; exit 0; fi\n' +
+            'done\n' +
+            'echo "no usable iptables inside the node root" >&2\n' +
+            'exit 42',
+        ],
+        binds: ['/:/host:ro'],
+        networkMode: 'host',
+        capAdd: ['NET_ADMIN', 'SYS_CHROOT'],
+        user: '0:0',
+        timeoutMs: 20_000,
+        memoryMb: 64,
+        captureLogs: true, // out is the ruleset — log-driver `none` yields ''
+        nodeId,
+      });
+      if (res.code !== 0 || !res.out.includes('-A ')) {
+        this.log.warn(`iptables unreadable on node "${nodeId}" (exit ${res.code}): ${res.out.slice(0, 160)}`);
+        return null;
+      }
+      return res.out;
+    } catch (e) {
+      this.log.warn(`iptables read failed on node "${nodeId}": ${(e as Error).message.slice(0, 160)}`);
+      return null;
+    }
+  }
+
   private d(): Dockerode {
     if (!this.docker) {
       if (!this.unavailabilityLogged) {
@@ -483,6 +529,10 @@ export class DockerService {
     logMaxSize?: string;
     /** target node (volume/network names are node-local) */
     nodeId?: string;
+    /** default `none` — only the host-firewall reader uses the host netns */
+    networkMode?: 'none' | 'host';
+    /** extra capabilities, merged onto the base set (never a blanket grant) */
+    capAdd?: string[];
   }): Promise<HelperResult> {
     const d = await this.cx(opts.nodeId);
     const timeout = opts.timeoutMs ?? 60_000;
@@ -496,14 +546,15 @@ export class DockerService {
         User: opts.user ?? '0:0',
         Labels: { 'troxe.helper': 'true' },
         HostConfig: {
-          NetworkMode: 'none',
+          NetworkMode: opts.networkMode ?? 'none',
           Binds: opts.binds ?? [],
           AutoRemove: false,
           ReadonlyRootfs: false,
           CapDrop: ['ALL'],
           // the helper runs root inside a single bind mount to chown/untar;
-          // these are the only capabilities it may hold
-          CapAdd: ['CHOWN', 'FOWNER', 'DAC_OVERRIDE', 'SETUID', 'SETGID'],
+          // these are the only capabilities it may hold (plus whatever the
+          // caller explicitly adds — NET_ADMIN/SYS_CHROOT for the rules reader)
+          CapAdd: ['CHOWN', 'FOWNER', 'DAC_OVERRIDE', 'SETUID', 'SETGID', ...(opts.capAdd ?? [])],
           SecurityOpt: ['no-new-privileges:true'],
           Memory: (opts.memoryMb ?? 256) * 1024 * 1024,
           NanoCpus: 1_000_000_000,

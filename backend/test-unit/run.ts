@@ -6,6 +6,7 @@ import { testUuidPipe } from './uuid.test';
 import { testWsTicket } from './ws.test';
 import { testStreamByteCaps } from './streams.test';
 import { testParseDf } from './df.test';
+import { testHardeningEvaluation } from './hardening.test';
 
 const suites: Array<[string, () => void]> = [
   ['images (template/version/label/env)', testImages],
@@ -14,6 +15,7 @@ const suites: Array<[string, () => void]> = [
   ['ws ticket (key separation)', testWsTicket],
   ['stream byte caps', testStreamByteCaps],
   ['df parse (disk guard)', testParseDf],
+  ['hardening evaluation', testHardeningEvaluation],
 ];
 
 let failed = 0;

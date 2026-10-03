@@ -2,8 +2,59 @@ import { execFile } from 'child_process';
 import { Injectable, Logger } from '@nestjs/common';
 import { promisify } from 'util';
 import { config } from '../../../config/env';
+import { DockerService } from './docker.service';
 
 const exec = promisify(execFile);
+
+export interface HardeningCheck {
+  ok: boolean;
+  expected: number;
+  found: number;
+  /** rules we require but could not find (shown as `<CHAIN> …`) */
+  missing: string[];
+  /** rules tagged for this sandbox/supernet whose source is a DIFFERENT subnet */
+  stale: string[];
+}
+
+/**
+ * Evaluate a live `iptables -S` dump against the ruleset we MUST have.
+ * Pure and unit-tested — this is the difference between "we think the sandbox
+ * is isolated" and "it IS isolated": `apply()` can partially succeed (it
+ * reports `>0` installed), and a ruleset can vanish after a daemon/host
+ * restart while everything else looks healthy.
+ *
+ * `missing` covers absence; `stale` covers REUSE — a tag that outlived its
+ * network and now sits on a subnet nobody asked for.
+ */
+export function evaluateHardeningRules(
+  ruleset: string,
+  subnet: string,
+  commentTag: string,
+  blockedDests: string[],
+): HardeningCheck {
+  const lines = (ruleset ?? '')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.startsWith('-A '));
+  const tagged = lines.filter((l) => l.includes(commentTag));
+  const expected = [
+    ...blockedDests.map((d) => `-A DOCKER-USER -s ${subnet} -d ${d}`),
+    `-A DOCKER-USER -s ${subnet} -m addrtype --dst-type LOCAL`,
+    `-A INPUT -s ${subnet}`,
+  ];
+  const missing = expected.filter((marker) => !lines.some((l) => l.includes(marker)));
+  const stale = tagged.filter((l) => {
+    const m = /(?:^|\s)-s\s+(\S+)/.exec(l);
+    return !m || m[1] !== subnet;
+  });
+  return {
+    ok: missing.length === 0 && stale.length === 0,
+    expected: expected.length,
+    found: expected.length - missing.length,
+    missing: missing.map((m) => m.replace(/^-A /, '')),
+    stale,
+  };
+}
 
 /**
  * Per-sandbox network hardening.
@@ -42,6 +93,8 @@ export class NetworkHardeningService {
   private probedAt = 0;
   private warned = false;
 
+  constructor(private docker: DockerService) {}
+
   private tag(name: string): string {
     return `troxe:${name}`;
   }
@@ -56,12 +109,13 @@ export class NetworkHardeningService {
     ];
   }
 
-  private iptables(args: string[]): Promise<{ ok: boolean; err: string }> {
-    return exec('iptables', ['-w', '5', ...args], { timeout: 10_000 })
-      .then(() => ({ ok: true, err: '' }))
-      .catch((e: { stderr?: string; message?: string }) => ({
+  private iptables(args: string[]): Promise<{ ok: boolean; err: string; out: string }> {
+    return exec('iptables', ['-w', '5', ...args], { timeout: 10_000, maxBuffer: 8 * 1024 * 1024 })
+      .then((r) => ({ ok: true, err: '', out: String(r.stdout ?? '') }))
+      .catch((e: { stderr?: string; message?: string; stdout?: string }) => ({
         ok: false,
         err: String(e.stderr ?? e.message ?? '').trim(),
+        out: String(e.stdout ?? ''),
       }));
   }
 
@@ -172,5 +226,63 @@ export class NetworkHardeningService {
       if (!del.ok) break;
     }
     this.log.log(`removed hardening rules for ${networkName}`);
+  }
+
+  // ---- verification (reads the RUNNING ruleset, never the intent) -----------
+
+  /**
+   * Read the local node's RUNNING ruleset through the SAME helper a remote
+   * node uses (bind the node's `/` read-only, chroot into it, run the node's
+   * own iptables in its own host netns with NET_ADMIN). One reader for local
+   * and remote means every local admin check exercises exactly the code path
+   * a remote node takes — that path cannot rot unnoticed. `null` = unreadable;
+   * callers must NOT treat `null` as hardened.
+   */
+  private async liveRuleset(): Promise<string | null> {
+    if (!config.HARDEN_NETWORK) return null;
+    return this.docker.readHostIptables('local');
+  }
+
+  /**
+   * Verify MANY sandboxes against ONE ruleset read (the admin report and the
+   * reconciler would otherwise shell out once per server). `null` = the
+   * ruleset could not be read at all.
+   */
+  async verifySandboxes(
+    targets: Array<{ id: string; subnet: string; networkName: string }>,
+  ): Promise<HardeningCheck | null> {
+    if (!config.HARDEN_NETWORK || !targets.length)
+      return { ok: true, expected: 0, found: 0, missing: [], stale: [] };
+    const dump = await this.liveRuleset();
+    if (dump === null || !dump.includes('-A ')) return null;
+    const agg: HardeningCheck = { ok: true, expected: 0, found: 0, missing: [], stale: [] };
+    for (const t of targets) {
+      if (!t.subnet || !t.networkName) continue;
+      const c = evaluateHardeningRules(dump, t.subnet, this.tag(t.networkName), this.blockedDests);
+      agg.expected += c.expected;
+      agg.found += c.found;
+      agg.missing.push(...c.missing.map((m) => `${t.id}: ${m}`));
+      agg.stale.push(...c.stale);
+      if (!c.ok) agg.ok = false;
+    }
+    return agg;
+  }
+
+  /**
+   * Verify a node's STATIC supernet rules against its LIVE kernel state.
+   *
+   * This is the fix for "blind trust in the remote static rules": node-setup
+   * installs them once, but nothing had ever checked they are still there —
+   * a node rebooted without persistence, a `iptables -F` from a stray ops
+   * command, or setup never having run at all all left sandboxes able to
+   * reach RFC1918 and the host itself while the API assumed isolation.
+   *
+   * `null` = unreadable (fail open at the caller, loudly).
+   */
+  async verifySupernet(nodeId: string, subnetBase: string): Promise<HardeningCheck | null> {
+    if (!subnetBase) return null;
+    const ruleset = await this.docker.readHostIptables(nodeId);
+    if (ruleset === null) return null;
+    return evaluateHardeningRules(ruleset, subnetBase, this.tag('node-supernet'), this.blockedDests);
   }
 }

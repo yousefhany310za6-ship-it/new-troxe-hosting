@@ -98,6 +98,83 @@ export class ProvisionerService {
     return this.docker.availableOn(nodeId);
   }
 
+  /**
+   * Is this node's isolation in force RIGHT NOW?
+   *
+   * Local nodes: per-sandbox rules, converged by the reconciler (and applied
+   * fail-closed at provision) — nothing extra to ask.
+   * Remote nodes: their isolation is a STATIC ruleset installed once by
+   * `node-setup.sh`, which nothing ever re-checked — this does, against the
+   * node's RUNNING kernel ruleset.
+   *
+   * `false` = confirmed drift (a ruleset was read and required rules are
+   * gone, or the node has no supernet at all). An UNREADABLE ruleset fails
+   * OPEN — never block a fleet because a reader broke (the reader logs it).
+   */
+  async isolationOk(nodeId: string): Promise<boolean> {
+    if (!config.HARDEN_NETWORK || nodeId === 'local') return true;
+    const [n] = await this.db
+      .select({ subnetBase: nodes.subnetBase })
+      .from(nodes)
+      .where(eq(nodes.id, nodeId))
+      .limit(1);
+    if (!n?.subnetBase) return false;
+    const check = await this.hardening.verifySupernet(nodeId, n.subnetBase);
+    if (!check) return true;
+    if (!check.ok) {
+      this.log.warn(
+        `node "${nodeId}" firewall drift: ${check.missing.length} missing / ${check.stale.length} stale rule(s) ` +
+          `for ${n.subnetBase}`,
+      );
+    }
+    return check.ok;
+  }
+
+  /**
+   * Admin-facing isolation report for one node.
+   * `ok: null` means "could not read" — deliberately distinct from
+   * `false` ("read it, and the rules are gone"): placement fails open on
+   * `null`, while `false` is confirmed drift.
+   */
+  async firewallReport(nodeId: string): Promise<{
+    mode: 'sandbox' | 'supernet' | 'none';
+    ok: boolean | null;
+    expected: number;
+    found: number;
+    subnetBase?: string;
+    missing: string[];
+    stale: string[];
+  }> {
+    if (!config.HARDEN_NETWORK) return { mode: 'none', ok: null, expected: 0, found: 0, missing: [], stale: [] };
+    if (nodeId === 'local') {
+      const rows = await this.db
+        .select({ id: servers.id, networkName: servers.networkName, networkSubnet: servers.networkSubnet })
+        .from(servers)
+        .where(eq(servers.nodeId, 'local'))
+        .limit(200);
+      const check = await this.hardening.verifySandboxes(
+        rows.filter((r) => r.networkName && r.networkSubnet).map((r) => ({ id: r.id, subnet: r.networkSubnet!, networkName: r.networkName! })),
+      );
+      if (!check) return { mode: 'sandbox', ok: null, expected: 0, found: 0, missing: [], stale: [] };
+      return { mode: 'sandbox', ok: check.ok, expected: check.expected, found: check.found, missing: check.missing, stale: check.stale };
+    }
+    const [n] = await this.db.select({ subnetBase: nodes.subnetBase }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
+    if (!n?.subnetBase)
+      return { mode: 'supernet', ok: false, expected: 0, found: 0, missing: ['subnetBase is not configured'], stale: [] };
+    const check = await this.hardening.verifySupernet(nodeId, n.subnetBase);
+    if (!check)
+      return { mode: 'supernet', ok: null, expected: 0, found: 0, subnetBase: n.subnetBase, missing: [], stale: [] };
+    return {
+      mode: 'supernet',
+      ok: check.ok,
+      expected: check.expected,
+      found: check.found,
+      subnetBase: n.subnetBase,
+      missing: check.missing,
+      stale: check.stale,
+    };
+  }
+
   async provision(input: ProvisionInput): Promise<ProvisionResult> {
     if (!(await this.docker.availableOn(input.nodeId))) {
       if (config.IS_PROD) {

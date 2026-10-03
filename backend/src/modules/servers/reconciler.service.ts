@@ -48,6 +48,8 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
   /** disk: measurement cadence (10min) and warn throttle (hourly) per node */
   private readonly lastDiskCheck = new Map<string, number>();
   private readonly lastDiskWarn = new Map<string, number>();
+  /** remote-node firewall verification cadence (hourly per node) */
+  private readonly lastFwCheck = new Map<string, number>();
   private lastPrune = 0;
   /** per-node liveness (a down daemon converges hardening on recovery) */
   private readonly nodeUp = new Map<string, boolean>();
@@ -108,6 +110,8 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
         await this.syncStatuses(subset, n.id);
         // daemon restarts flush DOCKER-USER: converge local rules on recovery
         if (n.id === 'local' && (wasDown || this.tickCount % 5 === 0)) await this.syncHardening();
+        // remote: static supernet, verified hourly against the live ruleset
+        else if (n.id !== 'local') await this.verifySupernet(n.id);
         await this.enforceStorage(subset, n.id);
         await this.gcOrphans(n.id);
       }
@@ -218,7 +222,9 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
   private async syncHardening(): Promise<void> {
     const rows = await this.db
       .select({ id: servers.id, networkName: servers.networkName, networkSubnet: servers.networkSubnet })
-      .from(servers);
+      .from(servers)
+      .where(eq(servers.nodeId, 'local'));
+    const targets: Array<{ id: string; subnet: string; networkName: string }> = [];
     for (const row of rows) {
       try {
         if (!row.networkName) continue;
@@ -232,10 +238,52 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
           continue;
         }
         await this.hardening.apply(subnet, row.networkName, { quiet: true });
+        targets.push({ id: row.id, subnet, networkName: row.networkName });
       } catch (e) {
         this.log.debug(`hardening sync ${row.id}: ${(e as Error).message}`);
       }
     }
+    // ONE ruleset read for the whole fleet: `apply()` reports ">0 rules
+    // installed", which is not the same as the full set — reading the RUNNING
+    // ruleset back is the only proof it actually landed.
+    if (!targets.length) return;
+    const check = await this.hardening.verifySandboxes(targets);
+    if (check && !check.ok)
+      this.log.error(
+        `hardening drift after converge: ${check.missing.length}/${check.expected} rule(s) missing` +
+          `${check.stale.length ? `, ${check.stale.length} stale` : ''} — ${check.missing.slice(0, 3).join(' | ')}`,
+      );
+  }
+
+  /**
+   * Remote nodes carry their isolation in ONE static ruleset installed by
+   * `node-setup.sh` — never re-checked before. Verify the node's LIVE kernel
+   * ruleset hourly: a reboot without persistence, a stray `iptables -F`, or
+   * setup never having run all leave sandboxes able to reach RFC1918 and the
+   * host itself while the API still believes they are isolated. Placement
+   * refuses new servers on a node with confirmed drift (isolationOk).
+   */
+  private async verifySupernet(nodeId: string): Promise<void> {
+    const now = Date.now();
+    if (now - (this.lastFwCheck.get(nodeId) ?? 0) < 60 * 60 * 1000) return;
+    this.lastFwCheck.set(nodeId, now);
+    const [n] = await this.db
+      .select({ subnetBase: nodes.subnetBase })
+      .from(nodes)
+      .where(eq(nodes.id, nodeId))
+      .limit(1);
+    if (!n?.subnetBase) {
+      this.log.error(`node "${nodeId}" has no subnetBase — remote sandboxes on it are NOT covered by a supernet`);
+      return;
+    }
+    const check = await this.hardening.verifySupernet(nodeId, n.subnetBase);
+    if (!check) return; // unreadable → the reader already warned; fail open
+    if (!check.ok)
+      this.log.error(
+        `node "${nodeId}" firewall DRIFT: ${check.missing.length}/${check.expected} rule(s) missing for ` +
+          `${n.subnetBase}${check.stale.length ? `, ${check.stale.length} stale` : ''} — new servers are ` +
+          `refused until node-setup.sh is re-run on it`,
+      );
   }
 
   /**

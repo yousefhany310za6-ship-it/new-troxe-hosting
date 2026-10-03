@@ -18,6 +18,7 @@ import { AdminGuard } from '../auth/admin.guard';
 import { Err } from '../../common/errors';
 import { AdminService } from './admin.service';
 import { NodesService } from '../nodes/nodes.service';
+import { ProvisionerService } from '../servers/provisioning/provisioner.service';
 import { CreateNodeDto, UpdateNodeDto } from '../nodes/dto';
 import {
   AdminAuditQuery,
@@ -41,6 +42,7 @@ export class AdminController {
   constructor(
     private admin: AdminService,
     private nodes: NodesService,
+    private provisioner: ProvisionerService,
   ) {}
 
   // ============ USERS ============
@@ -207,8 +209,16 @@ export class AdminController {
 
   @Post('nodes/:id/check')
   @HttpCode(200)
-  checkNode(@Param('id') id: string) {
-    return this.nodes.check(id);
+  async checkNode(@Param('id') id: string) {
+    // liveness + isolation in one round trip: `firewall.ok === null` means
+    // "could not read the ruleset" — deliberately NOT the same as `false`
+    // (confirmed drift), so an admin can tell a broken reader from a broken
+    // firewall.
+    const status = await this.nodes.check(id);
+    const firewall = await this.provisioner
+      .firewallReport(id)
+      .catch((e) => ({ mode: 'error' as const, ok: null, expected: 0, found: 0, missing: [(e as Error).message], stale: [] }));
+    return { ...status, firewall };
   }
 
   // ============ SYSTEM HEALTH ============

@@ -106,42 +106,77 @@ export class ServersService {
   // ---- create ---------------------------------------------------------------
 
   /**
-   * Placement + host-disk guard. A node at/above DISK_BLOCK_PCT is never
-   * given new work: provisioning more data onto a nearly-full disk is how a
-   * full host turns into a dead host (every tenant's containers then fail to
-   * write). Auto-placement skips to the next node; an explicit admin pin
-   * fails loudly (507) instead of silently relocating the server. A failed
-   * measurement fails OPEN — provisioning must never break because `df` was
-   * unreachable (the per-server storage fence and the health probe still hold).
+   * Placement guard — a node must pass BOTH checks before it gets work:
+   *
+   *  1. isolation: its firewall rules must be verifiably IN FORCE (a remote
+   *     node's isolation is a static ruleset installed once by node-setup.sh;
+   *     nothing had ever checked it survived). Confirmed drift → skipped; an
+   *     unreadable ruleset fails open (the reader logs it).
+   *  2. host disk: at/above DISK_BLOCK_PCT, provisioning more data onto a
+   *     nearly-full disk is how a full host becomes a dead host.
+   *
+   * Auto-placement skips to the next node; an explicit admin pin fails loudly
+   * instead of silently relocating the server.
    */
-  private async pickWithDiskGuard(preferred?: string): Promise<string> {
+  private async pickHealthyNode(preferred?: string): Promise<string> {
     const skipped: string[] = [];
+    let diskRefusals = 0;
+    let firewallRefusals = 0;
     for (;;) {
       let candidate: string;
       try {
         candidate = await this.nodes.pickNode(preferred, skipped);
       } catch (e) {
-        if (skipped.length)
+        if (skipped.length) throw this.refusalError(diskRefusals, firewallRefusals, skipped);
+        throw e;
+      }
+      // 1) isolation first: a node whose rules are gone hosts no new sandbox
+      const isolated = await this.provisioner.isolationOk(candidate).catch(() => true);
+      if (!isolated) {
+        firewallRefusals++;
+        if (preferred)
+          throw new AppError(
+            'NODE_NOT_HARDENED',
+            503,
+            `Node "${candidate}" is missing its firewall rules — re-run scripts/node-setup.sh on it.`,
+          );
+        skipped.push(candidate);
+        continue;
+      }
+      // 2) host disk (measurement failure fails open — diskUsage logged it)
+      const disk = await this.docker.diskUsage(candidate).catch(() => null);
+      if (disk && disk.percent >= config.DISK_BLOCK_PCT) {
+        diskRefusals++;
+        if (preferred)
           throw new AppError(
             'DISK_FULL',
             507,
-            `No node with free disk: ${skipped.join(', ')} all at or above ${config.DISK_BLOCK_PCT}%.`,
+            `Node "${candidate}" is ${disk.percent}% full (limit ${config.DISK_BLOCK_PCT}%). Free space first.`,
           );
-        throw e;
+        skipped.push(candidate);
+        if (skipped.length >= 10) throw this.refusalError(diskRefusals, firewallRefusals, skipped);
+        continue;
       }
-      const disk = await this.docker.diskUsage(candidate).catch(() => null);
-      if (!disk) return candidate; // unknown → fail open (diskUsage logged it)
-      if (disk.percent < config.DISK_BLOCK_PCT) return candidate;
-      if (preferred)
-        throw new AppError(
-          'DISK_FULL',
-          507,
-          `Node "${candidate}" is ${disk.percent}% full (limit ${config.DISK_BLOCK_PCT}%). Free space first.`,
-        );
-      skipped.push(candidate);
-      if (skipped.length >= 10)
-        throw new AppError('DISK_FULL', 507, `No node with free disk: ${skipped.join(', ')} are full.`);
+      return candidate;
     }
+  }
+
+  /** Explain WHY every candidate was refused (never a bare "no capacity"). */
+  private refusalError(diskRefusals: number, firewallRefusals: number, skipped: string[]): AppError {
+    if (diskRefusals && firewallRefusals)
+      return new AppError(
+        'NO_CAPACITY',
+        503,
+        `No usable node (${diskRefusals} over the ${config.DISK_BLOCK_PCT}% disk limit, ` +
+          `${firewallRefusals} with firewall drift): ${skipped.join(', ')}`,
+      );
+    if (diskRefusals)
+      return new AppError('DISK_FULL', 507, `No node with free disk: ${skipped.join(', ')} all at or above ${config.DISK_BLOCK_PCT}%.`);
+    return new AppError(
+      'NODE_NOT_HARDENED',
+      503,
+      `No node with working firewall rules: ${skipped.join(', ')} — re-run scripts/node-setup.sh on them.`,
+    );
   }
 
   async create(ownerId: string, dto: CreateServerDto, ctx: ReqCtx, opts?: { nodeId?: string }) {
@@ -151,7 +186,7 @@ export class ServersService {
     // may request a specific node (validated inside pickNode).
     const region = dto.region ?? config.REGIONS[0];
     if (!config.REGIONS.includes(region)) throw Err.invalid('REGION_UNSUPPORTED', `Allowed regions: ${config.REGIONS.join(', ')}`);
-    const nodeId = await this.pickWithDiskGuard(opts?.nodeId);
+    const nodeId = await this.pickHealthyNode(opts?.nodeId);
 
     const storedEnv = this.cleanEnv(dto.env);
     // egg defaults apply at RESOLVE time only — storage keeps exactly what

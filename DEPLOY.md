@@ -198,6 +198,13 @@ sudo PG_CONTAINER=troxe-postgres BACKUP_DIR=/var/backups/troxe-postgres \
   `node "<id>" disk is N% full …` once an hour from the first tick past the
   threshold — the same measurement, taken on the node itself (`df` through a
   read-only helper), so remote nodes are covered too
+- isolation is verified, never assumed: `POST /admin/nodes/:id/check` now
+  returns a `firewall` block (`ok: true` = the RUNNING ruleset holds every
+  required rule, `false` = drift with the missing rules listed, `null` = the
+  ruleset could not be read). The reconciler re-reads local rules after every
+  converge pass and checks each remote node's static supernet hourly,
+  logging `node "<id>" firewall DRIFT: …` — a node with confirmed drift is
+  refused new servers until `scripts/node-setup.sh` is re-run on it
 
 ---
 
