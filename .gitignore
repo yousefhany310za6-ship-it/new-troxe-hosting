@@ -27,3 +27,6 @@ Thumbs.db
 
 # vercel
 .vercel
+
+# smoke-render build artifact
+test-frontend/.build/

@@ -187,7 +187,7 @@ TLS مشفر بدون توثيق لـ Postgres المدارة — MITM في مس
 - Performance: [ ] حد `tail` وصفحات الأدمن — [ ] pool sizing مقابل reconciler — [x] تجمع 8-way
 - Observability: [ ] `TRUST_PROXY` خلف Caddy — [x] request IDs + health + tick logs
 - Deployment: [ ] تثبيت أساس Dockerfile — [ ] توحيد PORT/healthcheck — [ ] إصلاح bcrypt build — [ ] node-setup (مفتاح/SAN/API_IP)
-- Testing: [ ] smoke renders للفرونت — [ ] unit للمنطق الخالص — [x] تكاملية 88
+- Testing: [x] smoke renders للفرونت (25 صفحة) — [x] unit للمنطق الخالص — [x] تكاملية 88
 
 ## Attack Surface Map
 

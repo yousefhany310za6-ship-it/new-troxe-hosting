@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Check, Loader2, Server as ServerIcon } from 'lucide-react';
+import { ArrowLeft, Check, Loader2, Plus, Server as ServerIcon } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { apiGet, apiPost } from '@/lib/api.js';
