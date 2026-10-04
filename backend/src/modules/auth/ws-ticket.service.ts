@@ -12,7 +12,7 @@ export interface WsTicketPayload {
 @Injectable()
 export class WsTicketService {
   private readonly secret: Buffer;
-  private readonly ttlSec = 30;
+  private readonly ttlSec = 300; // 5 minutes
 
   constructor() {
     // env.ts derives a purpose-separated key (HKDF from the access secret) —
