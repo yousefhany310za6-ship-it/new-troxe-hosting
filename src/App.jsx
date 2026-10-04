@@ -1,4 +1,6 @@
-import { lazy, Suspense } from 'react';
+import { Suspense } from 'react';
+import { lazyRetry as lazy } from './lib/lazyRetry.js';
+import RouteErrorBoundary from './components/RouteErrorBoundary.jsx';
 import { Route, Routes } from 'react-router-dom';
 
 import ScrollManager from './components/ScrollManager.jsx';
@@ -54,6 +56,7 @@ export default function App() {
         <AuthProvider>
             <ScrollManager />
             <Suspense fallback={<PageLoader />}>
+                <RouteErrorBoundary>
                 <Routes>
                     <Route path="/" element={<Home />} />
                     <Route path="/signin" element={<GuestOnly><SignIn /></GuestOnly>} />
@@ -97,6 +100,7 @@ export default function App() {
                     {/* Any unknown URL renders the Cosmic 404 page */}
                     <Route path="*" element={<NotFoundPage />} />
                 </Routes>
+                </RouteErrorBoundary>
             </Suspense>
         </AuthProvider>
     );

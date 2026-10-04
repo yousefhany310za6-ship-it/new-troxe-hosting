@@ -19,6 +19,13 @@ import './index.css';
 //   before the app boots.
 const basename = APP_BASE === '/' ? undefined : APP_BASE.replace(/\/+$/, '');
 
+// The app booted: cancel the index.html white-page guard.
+if (window.__troxeBootTimer) {
+    clearTimeout(window.__troxeBootTimer);
+    window.__troxeBootTimer = null;
+}
+document.getElementById('boot-fail')?.remove();
+
 createRoot(document.getElementById('root')).render(
     <BrowserRouter basename={basename}>
         <QueryProvider>

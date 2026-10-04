@@ -1,8 +1,17 @@
+import { Suspense, lazy } from 'react';
 import { Counter } from './Counter.jsx';
 import RotatingText from './RotatingText.jsx';
 import { IconArrowRight, IconPlay } from './icons.jsx';
 import { Button } from './ui/button.jsx';
-import WireframeDottedGlobe from './ui/WireframeDottedGlobe.jsx';
+
+// The globe (d3 + topojson + land data + the dot-field computation) is the
+// heaviest thing on this page: it loads in its own chunk AFTER first paint
+// so parsing it never freezes the initial render on a phone. The fallback
+// keeps the exact layout so nothing shifts when it arrives.
+const WireframeDottedGlobe = lazy(() => import('./ui/WireframeDottedGlobe.jsx'));
+
+const GLOBE_CLASS =
+    'hero-globe-mask pointer-events-none absolute top-1/2 left-1/2 z-0 aspect-square w-[min(1180px,132vw)] -translate-x-1/2 -translate-y-1/2 opacity-[0.34] max-md:w-[min(760px,150vw)] max-md:opacity-[0.28] max-[480px]:w-[min(560px,170vw)] max-[480px]:opacity-[0.24]';
 
 export default function Hero() {
     return (
@@ -15,9 +24,9 @@ export default function Hero() {
 
                 {/* Sits behind the hero copy: large, centred, faded at the edges,
                     and masked so the middle band (where the headline sits) stays readable. */}
-                <WireframeDottedGlobe
-                    className={`hero-globe-mask pointer-events-none absolute top-1/2 left-1/2 z-0 aspect-square w-[min(1180px,132vw)] -translate-x-1/2 -translate-y-1/2 opacity-[0.34] max-md:w-[min(760px,150vw)] max-md:opacity-[0.28] max-[480px]:w-[min(560px,170vw)] max-[480px]:opacity-[0.24]`}
-                />
+                <Suspense fallback={<div className={GLOBE_CLASS} aria-hidden="true" />}>
+                    <WireframeDottedGlobe className={GLOBE_CLASS} />
+                </Suspense>
 
                 <div className="absolute -top-[150px] -right-[100px] size-[500px] animate-float rounded-full bg-white opacity-[0.09] blur-[140px]" />
                 <div className="absolute -bottom-[100px] -left-[100px] size-[400px] animate-float-reverse rounded-full bg-[#a1a1aa] opacity-[0.09] blur-[140px]" />

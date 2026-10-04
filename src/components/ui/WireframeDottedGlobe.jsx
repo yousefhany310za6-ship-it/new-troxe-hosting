@@ -1,89 +1,8 @@
-import { useEffect, useRef } from 'react';
-import { geoOrthographic, geoPath, geoBounds, geoGraticule, timer } from 'd3';
-import { feature } from 'topojson-client';
-import land110m from 'world-atlas/land-110m.json';
+import { useEffect, useRef, useState } from 'react';
+import { geoOrthographic, geoPath, geoGraticule, timer } from 'd3';
+import { getLandData } from '@/lib/globeDots.js';
 
 import { cn } from '@/lib/utils';
-
-// Land polygons bundled locally (55 kB TopoJSON) so the globe paints on the
-// very first frame: no network wait, no empty-circle placeholder, and the
-// rotation is visible immediately instead of spinning an invisible blank disc.
-
-// Cache the parsed land data so remounts (e.g. StrictMode double-invoke) reuse it.
-let landCache = null;
-
-function pointInPolygon([x, y], ring) {
-    let inside = false;
-
-    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-        const [xi, yi] = ring[i];
-        const [xj, yj] = ring[j];
-
-        if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) {
-            inside = !inside;
-        }
-    }
-
-    return inside;
-}
-
-function pointInFeature([x, y], geometry) {
-    if (geometry.type === 'Polygon') {
-        const rings = geometry.coordinates;
-        if (!pointInPolygon([x, y], rings[0])) return false;
-
-        for (let i = 1; i < rings.length; i++) {
-            if (pointInPolygon([x, y], rings[i])) return false;
-        }
-        return true;
-    }
-
-    if (geometry.type === 'MultiPolygon') {
-        for (const polygon of geometry.coordinates) {
-            if (!pointInPolygon([x, y], polygon[0])) continue;
-
-            let inHole = false;
-            for (let i = 1; i < polygon.length; i++) {
-                if (pointInPolygon([x, y], polygon[i])) {
-                    inHole = true;
-                    break;
-                }
-            }
-            if (!inHole) return true;
-        }
-    }
-
-    return false;
-}
-
-function buildDotField(land, dotSpacing = 16) {
-    const dots = [];
-    const step = dotSpacing * 0.08;
-
-    for (const feature of land.features) {
-        const [[minLng, minLat], [maxLng, maxLat]] = geoBounds(feature);
-
-        for (let lng = minLng; lng <= maxLng; lng += step) {
-            for (let lat = minLat; lat <= maxLat; lat += step) {
-                if (pointInFeature([lng, lat], feature.geometry)) {
-                    dots.push(lng, lat);
-                }
-            }
-        }
-    }
-
-    return new Float32Array(dots);
-}
-
-function getLandData(dotSpacing) {
-    if (!landCache || landCache.spacing !== dotSpacing) {
-        // `land` is a GeometryCollection, so this yields a FeatureCollection.
-        const land = feature(land110m, land110m.objects.land);
-        landCache = { land, dots: buildDotField(land, dotSpacing), spacing: dotSpacing };
-    }
-
-    return landCache;
-}
 
 /**
  * Dotted wireframe globe rendered to a canvas.
@@ -114,6 +33,35 @@ export default function WireframeDottedGlobe({
     const canvasRef = useRef(null);
     // Read once on mount: this is the *initial* rotation, not a live setting.
     const startRotationRef = useRef(startRotation);
+    // Land dots are expensive (a full-world point-in-polygon grid, seconds on
+    // a phone CPU), so they load AFTER first paint via an idle callback while
+    // the sphere + graticule paint immediately. A ref mirror feeds the rAF
+    // loop without re-subscribing it.
+    const [land, setLand] = useState(null);
+    const landRef = useRef(null);
+
+    useEffect(() => {
+        let cancelled = false;
+        const load = () => {
+            if (cancelled) return;
+            const data = getLandData(dotSpacing);
+            if (cancelled) return;
+            landRef.current = data;
+            setLand(data);
+        };
+        if (typeof window.requestIdleCallback === 'function') {
+            const id = window.requestIdleCallback(load, { timeout: 1500 });
+            return () => {
+                cancelled = true;
+                window.cancelIdleCallback(id);
+            };
+        }
+        const t = setTimeout(load, 60);
+        return () => {
+            cancelled = true;
+            clearTimeout(t);
+        };
+    }, [dotSpacing]);
 
     useEffect(() => {
         const wrap = wrapRef.current;
@@ -123,14 +71,15 @@ export default function WireframeDottedGlobe({
         const context = canvas.getContext('2d');
         if (!context) return undefined;
 
-        const dpr = window.devicePixelRatio || 1;
+        // Full devicePixelRatio on a 3x phone quadruples fill cost for pixels
+        // nobody can see on a faded backdrop — cap at 2x.
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
         const startLambda = startRotationRef.current[0];
         const startPhi = startRotationRef.current[1];
 
         let lambda = startLambda;
         let lastTick = null;
-        // Synchronous: bundled with the app, so the first frame already shows land.
-        const data = getLandData(dotSpacing);
+        landRef.current = land;
         let onScreen = true;
         let ticking = null;
         let vw = 0;
@@ -173,11 +122,11 @@ export default function WireframeDottedGlobe({
             context.stroke();
             context.globalAlpha = 1;
 
-            if (!data) return;
+            if (!landRef.current) return;
 
             // Land outlines.
             context.beginPath();
-            for (const feature of data.land.features) path(feature);
+            for (const feature of landRef.current.land.features) path(feature);
             context.strokeStyle = strokeColor;
             context.lineWidth = hairline;
             context.globalAlpha = landAlpha;
@@ -188,8 +137,9 @@ export default function WireframeDottedGlobe({
             context.fillStyle = dotColor;
             context.globalAlpha = dotAlpha;
             const dotRadius = Math.max(0.5, r / 460);
-            for (let i = 0; i < data.dots.length; i += 2) {
-                const projected = projection([data.dots[i], data.dots[i + 1]]);
+            const dots = landRef.current.dots;
+            for (let i = 0; i < dots.length; i += 2) {
+                const projected = projection([dots[i], dots[i + 1]]);
                 if (!projected) continue;
                 if (projected[0] < 0 || projected[0] > vw) continue;
                 if (projected[1] < 0 || projected[1] > vh) continue;

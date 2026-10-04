@@ -30,8 +30,26 @@
       rel="stylesheet"
     />
   </head>
-  <body>
+  <body style="background:#000000">
     <div id="root"></div>
+    <div id="boot-fail" style="display:none;min-height:100vh;align-items:center;justify-content:center;text-align:center;font-family:Arial,sans-serif;color:#f2f2f5;padding:24px;">
+      <div>
+        <div style="font-size:20px;font-weight:bold;margin-bottom:8px;">Troxe</div>
+        <p style="color:#a1a1aa;font-size:14px;margin-bottom:16px;">The app files couldn&apos;t be loaded. Check your connection, then try again.</p>
+        <button type="button" onclick="window.location.reload()" style="background:#fff;border:0;border-radius:999px;padding:12px 28px;font-weight:bold;cursor:pointer;">Try again</button>
+      </div>
+    </div>
+    <script>
+      // If the module bundle below never executes (dropped connection, stale
+      // cache, killed parse), #root stays empty and the page would be blank
+      // white. After 8s reveal a branded retry card instead. main.jsx removes
+      // this timer the moment it boots.
+      window.__troxeBootTimer = setTimeout(function () {
+        var root = document.getElementById('root');
+        var fail = document.getElementById('boot-fail');
+        if (root && !root.hasChildNodes() && fail) fail.style.display = 'flex';
+      }, 8000);
+    </script>
     <script>
       // Restore clean URLs after a static host's 404.html bounces an unknown
       // path back as "/?/path". Runs before the app boots.
