@@ -102,7 +102,32 @@ export class ExecGateway implements OnGatewayConnection, OnGatewayDisconnect {
       const state = await this.docker.inspect(row.containerId, row.nodeId).catch(() => null);
       if (!state?.running) return fail('EXEC_OFFLINE');
 
-      if (this.byServer.has(serverId)) return fail('EXEC_BUSY');
+      if (this.byServer.has(serverId)) {
+        const existingId = this.byServer.get(serverId)!;
+        const existing = this.bySocket.get(existingId);
+        if (existing && existing.userId === userId && existingId !== client.id) {
+          // Same owner reconnecting while the old transport is still
+          // half-open (mobile blip, tab remount, missed close handshake):
+          // retire the ghost instead of locking its owner out with
+          // EXEC_BUSY. A different user keeps getting EXEC_BUSY below.
+          // NOTE: `server` here is the /ws/exec Namespace itself, so its
+          // socket map is `server.sockets` (a Map) — NOT
+          // `server.sockets.sockets` (undefined; that typo throws). The
+          // static type still says Server, hence the cast.
+          // close() marks it closed synchronously, so the late
+          // handleDisconnect that follows is a harmless no-op.
+          const allSockets = this.server.sockets as unknown as Map<string, Socket>;
+          const oldClient = allSockets.get(existingId);
+          if (oldClient) this.close(oldClient, 'replaced');
+          else {
+            this.bySocket.delete(existingId);
+            this.byServer.delete(serverId);
+            this.perUser.set(userId, Math.max(0, (this.perUser.get(userId) ?? 1) - 1));
+          }
+        } else {
+          return fail('EXEC_BUSY');
+        }
+      }
       if ((this.perUser.get(userId) ?? 0) >= MAX_PER_USER) return fail('EXEC_LIMIT');
 
       const shell = await this.docker.openShell(row.containerId, row.nodeId).catch(() => null);
@@ -216,7 +241,12 @@ export class ExecGateway implements OnGatewayConnection, OnGatewayDisconnect {
     s.idleTimer = setTimeout(() => {
       for (const [sid, sess] of this.bySocket) {
         if (sess === s) {
-          const client = this.server.sockets.sockets.get(sid);
+          // NOTE: same Namespace-map subtlety as above — `.sockets` here is
+          // already the Map. The old `.sockets.sockets` form threw a TypeError
+          // inside this timer for any session idle 5+ minutes, which the
+          // uncaught-exception handler turns into a process exit.
+          const allSockets = this.server.sockets as unknown as Map<string, Socket>;
+          const client = allSockets.get(sid);
           if (client) this.close(client, 'idle-timeout');
           break;
         }

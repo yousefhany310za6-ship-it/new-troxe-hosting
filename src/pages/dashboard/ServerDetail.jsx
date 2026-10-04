@@ -399,7 +399,7 @@ export default function ServerDetail() {
                                         ? logs.split('\n').filter(Boolean).map((line, i) => (
                                             <p key={i} className={cn(line.startsWith('$') && 'text-foreground')}>{line}</p>
                                         ))
-                                        : <p className="text-ink-muted">Start the server to open an interactive shell.</p>
+                                        : <p className="text-ink-muted">{status === 'offline' ? 'Start the server to open an interactive shell.' : 'Waiting for the server to be ready…'}</p>
                                     }
                                 </div>
                             </>

@@ -33,7 +33,12 @@ export function useSocket(namespace, enabled = true) {
       const { ticket } = await apiPost('/auth/ws/token');
       const socket = io(`${SOCKET_ORIGIN}${namespace}`, {
         auth: { ticket, ...authExtra },
-        reconnection: true,
+        // /ws (dashboard live data) stays self-healing; /ws/exec must NOT
+        // auto-reconnect: a rejected or policy-closed shell would otherwise
+        // retry silently with a stale ticket into a dead slot (EXEC_BUSY
+        // storm). ExecTerminal reconnects explicitly, with a fresh ticket
+        // and visible state, a bounded number of times.
+        reconnection: namespace !== '/ws/exec',
         reconnectionDelay: 1000,
         reconnectionDelayMax: 15000,
         timeout: 10000,
