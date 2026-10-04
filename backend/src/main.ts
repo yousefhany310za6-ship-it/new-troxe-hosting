@@ -1,7 +1,7 @@
 import { Logger, ValidationPipe, VersioningType, type LogLevel as NestLogLevel } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import cookieParser from 'cookie-parser';
-import { json } from 'express';
+import { json, raw, urlencoded } from 'express';
 import helmet from 'helmet';
 import * as path from 'node:path';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
@@ -48,10 +48,19 @@ async function bootstrap() {
   );
   app.use(cookieParser());
 
+  // Resend webhooks are HMAC-verified against the EXACT raw bytes (Svix), so
+  // this one route keeps its raw body: it MUST be registered before the
+  // json() parser below (body-parser skips re-parsing once req._body is set,
+  // so downstream the body stays a Buffer for signature verification).
+  app.use('/api/v1/email/webhooks/resend', raw({ type: 'application/json', limit: '1mb' }));
+
   // file editor/upload payloads are JSON base64 (no multipart): raise the
   // default 100kb express limit once, and enforce tighter per-endpoint byte
   // caps in FilesService (512KB text, 2MB binary, 8MB download).
   app.use(json({ limit: '4mb' }));
+  // HTML forms post urlencoded (the email-unsubscribe confirmation page):
+  // parsed globally so ValidationPipe sees a body there too.
+  app.use(urlencoded({ extended: false, limit: '16kb' }));
 
   // ---- CORS: explicit allowlist, never "*" with credentials -----------------
   app.enableCors({

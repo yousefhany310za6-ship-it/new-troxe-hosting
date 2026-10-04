@@ -43,7 +43,7 @@ export class AuthController {
     const out = await this.auth.signup(dto, ctxOf(req));
     res.cookie(COOKIE, out.refreshToken, cookieOpts);
     noStore(res);
-    return { user: out.user, accessToken: out.accessToken, expiresAt: out.expiresAt };
+    return { user: out.user, accessToken: out.accessToken, expiresAt: out.expiresAt, emailVerification: out.emailVerification };
   }
 
   @Post('login')

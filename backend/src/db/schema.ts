@@ -50,6 +50,13 @@ export const users = pgTable('users', {
    * (clients transparently recover via their intact refresh sessions).
    */
   tokenVersion: integer('token_version').default(0).notNull(),
+  /**
+   * Email verification (password signups start false; OAuth with a verified
+   * provider email starts true). Gating features on this flag is future work —
+   * today it only drives the verify flow and the admin/user display.
+   */
+  emailVerified: boolean('email_verified').default(false).notNull(),
+  emailVerifiedAt: timestamp('email_verified_at'),
   notifyRestarts: boolean('notify_restarts').default(true).notNull(),
   notifyInvoices: boolean('notify_invoices').default(true).notNull(),
   notifyMarketing: boolean('notify_marketing').default(false).notNull(),
@@ -78,6 +85,7 @@ export const oauthAccounts = pgTable('oauth_accounts', {
 ]);
 
 // ---- Login history (Overview page / security telemetry) ---------------------
+export const loginMethod = pgEnum('login_method', ['password', 'google', 'discord']);
 export const sessions = pgTable('sessions', {
   id: uuid('id').defaultRandom().primaryKey(),
   userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
@@ -86,8 +94,73 @@ export const sessions = pgTable('sessions', {
   location: varchar('location', { length: 255 }),
   countryCode: varchar('country_code', { length: 2 }),
   status: sessionStatus('status').default('success').notNull(),
+  /** which credential opened the session — drives new-login notifications */
+  method: loginMethod('method'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 }, (t) => [index('sessions_user_created_idx').on(t.userId, t.createdAt)]);
+
+// ---- Email verification codes (6-digit, hashed, short-lived) ------------------
+export const emailVerifications = pgTable('email_verifications', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  /** sha256(code) — the code itself is never stored or logged */
+  codeHash: varchar('code_hash', { length: 64 }).notNull(),
+  expiresAt: timestamp('expires_at').notNull(),
+  /** wrong-code attempts against this row; exhausted rows are invalidated */
+  attempts: integer('attempts').default(0).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (t) => [index('email_verifications_user_idx').on(t.userId)]);
+
+// ---- Password reset tokens (single-use, hashed) ----------------------------------
+export const passwordResetTokens = pgTable('password_reset_tokens', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  /** sha256(token) — the token itself is never stored, logged or returned */
+  tokenHash: varchar('token_hash', { length: 64 }).notNull(),
+  expiresAt: timestamp('expires_at').notNull(),
+  usedAt: timestamp('used_at'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (t) => [index('password_reset_tokens_user_idx').on(t.userId)]);
+
+// ---- Runtime app settings (admin-toggled, no redeploy) ---------------------------
+export const appSettings = pgTable('app_settings', {
+  key: varchar('key', { length: 64 }).primaryKey(),
+  value: text('value').notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+// ---- Email campaigns (admin marketing) ----------------------------------------------
+export const campaignStatus = pgEnum('campaign_status', ['draft', 'sending', 'done', 'cancelled']);
+export const campaignRecipientStatus = pgEnum('campaign_recipient_status', ['pending', 'sending', 'sent', 'failed', 'skipped']);
+
+export const emailCampaigns = pgTable('email_campaigns', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  name: varchar('name', { length: 128 }).notNull(),
+  subject: varchar('subject', { length: 255 }).notNull(),
+  html: text('html').notNull(),
+  text: text('text'),
+  status: campaignStatus('status').default('draft').notNull(),
+  createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  sentAt: timestamp('sent_at'),
+}, (t) => [index('email_campaigns_status_idx').on(t.status)]);
+
+export const emailCampaignRecipients = pgTable('email_campaign_recipients', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  campaignId: uuid('campaign_id').references(() => emailCampaigns.id, { onDelete: 'cascade' }).notNull(),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  status: campaignRecipientStatus('status').default('pending').notNull(),
+  /** Resend message id, when the provider accepted the send */
+  resendId: varchar('resend_id', { length: 128 }),
+  /** delivery state reported back by the Resend webhook (sent/delivered/bounced/...) */
+  delivery: varchar('delivery', { length: 32 }),
+  failureReason: varchar('failure_reason', { length: 255 }),
+  sentAt: timestamp('sent_at'),
+}, (t) => [
+  // one row per (campaign, user): re-sends can never duplicate a recipient
+  uniqueIndex('email_campaign_recipients_unique_idx').on(t.campaignId, t.userId),
+  index('email_campaign_recipients_campaign_idx').on(t.campaignId, t.status),
+]);
 
 // ---- Refresh sessions (rotating, replay-detecting) --------------------------
 export const authSessions = pgTable('auth_sessions', {
@@ -251,6 +324,7 @@ export const auditLogs = pgTable('audit_logs', {
 export type EnvVar = { k: string; v: string };
 export type User = typeof users.$inferSelect;
 export type OAuthAccount = typeof oauthAccounts.$inferSelect;
+export type EmailCampaign = typeof emailCampaigns.$inferSelect;
 export type Server = typeof servers.$inferSelect;
 export type Plan = typeof plans.$inferSelect;
 

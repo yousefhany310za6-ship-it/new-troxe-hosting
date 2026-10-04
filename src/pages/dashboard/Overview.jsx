@@ -101,6 +101,17 @@ export default function Overview() {
                 </p>
             </div>
 
+            {user && user.emailVerified === false && (
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-500/40 bg-amber-500/10 px-5 py-3.5">
+                    <p className="text-[0.9rem] text-amber-200">
+                        Your email <span className="font-bold">{user.email}</span> is not verified yet — some features may ask for it.
+                    </p>
+                    <Link to="/verify-email" className="rounded-full bg-white px-5 py-2 text-[0.83rem] font-bold text-black transition hover:bg-gray-200">
+                        Verify now
+                    </Link>
+                </div>
+            )}
+
             <div className="grid grid-cols-4 gap-4 max-lg:grid-cols-2 max-md:grid-cols-1">
                 {stats.map((stat) => (
                     <StatCard key={stat.label} {...stat} />

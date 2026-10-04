@@ -189,6 +189,24 @@ const OAUTH_FRONTEND_URL = (raw.OAUTH_FRONTEND_URL ?? ALLOWED_ORIGINS[0] ?? '').
 if ((googleOAuth || discordOAuth) && !ALLOWED_ORIGINS.includes(OAUTH_FRONTEND_URL))
   errors.push('OAUTH_FRONTEND_URL must be one of FRONTEND_URLS.');
 
+// --- Email (Resend) ------------------------------------------------------------
+// Additive feature: missing keys disable sending (endpoints answer 503 with a
+// retry message) instead of refusing to boot — unlike the auth secrets above,
+// email must never take the whole API down.
+const RESEND_API_KEY = (raw.RESEND_API_KEY ?? '').trim();
+const RESEND_FROM_EMAIL = (raw.RESEND_FROM_EMAIL ?? '').trim();
+const RESEND_FROM_NAME = (raw.RESEND_FROM_NAME ?? '').trim() || 'Troxe';
+const RESEND_WEBHOOK_SECRET = (raw.RESEND_WEBHOOK_SECRET ?? '').trim();
+const APP_URL = (raw.APP_URL ?? '').trim().replace(/\/+$/, '');
+
+const emailConfigured = !!(RESEND_API_KEY || RESEND_FROM_EMAIL);
+if (emailConfigured && (!RESEND_API_KEY || !RESEND_FROM_EMAIL))
+  errors.push('RESEND_API_KEY and RESEND_FROM_EMAIL must both be set (or both be empty to disable email).');
+if (RESEND_FROM_EMAIL && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(RESEND_FROM_EMAIL))
+  errors.push('RESEND_FROM_EMAIL must be a valid email address.');
+if (APP_URL && !/^https?:\/\/[^/]+$/.test(APP_URL))
+  errors.push('APP_URL must be a bare origin with no path (e.g. https://troxe.net).');
+
 if (errors.length) {
   const body = ['Invalid environment configuration — refusing to start:', ...errors.map((e) => `  • ${e}`)].join('\n');
   throw new Error(body);
@@ -249,6 +267,13 @@ export interface AppConfig {
   readonly DISCORD_GUILD_JOIN_ENABLED: boolean;
   readonly OAUTH_REDIRECT_BASE_URL: string;
   readonly OAUTH_FRONTEND_URL: string;
+  readonly RESEND_API_KEY: string;
+  readonly RESEND_FROM_EMAIL: string;
+  readonly RESEND_FROM_NAME: string;
+  readonly RESEND_WEBHOOK_SECRET: string;
+  /** user-facing site origin for email links (reset, unsubscribe) */
+  readonly APP_URL: string;
+  readonly EMAIL_ENABLED: boolean;
 }
 
 export const config: AppConfig = Object.freeze({
@@ -305,6 +330,13 @@ export const config: AppConfig = Object.freeze({
   DISCORD_GUILD_JOIN_ENABLED: discordGuildJoin && !!DISCORD_BOT_TOKEN && !!DISCORD_GUILD_ID,
   OAUTH_REDIRECT_BASE_URL,
   OAUTH_FRONTEND_URL,
+
+  RESEND_API_KEY,
+  RESEND_FROM_EMAIL,
+  RESEND_FROM_NAME,
+  RESEND_WEBHOOK_SECRET,
+  APP_URL,
+  EMAIL_ENABLED: emailConfigured && !!RESEND_API_KEY && !!RESEND_FROM_EMAIL,
 
   LOG_LEVEL: logLevel(raw.LOG_LEVEL),
 });

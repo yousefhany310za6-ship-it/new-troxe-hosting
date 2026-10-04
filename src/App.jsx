@@ -11,6 +11,9 @@ import RequireAuth, { GuestOnly } from './components/guards.jsx';
 const SignIn = lazy(() => import('./pages/SignIn.jsx'));
 const SignUp = lazy(() => import('./pages/SignUp.jsx'));
 const OAuthCallback = lazy(() => import('./pages/OAuthCallback.jsx'));
+const VerifyEmail = lazy(() => import('./pages/EmailFlows.jsx').then((m) => ({ default: m.VerifyEmail })));
+const ForgotPassword = lazy(() => import('./pages/EmailFlows.jsx').then((m) => ({ default: m.ForgotPassword })));
+const ResetPassword = lazy(() => import('./pages/EmailFlows.jsx').then((m) => ({ default: m.ResetPassword })));
 
 // Content pages are also split out so the landing page stays lean.
 const About = lazy(() => import('./pages/About.jsx'));
@@ -58,6 +61,8 @@ export default function App() {
                     <Route path="/signup" element={<GuestOnly><SignUp /></GuestOnly>} />
                     {/* OAuth landing: the backend 302s here after the provider round-trip */}
                     <Route path="/oauth/callback" element={<OAuthCallback />} />
+                    <Route path="/forgot-password" element={<GuestOnly><ForgotPassword /></GuestOnly>} />
+                    <Route path="/reset-password" element={<GuestOnly><ResetPassword /></GuestOnly>} />
                     <Route path="/about" element={<About />} />
                     <Route path="/contact" element={<Contact />} />
                     <Route path="/terms" element={<Terms />} />
@@ -67,6 +72,7 @@ export default function App() {
                     <Route path="/features" element={<FeaturesPage />} />
                     <Route path="/services" element={<ServicesPage />} />
                     <Route element={<RequireAuth />}>
+                        <Route path="/verify-email" element={<VerifyEmail />} />
                         <Route path="/dashboard" element={<DashboardLayout />}>
                             <Route index element={<Overview />} />
                             <Route path="servers" element={<Servers />} />

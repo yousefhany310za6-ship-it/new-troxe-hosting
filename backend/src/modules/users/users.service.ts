@@ -4,7 +4,9 @@ import { Err } from '../../common/errors';
 import { hashPassword, verifyPassword } from '../../common/password';
 import { DB, Db } from '../../db/db.module';
 import { auditLogs, users } from '../../db/schema';
+import { config } from '../../config/env';
 import { httpsUrlOk } from '../auth/oauth/oauth.helpers';
+import { verifyUnsubscribe } from '../email/email.tokens';
 import { AuditService } from '../audit/audit.module';
 import { AuthService } from '../auth/auth.service';
 import { ServersService } from '../servers/servers.service';
@@ -205,6 +207,24 @@ export class UsersService {
       notifyInvoices: u.notifyInvoices,
       notifyMarketing: u.notifyMarketing,
     };
+  }
+
+  /**
+   * One-click marketing unsubscribe from an emailed link. Verified purely by
+   * the HMAC token (no login): it can ONLY flip marketing mail off — never
+   * verification, reset, or security mail, and never anything else.
+   */
+  async unsubscribeMarketing(token: string, ctx: { ip: string; userAgent?: string }): Promise<{ ok: boolean; already: boolean }> {
+    const uid = verifyUnsubscribe(token, config.JWT_ACCESS_SECRET);
+    if (!uid) throw Err.invalid('UNSUBSCRIBE_INVALID', 'This unsubscribe link is invalid or expired');
+    const [u] = await this.db.select({ id: users.id, email: users.email, notifyMarketing: users.notifyMarketing }).from(users).where(eq(users.id, uid)).limit(1);
+    if (!u) throw Err.invalid('UNSUBSCRIBE_INVALID', 'This unsubscribe link is invalid or expired');
+    if (!u.notifyMarketing) return { ok: true, already: true };
+    await this.db.update(users).set({ notifyMarketing: false }).where(eq(users.id, uid));
+    await this.audit
+      .record({ actorId: uid, actorEmail: u.email, action: 'user.marketing.unsubscribe', targetType: 'user', targetId: uid, ip: ctx.ip, userAgent: ctx.userAgent })
+      .catch(() => undefined);
+    return { ok: true, already: false };
   }
 
   /**

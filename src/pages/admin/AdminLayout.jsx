@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { Activity, ArrowLeft, Database, LayoutDashboard, Menu, Network, Server, ShieldCheck, Users, X } from 'lucide-react';
+import { Activity, ArrowLeft, Database, LayoutDashboard, Mail, Menu, Network, Server, ShieldCheck, Users, X } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/context/AuthContext.jsx';
@@ -11,6 +11,7 @@ const NAV = [
     { to: '/admin/servers', label: 'Servers', Icon: Server },
     { to: '/admin/nodes', label: 'Nodes', Icon: Network },
     { to: '/admin/plans', label: 'Plans', Icon: Database },
+    { to: '/admin/email', label: 'Email', Icon: Mail },
     { to: '/admin/audit', label: 'Audit log', Icon: Activity },
 ];
 

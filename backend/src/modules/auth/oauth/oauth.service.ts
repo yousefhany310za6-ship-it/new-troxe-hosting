@@ -236,7 +236,15 @@ export class OAuthService {
       const created = await this.db.transaction(async (tx) => {
         const [u] = await tx
           .insert(users)
-          .values({ name: profile.name, email, passwordHash: null, avatarUrl: profile.avatarUrl })
+          .values({
+            name: profile.name,
+            email,
+            passwordHash: null,
+            avatarUrl: profile.avatarUrl,
+            // a verified provider email IS a verified email — no code needed
+            emailVerified: profile.emailVerified,
+            emailVerifiedAt: profile.emailVerified ? new Date() : null,
+          })
           .returning({ id: users.id });
         await tx.insert(oauthAccounts).values({
           userId: u.id,
@@ -290,6 +298,15 @@ export class OAuthService {
       .catch(() => undefined);
     if (!currentAvatar && profile.avatarUrl) {
       await this.db.update(users).set({ avatarUrl: profile.avatarUrl }).where(eq(users.id, userId)).catch(() => undefined);
+    }
+    // the provider re-confirmed this exact address: adopt the verification
+    // (only when the addresses match — never across different emails)
+    if (profile.email && profile.emailVerified) {
+      await this.db
+        .update(users)
+        .set({ emailVerified: true, emailVerifiedAt: new Date() })
+        .where(and(eq(users.id, userId), eq(users.email, profile.email)))
+        .catch(() => undefined);
     }
   }
 

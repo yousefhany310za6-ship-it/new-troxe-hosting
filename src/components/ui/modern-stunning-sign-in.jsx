@@ -136,6 +136,11 @@ function SignIn1({ className, onSignIn, onGoogleSignIn, onDiscordSignIn, brandNa
                 {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
               </button>
             </label>
+            <div className="flex justify-end">
+              <Link to="/forgot-password" className="text-sm text-gray-400 underline hover:text-white">
+                Forgot password?
+              </Link>
+            </div>
             {error && (
               <div className="flex items-center gap-2 text-sm text-red-400" role="alert">
                 <AlertCircle className="h-4 w-4 shrink-0" />

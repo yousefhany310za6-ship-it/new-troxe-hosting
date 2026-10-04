@@ -180,3 +180,78 @@ export function useAdminPlanDelete(id) {
 export function useAdminAudit(params) {
   return useQuery({ queryKey: adminKeys.audit(params), queryFn: () => apiGet(`/admin/audit${qs(params)}`), keepPreviousData: true });
 }
+
+// ---- email ----
+export function useAdminEmailStatus() {
+  return useQuery({ queryKey: ['admin', 'email', 'status'], queryFn: () => apiGet('/admin/email/status') });
+}
+
+export function useAdminEmailSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data) => apiPatch('/admin/email/settings', data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'email', 'status'] }),
+  });
+}
+
+export function useAdminCampaigns() {
+  return useQuery({ queryKey: ['admin', 'email', 'campaigns'], queryFn: () => apiGet('/admin/email/campaigns') });
+}
+
+export function useAdminCampaign(id) {
+  return useQuery({ queryKey: ['admin', 'email', 'campaigns', id], queryFn: () => apiGet(`/admin/email/campaigns/${id}`), enabled: !!id });
+}
+
+export function useAdminCampaignCreate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data) => apiPost('/admin/email/campaigns', data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'email', 'campaigns'] }),
+  });
+}
+
+export function useAdminCampaignUpdate(id) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data) => apiPatch(`/admin/email/campaigns/${id}`, data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin', 'email', 'campaigns'] });
+      qc.invalidateQueries({ queryKey: ['admin', 'email', 'campaigns', id] });
+    },
+  });
+}
+
+export function useAdminCampaignPreview(id) {
+  return useMutation({ mutationFn: (filters) => apiPost(`/admin/email/campaigns/${id}/recipients/preview`, filters || {}) });
+}
+
+export function useAdminCampaignSend(id) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (filters) => apiPost(`/admin/email/campaigns/${id}/send`, filters || {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin', 'email', 'campaigns'] });
+      qc.invalidateQueries({ queryKey: ['admin', 'email', 'campaigns', id] });
+    },
+  });
+}
+
+export function useAdminCampaignCancel(id) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiPost(`/admin/email/campaigns/${id}/cancel`, {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin', 'email', 'campaigns'] });
+      qc.invalidateQueries({ queryKey: ['admin', 'email', 'campaigns', id] });
+    },
+  });
+}
+
+export function useAdminCampaignRecipients(id, params) {
+  return useQuery({
+    queryKey: ['admin', 'email', 'campaigns', id, 'recipients', params],
+    queryFn: () => apiGet(`/admin/email/campaigns/${id}/recipients${qs(params)}`),
+    enabled: !!id,
+    keepPreviousData: true,
+  });
+}

@@ -11,11 +11,25 @@ import { AdminGuard } from './admin.guard';
 import { RealtimeGateway } from './realtime.gateway';
 import { OAuthController } from './oauth/oauth.controller';
 import { OAuthService } from './oauth/oauth.service';
+import { EmailAuthController } from './email-auth.controller';
+import { EmailVerificationService } from './email-verification.service';
+import { PasswordResetService } from './password-reset.service';
+import { EmailModule } from '../email/email.module';
 
 @Module({
-  imports: [JwtModule.register({ global: true, secret: config.JWT_ACCESS_SECRET }), AuditModule],
-  controllers: [AuthController, OAuthController],
-  providers: [AuthService, JwtAuthGuard, WsTicketService, WsAuthGuard, AdminGuard, RealtimeGateway, OAuthService],
+  imports: [JwtModule.register({ global: true, secret: config.JWT_ACCESS_SECRET }), AuditModule, EmailModule],
+  controllers: [AuthController, OAuthController, EmailAuthController],
+  providers: [
+    AuthService,
+    JwtAuthGuard,
+    WsTicketService,
+    WsAuthGuard,
+    AdminGuard,
+    RealtimeGateway,
+    OAuthService,
+    EmailVerificationService,
+    PasswordResetService,
+  ],
   exports: [AuthService, JwtAuthGuard, WsTicketService, AdminGuard, RealtimeGateway, OAuthService],
 })
 export class AuthModule {}

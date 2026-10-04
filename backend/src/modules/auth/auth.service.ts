@@ -11,6 +11,9 @@ import { ReqCtx } from '../../common/request-context';
 import { DB, Db } from '../../db/db.module';
 import { authSessions, sessions, users, type User } from '../../db/schema';
 import { AuditService } from '../audit/audit.module';
+import { LoginNotifyService, type LoginMethod } from '../email/login-notify.service';
+import { EmailService } from '../email/email.service';
+import { EmailVerificationService } from './email-verification.service';
 import { LoginDto, SignupDto } from './dto';
 
 /** `<sessionId>.<48-byte secret>` — opaque, high entropy, versionless */
@@ -45,6 +48,9 @@ export class AuthService {
     @Inject(DB) private db: Db,
     private jwt: JwtService,
     private audit: AuditService,
+    private loginNotify: LoginNotifyService,
+    private email: EmailService,
+    private verification: EmailVerificationService,
   ) {
     this.dummyHash = bcrypt.hash(randomToken(32), config.BCRYPT_ROUNDS);
   }
@@ -95,7 +101,7 @@ export class AuthService {
         throw e;
       });
 
-    await this.recordLogin(user.id, ctx, 'success');
+    await this.recordLogin(user.id, ctx, 'success', 'password');
     const issued = await this.newRefreshSession(user, ctx);
     await this.audit.record({
       actorId: user.id,
@@ -106,11 +112,18 @@ export class AuthService {
       ip: ctx.ip,
       userAgent: ctx.device,
     });
+    // verification mail is best-effort: a dead mailer must never fail signup.
+    // `sent:false` tells the UI to show the resend prompt instead.
+    let emailVerification = { sent: false, already: false };
+    if (this.email.enabled) {
+      emailVerification = await this.verification.send(user.id, ctx).catch(() => ({ sent: false, already: false }));
+    }
     return {
       user: { id: user.id, name: user.name, email: user.email, role: user.role },
       accessToken: issued.accessToken,
       refreshToken: issued.refreshToken,
       expiresAt: issued.expiresAt,
+      emailVerification,
     };
   }
 
@@ -134,7 +147,7 @@ export class AuthService {
     if (!user || !ok) {
       if (user) {
         const lockedSeconds = await this.registerFailure(user);
-        await this.recordLogin(user.id, ctx, 'failed');
+        await this.recordLogin(user.id, ctx, 'failed', 'password');
         await this.audit.record({
           actorId: user.id,
           actorEmail: email,
@@ -157,7 +170,7 @@ export class AuthService {
         .where(eq(users.id, user.id));
     }
 
-    await this.recordLogin(user.id, ctx, 'success');
+    await this.recordLogin(user.id, ctx, 'success', 'password');
     const issued = await this.newRefreshSession(user, ctx);
     await this.audit.record({
       actorId: user.id,
@@ -168,6 +181,10 @@ export class AuthService {
       ip: ctx.ip,
       userAgent: ctx.device,
     });
+    // fire-and-forget is wrong here: awaiting keeps ordering (login row lands
+    // first), and the notifier itself never throws — a dead mailer only
+    // appears in the audit trail, the login below always succeeds.
+    await this.alertNewIp(user, ctx, 'password');
     return {
       user: { id: user.id, name: user.name, email: user.email, role: user.role },
       accessToken: issued.accessToken,
@@ -194,7 +211,7 @@ export class AuthService {
       throw Err.accountLocked(seconds);
     }
 
-    await this.recordLogin(user.id, ctx, 'success');
+    await this.recordLogin(user.id, ctx, 'success', provider);
     const issued = await this.newRefreshSession(user, ctx);
     await this.audit.record({
       actorId: user.id,
@@ -205,6 +222,7 @@ export class AuthService {
       ip: ctx.ip,
       userAgent: ctx.device,
     });
+    await this.alertNewIp(user, ctx, provider);
     return {
       user: { id: user.id, name: user.name, email: user.email, role: user.role },
       accessToken: issued.accessToken,
@@ -406,15 +424,30 @@ export class AuthService {
     return lockedSeconds;
   }
 
-  private async recordLogin(userId: string, ctx: ReqCtx, status: 'success' | 'failed') {
+  private async recordLogin(userId: string, ctx: ReqCtx, status: 'success' | 'failed', method?: LoginMethod) {
     await this.db.insert(sessions).values({
       userId,
       ip: ctx.ip,
       device: ctx.device,
       status,
+      method: method ?? null,
       location: null,
       countryCode: null,
     } as never);
+  }
+
+  /**
+   * Best-effort new-IP security email. Runs AFTER the session is issued and
+   * swallows everything: the notifier contract already degrades to audit
+   * records, and this belt-and-suspenders catch means mail can never break
+   * authentication, no matter what a future notifier throws.
+   */
+  private async alertNewIp(user: { id: string; email: string; name: string }, ctx: ReqCtx, method: LoginMethod): Promise<void> {
+    try {
+      await this.loginNotify.maybeNotify(user, ctx, method);
+    } catch (e) {
+      this.log.warn(`new-ip alert threw for ${user.id}: ${(e as Error).message.slice(0, 120)}`);
+    }
   }
 
   /** Login history for the Overview page. */
