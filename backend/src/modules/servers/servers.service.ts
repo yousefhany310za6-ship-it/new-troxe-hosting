@@ -509,6 +509,16 @@ export class ServersService {
     }
 
     try {
+      // Before any start/restart/reinstall, fix ownership drift that may have
+      // been introduced by root-owned uploads/extractions since the last
+      // chownVolume run. This is cheap (single find check) and idempotent.
+      if (action !== 'stop') {
+        const volumeName = row.volumeName;
+        if (volumeName) {
+          await this.provisioner.fixOwnership(row.nodeId, volumeName);
+        }
+      }
+
       if (action === 'start') {
         await this.setField(id, { status: 'restarting', lastError: null });
         await this.docker.start(row.containerId!, row.nodeId);

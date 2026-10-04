@@ -9,6 +9,7 @@ import { DockerService } from './docker.service';
 import { NetworkHardeningService } from './network-hardening.service';
 import { runtimeImage, type Runtime } from './images';
 import { starterSeed } from './starter';
+import { ownershipRepairScript } from './volume-ownership';
 import { intToIp, ipToInt } from '../../nodes/nodes.service';
 import { buildSandboxConfig, resourceNames } from './sandbox';
 
@@ -406,7 +407,11 @@ export class ProvisionerService {
         // .troxe-init must exist before the sandbox container is created:
         // dockerd resets an EMPTY volume dir to root:root 0755 while
         // preparing WorkingDir (/data), stripping the client's ownership.
-        cmd: [`touch /data/.troxe-init && { ${seed}; } && chown -R 1000:1000 /data && chmod 750 /data`],
+        // Then we ensure ownership is correct — this now runs on EVERY
+        // provision call (create, restart, reinstall, repair) so any
+        // ownership drift caused by root-owned uploads/extractions is
+        // silently corrected before the sandbox starts.
+        cmd: [`touch /data/.troxe-init && { ${ownershipRepairScript()} ${seed}; } && chmod 750 /data`],
         binds: [`${volumeName}:/data`],
         user: '0:0',
         timeoutMs: 30_000,
@@ -416,6 +421,29 @@ export class ProvisionerService {
     } catch (e) {
       // non-fatal: the sandbox may still run, writes would fail loudly
       this.log.warn(`volume ownership setup failed: ${(e as Error).message}`);
+    }
+  }
+
+  /**
+   * Fix ownership drift on an existing volume without full re-chown.
+   * Runs the same repair script as chownVolume but skips the starter seed
+   * and chmod steps (idempotent, safe to call before every start/restart).
+   */
+  async fixOwnership(nodeId: string, volumeName: string): Promise<void> {
+    try {
+      const res = await this.docker.runHelper({
+        image: config.HELPER_IMAGE,
+        // Fix ownership if any root-owned files leaked in (uploads, extracts).
+        cmd: [`${ownershipRepairScript()}`],
+        binds: [`${volumeName}:/data`],
+        user: '0:0',
+        timeoutMs: 30_000,
+        nodeId,
+      });
+      if (res.code !== 0) this.log.warn(`volume ownership fix exited ${res.code}: ${res.out.slice(0, 200)}`);
+    } catch (e) {
+      // non-fatal: the sandbox may still run, writes would fail loudly
+      this.log.warn(`volume ownership fix failed: ${(e as Error).message}`);
     }
   }
 
