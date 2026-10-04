@@ -14,6 +14,7 @@ export const serverStatus = pgEnum('server_status', [
 export const serverRuntime = pgEnum('server_runtime', ['Node.js', 'Python', 'Bun', 'PHP']);
 export const backupType = pgEnum('backup_type', ['auto', 'manual']);
 export const backupStatus = pgEnum('backup_status', ['pending', 'ready', 'failed']);
+export const avatarSource = pgEnum('avatar_source', ['oauth', 'custom', 'default']);
 export const oauthProvider = pgEnum('oauth_provider', ['google', 'discord']);
 
 // ---- Users ------------------------------------------------------------------
@@ -60,6 +61,10 @@ export const users = pgTable('users', {
   notifyRestarts: boolean('notify_restarts').default(true).notNull(),
   notifyInvoices: boolean('notify_invoices').default(true).notNull(),
   notifyMarketing: boolean('notify_marketing').default(false).notNull(),
+  /** Source of the current avatar: 'oauth' (from provider), 'custom' (user uploaded), 'default' (initial) */
+  avatarSource: avatarSource('avatar_source').default('default').notNull(),
+  /** When the username was last changed. Used for the 30-day change restriction. */
+  usernameChangedAt: timestamp('username_changed_at'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
