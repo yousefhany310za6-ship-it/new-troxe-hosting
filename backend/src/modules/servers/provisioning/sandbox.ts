@@ -1,6 +1,6 @@
 import type { ContainerCreateOptions, HostConfig } from 'dockerode';
 import type { EnvVar } from '../../../db/schema';
-import type { RuntimeImage } from './images';
+import type { Runtime, RuntimeImage } from './images';
 
 /** Deterministic, globally unique docker resource names for one server. */
 export function resourceNames(serverId: string) {
@@ -50,6 +50,67 @@ export function buildEnv(spec: SandboxSpec): string[] {
   return [...merged].map(([k, v]) => `${k}=${v}`);
 }
 
+/**
+ * Dependency auto-install prelude, prepended to the client's startup command.
+ *
+ * Problem it fixes: a client uploads `package.json` / `requirements.txt`
+ * (without vendored deps) and the sandbox runs the main file straight away,
+ * dying with MODULE_NOT_FOUND. The prelude installs first — on EVERY start
+ * path (create, restart, repair) since it lives inside the container command
+ * itself, not in a provision step that restarts skip.
+ *
+ * Cost control: the install runs only when the manifest's sha256 has no
+ * matching `.troxe-deps-<hash>` marker, so unchanged restarts pay one `[ -f ]`
+ * test. The marker is written only on success, so a failed install retries
+ * on the next start instead of being cached as done.
+ *
+ * Containment: same unprivileged uid, same read-only rootfs, same network
+ * policy as the startup itself; the commands below are fixed strings (no
+ * client input is interpolated); a 10-minute `timeout` bounds a hung
+ * registry; install output streams to the container logs. PHP has no
+ * prelude — php:8.3-cli ships no composer, so PHP clients upload `vendor/`.
+ */
+const INSTALL_TIMEOUT_SECS = 600;
+
+function jsPrelude(pkgMgr: 'npm' | 'bun'): string {
+  // NOTE: deliberately `npm install`, never `npm ci` — even when a lockfile
+  // exists. The manifest is edited by hand in the file manager, so it
+  // routinely drifts ahead of the lock; `ci` aborts on that drift ("lock
+  // and package.json are out of sync") and the sandbox would crash-loop.
+  // `install` reconciles the lock instead, and the marker still skips it
+  // entirely when nothing changed.
+  const install =
+    pkgMgr === 'npm'
+      ? `timeout ${INSTALL_TIMEOUT_SECS} npm install --no-audit --no-fund --no-update-notifier`
+      : `timeout ${INSTALL_TIMEOUT_SECS} bun install`;
+  return (
+    `if [ -f package.json ]; then h=$(sha256sum package.json | cut -d' ' -f1); ` +
+    `if [ ! -f ".troxe-deps-$h" ]; then echo "[troxe] package.json changed, installing dependencies..." && ` +
+    `${install} && rm -f .troxe-deps-* && touch ".troxe-deps-$h"; fi; fi`
+  );
+}
+
+function pyPrelude(): string {
+  return (
+    `if [ -f requirements.txt ]; then h=$(sha256sum requirements.txt | cut -d' ' -f1); ` +
+    `if [ ! -f ".troxe-deps-$h" ]; then echo "[troxe] requirements.txt changed, installing dependencies..." && ` +
+    `timeout ${INSTALL_TIMEOUT_SECS} pip install --user -r requirements.txt && rm -f .troxe-deps-* && touch ".troxe-deps-$h"; fi; fi`
+  );
+}
+
+/** Shell prefix for the sandbox command, including the trailing `&& ` (or empty). */
+export function depsPrelude(runtime: Runtime): string {
+  switch (runtime) {
+    case 'Node.js':
+      return `${jsPrelude('npm')} && `;
+    case 'Bun':
+      return `${jsPrelude('bun')} && `;
+    case 'Python':
+      return `${pyPrelude()} && `;
+    case 'PHP':
+      return '';
+  }
+}
 /**
  * The isolation policy for one client sandbox.
  *
@@ -123,8 +184,11 @@ export function buildSandboxConfig(spec: SandboxSpec): ContainerCreateOptions {
     name: containerName,
     Image: spec.image.image,
     Hostname: `srv-${spec.serverId.slice(0, 8)}`,
-    // startup is a single argv element — never interpolated into a host shell
-    Cmd: ['/bin/sh', '-c', spec.startup],
+    // startup is a single argv element — never interpolated into a host shell.
+    // A dependency prelude (same sandbox user, fixed commands, no client
+    // input) installs package.json/requirements.txt first when the manifest
+    // changed; unchanged restarts skip it via the .troxe-deps-<hash> marker.
+    Cmd: ['/bin/sh', '-c', depsPrelude(spec.image.runtime) + spec.startup],
     Entrypoint: [],
     User: spec.image.user,
     WorkingDir: spec.image.workdir,
