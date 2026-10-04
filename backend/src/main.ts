@@ -1,5 +1,6 @@
 import { Logger, ValidationPipe, VersioningType, type LogLevel as NestLogLevel } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import { IoAdapter } from '@nestjs/platform-socket.io';
 import cookieParser from 'cookie-parser';
 import { json, raw, urlencoded } from 'express';
 import helmet from 'helmet';
@@ -31,6 +32,8 @@ process.on('uncaughtException', (err) => {
 async function bootstrap() {
   // fail fast when a provider cannot initialize (never serve "healthy" deaf)
   const app = await NestFactory.create(AppModule, { abortOnError: true, logger: LOG_LEVELS });
+
+  app.useWebSocketAdapter(new IoAdapter(app));
 
   app.setGlobalPrefix('api');
   app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });

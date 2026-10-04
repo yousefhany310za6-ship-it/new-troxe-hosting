@@ -36,6 +36,7 @@ export default function ExecTerminal({ server }) {
   const stateRef = useRef(null);
   const [phase, setPhase] = useState('connecting'); // connecting | live | retrying | dead
   const [deadReason, setDeadReason] = useState('');
+  const [readOnly, setReadOnly] = useState(true); // Default to true, updated from ready event
   const { socketRef, connected, lastError, connect, disconnect } = useSocket('/ws/exec', false);
 
   useEffect(() => {
@@ -85,11 +86,17 @@ export default function ExecTerminal({ server }) {
 
     const attach = (socket, g) => {
       st.socket = socket;
-      socket.on('ready', () => {
+      socket.on('ready', (data) => {
         if (!st.alive || g !== st.gen) return;
         st.attempts = 0;
-        st.term?.clear();
-        st.term?.writeln(`\x1b[90mConnected — /data@${server.name} (type "exit" to close)\x1b[0m`);
+        const isReadOnly = data?.readOnly ?? true;
+        setReadOnly(isReadOnly);
+        // Don't clear in read-only mode to preserve output
+        if (!isReadOnly) st.term?.clear();
+        const msg = isReadOnly
+          ? `\x1b[90mConnected (read-only) — /data@${server.name}\x1b[0m`
+          : `\x1b[90mConnected — /data@${server.name} (type "exit" to close)\x1b[0m`;
+        st.term?.writeln(msg);
         setPh('live');
       });
       socket.on('output', ({ data }) => {
@@ -187,10 +194,12 @@ export default function ExecTerminal({ server }) {
       // wired once for the terminal's lifetime: every socket below is a fresh
       // object (retries re-attach), so handlers here always read st.socket
       term.onData((d) => {
+        if (readOnly) return; // Ignore input in read-only mode
         const s = st.socket;
         if (s && s.connected) s.emit('input', { data: b64e(d) });
       });
       const onResize = () => {
+        if (readOnly) return; // Ignore resize in read-only mode
         try {
           const s = st.socket;
           st.fit?.fit();
@@ -237,9 +246,19 @@ export default function ExecTerminal({ server }) {
       <div className="flex items-center gap-2">
         <span className={`size-2 rounded-full ${connected ? 'animate-beat bg-emerald-500' : phase === 'retrying' ? 'animate-beat bg-amber-500' : 'bg-zinc-600'}`} />
         <span className="font-mono text-[0.78rem] text-ink-muted">
-          {connected ? 'live shell' : phase === 'retrying' ? 'reconnecting…' : phase === 'dead' ? `disconnected${deadReason ? ` (${deadReason})` : ''}` : lastError ? `disconnected (${lastError})` : 'connecting…'}
+          {connected
+            ? readOnly
+              ? 'live shell (read-only)'
+              : 'live shell'
+            : phase === 'retrying'
+            ? 'reconnecting…'
+            : phase === 'dead'
+            ? `disconnected${deadReason ? ` (${deadReason})` : ''}`
+            : lastError
+            ? `disconnected (${lastError})`
+            : 'connecting…'}
         </span>
-        {phase === 'dead' && (
+        {phase === 'dead' && !readOnly && (
           <button
             type="button"
             onClick={retryNow}

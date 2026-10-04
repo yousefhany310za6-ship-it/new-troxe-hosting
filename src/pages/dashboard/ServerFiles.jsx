@@ -35,11 +35,13 @@ import {
     useWriteFile,
 } from '@/hooks/useQueries.jsx';
 
-// Pterodactyl-flavored controls: small gray buttons, uppercase labels.
+// Modern controls: soft pills, normal-case labels.
 const btnSecondary =
-    'inline-flex min-h-9 items-center gap-1.5 rounded-md border border-hairline bg-veil px-3 py-1.5 text-[0.75rem] font-bold uppercase tracking-wide text-ink-secondary transition hover:border-hairline-hover hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40';
+    'inline-flex min-h-10 items-center gap-1.5 rounded-full border border-hairline bg-white/[0.06] px-4 py-2 text-[0.8rem] font-semibold text-ink-secondary shadow-sm transition hover:border-hairline-hover hover:bg-white/[0.1] hover:text-foreground hover:shadow disabled:cursor-not-allowed disabled:opacity-40';
+const btnPrimary =
+    'inline-flex min-h-10 items-center gap-1.5 rounded-full bg-white px-4 py-2 text-[0.8rem] font-bold text-black shadow-md transition hover:bg-gray-200 hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-50';
 const btnIcon =
-    'inline-flex min-h-9 min-w-9 items-center justify-center rounded-md p-2 text-ink-secondary transition hover:bg-veil hover:text-foreground disabled:opacity-40';
+    'inline-flex min-h-9 min-w-9 items-center justify-center rounded-xl p-2 text-ink-secondary transition hover:bg-white/10 hover:text-foreground hover:shadow disabled:opacity-40';
 const inputClass =
     'w-full rounded-md border border-hairline bg-black/40 px-3.5 py-2.5 text-[0.88rem] text-foreground placeholder-ink-muted transition focus:border-primary focus:ring-2 focus:ring-ring/40 focus:outline-none';
 const menuItem =
@@ -538,9 +540,9 @@ export default function ServerFiles({ server }) {
     }
 
     return (
-        <div className="overflow-hidden rounded-lg border border-hairline bg-card">
+        <div className="overflow-hidden rounded-2xl border border-hairline bg-gradient-to-b from-white/[0.04] to-transparent bg-card shadow-xl">
             {/* toolbar: breadcrumb + actions */}
-            <div className="flex items-center gap-2 border-b border-hairline bg-black/20 px-3 py-2 sm:px-4">
+            <div className="flex items-center gap-2 border-b border-hairline/70 px-3 py-2.5 sm:px-5 sm:py-3">
                 <nav aria-label="Breadcrumb" className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto whitespace-nowrap py-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                     <button type="button" onClick={() => setDir([])} aria-label="Root directory" className="flex min-h-11 shrink-0 items-center gap-1.5 rounded-md px-2 font-mono text-[0.85rem] font-bold transition hover:bg-veil sm:min-h-9">
                         <Home className="size-4 text-ink-secondary" />
@@ -594,16 +596,16 @@ export default function ServerFiles({ server }) {
                             </>
                         )}
                     </div>
-                    {/* desktop: Pterodactyl-style action buttons */}
-                    <div className="hidden items-center gap-1.5 sm:flex">
-                        <button type="button" onClick={() => uploadRef.current?.click()} disabled={!!transfer} className={btnSecondary}>
-                            <Upload className="size-3.5" /> Upload
+                    {/* desktop: modern pill buttons */}
+                    <div className="hidden items-center gap-2 sm:flex">
+                        <button type="button" onClick={() => uploadRef.current?.click()} disabled={!!transfer} className={btnPrimary}>
+                            <Upload className="size-4" /> Upload
                         </button>
                         <button type="button" onClick={() => setSheet({ type: 'new-file', value: '' })} className={btnSecondary}>
-                            New file
+                            <FilePlus className="size-4" /> New file
                         </button>
                         <button type="button" onClick={() => setSheet({ type: 'new-dir', value: '' })} className={btnSecondary}>
-                            New directory
+                            <FolderPlus className="size-4" /> New folder
                         </button>
                     </div>
                 </div>
@@ -629,12 +631,12 @@ export default function ServerFiles({ server }) {
                 </div>
             )}
 
-            {/* rows */}
-            <div className="flex flex-col divide-y divide-hairline/60">
+            {/* cards */}
+            <div className="flex flex-col gap-2 p-3 sm:p-4">
                 {isLoading && <p className="px-4 py-10 text-center text-[0.88rem] text-ink-muted">Loading…</p>}
                 {error && <p className="px-4 py-10 text-center text-[0.88rem] text-red-400">Failed to load: {error.message}</p>}
                 {!isLoading && !error && entries.length === 0 && (
-                    <div className="flex flex-col items-center gap-2 px-4 py-12 text-center">
+                    <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-hairline px-4 py-12 text-center">
                         <Folder className="size-9 text-ink-muted" />
                         <p className="text-[0.92rem] font-semibold">This directory is empty</p>
                         <p className="max-w-60 text-[0.82rem] text-ink-secondary">Upload files or create a new one to get started.</p>
@@ -650,8 +652,10 @@ export default function ServerFiles({ server }) {
                             key={entry.name}
                             onClick={isDir ? () => openEntry(entry) : undefined}
                             className={cn(
-                                'group flex min-h-[3.5rem] items-center gap-2.5 px-3 py-2 transition sm:gap-3 sm:px-4',
-                                checked ? 'bg-blue-500/10' : 'sm:hover:bg-veil/40 active:bg-veil/40',
+                                'group flex min-h-[4rem] items-center gap-3 rounded-2xl border px-3 py-2.5 shadow-sm transition duration-150 sm:px-4',
+                                checked
+                                    ? 'border-blue-400/50 bg-blue-500/10 shadow-md'
+                                    : 'border-hairline/70 bg-white/[0.03] hover:border-hairline-hover hover:bg-white/[0.06] hover:shadow-lg',
                                 isDir && 'cursor-pointer',
                             )}
                         >
@@ -661,7 +665,7 @@ export default function ServerFiles({ server }) {
                                 onChange={() => toggleSelect(entry.name)}
                                 onClick={(e) => e.stopPropagation()}
                                 aria-label={`Select ${entry.name}`}
-                                className="size-5 shrink-0 cursor-pointer accent-white"
+                                className="size-5 shrink-0 cursor-pointer rounded-md accent-white"
                             />
                             <button
                                 type="button"
@@ -669,17 +673,22 @@ export default function ServerFiles({ server }) {
                                 className="flex min-w-0 flex-1 items-center gap-3 text-left"
                                 aria-label={isDir ? `Open folder ${entry.name}` : `Open file ${entry.name}`}
                             >
-                                {isDir ? (
-                                    <Folder className="size-6 shrink-0 text-sky-300/80" />
-                                ) : icon ? (
-                                    <img src={icon} alt="" aria-hidden="true" className="size-6 shrink-0" draggable={false} />
-                                ) : (
-                                    <FileText className="size-5 shrink-0 text-ink-muted" />
-                                )}
+                                <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-white/10 to-white/[0.02] shadow-inner">
+                                    {isDir ? (
+                                        <Folder className="size-6 text-sky-300/90" />
+                                    ) : icon ? (
+                                        <img src={icon} alt="" aria-hidden="true" className="size-6" draggable={false} />
+                                    ) : (
+                                        <FileText className="size-5 text-ink-muted" />
+                                    )}
+                                </span>
                                 <span className="min-w-0 flex-1">
-                                    <span className="block truncate text-[0.9rem] font-medium text-gray-100">{entry.name}</span>
-                                    <span className="mt-0.5 block font-mono text-[0.7rem] text-ink-muted sm:hidden">
-                                        {isDir ? 'Directory' : fmtSize(entry.size)} · {fmtDate(entry.mtime)}
+                                    <span className="block truncate text-[0.92rem] font-semibold text-gray-100">{entry.name}</span>
+                                    <span className="mt-1 flex items-center gap-2 font-mono text-[0.7rem] text-ink-muted">
+                                        <span className="rounded-full bg-white/[0.06] px-2 py-0.5">
+                                            {isDir ? 'Folder' : fmtSize(entry.size)}
+                                        </span>
+                                        <span className="sm:hidden">{fmtDate(entry.mtime)}</span>
                                     </span>
                                 </span>
                             </button>
@@ -689,8 +698,8 @@ export default function ServerFiles({ server }) {
                             <span className="hidden w-20 shrink-0 text-right font-mono text-[0.75rem] text-ink-muted sm:block">
                                 {isDir ? '—' : fmtSize(entry.size)}
                             </span>
-                            {/* desktop hover actions (Pterodactyl-style) */}
-                            <span className="hidden shrink-0 items-center gap-0.5 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100 lg:flex">
+                            {/* desktop hover actions */}
+                            <span className="hidden shrink-0 items-center gap-1 rounded-full border border-hairline/60 bg-black/30 p-1 opacity-0 shadow-sm transition group-hover:opacity-100 focus-within:opacity-100 lg:flex">
                                 {entry.type === 'file' && !isArch && (
                                     <button type="button" title="Edit" aria-label={`Edit ${entry.name}`} onClick={() => openEntry(entry)} className={btnIcon}>
                                         <Pencil className="size-4" />
@@ -731,7 +740,7 @@ export default function ServerFiles({ server }) {
 
             {/* bulk selection bar */}
             {(selected.length > 0 || entries.length > 0) && !isLoading && !error && (
-                <div className="flex flex-wrap items-center gap-2 border-t border-hairline bg-black/20 px-3 py-2 sm:px-4">
+                <div className="mx-3 mb-3 flex flex-wrap items-center gap-2 rounded-full border border-hairline bg-black/40 px-4 py-2.5 shadow-lg backdrop-blur sm:mx-4 sm:mb-4">
                     <input
                         type="checkbox"
                         checked={allChecked}

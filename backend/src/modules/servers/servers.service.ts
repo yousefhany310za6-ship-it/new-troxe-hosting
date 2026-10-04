@@ -722,7 +722,10 @@ export class ServersService {
       .where(eq(servers.id, serverId))
       .limit(1);
     if (!cur || (cur.status !== 'restarting' && cur.status !== 'online' && cur.status !== 'provisioning')) return true;
-    await this.docker.stop(containerId, 15, nodeId).catch(() => undefined);
+    // DO NOT stop the container — keep it running so the exec shell stays
+    // connected and the user can see the crash output in the console.
+    // The container remains in "crashed but not stopped" state until the
+    // user manually stops/restarts it from the dashboard.
     let detail = msg;
     if (!detail) {
       const tail = await this.docker.logs(containerId, 20, nodeId).catch(() => '');

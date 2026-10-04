@@ -43,6 +43,7 @@ interface ExecSession {
   maxTimer: NodeJS.Timeout;
   inputAt: number[];
   closed: boolean;
+  readOnly: boolean;
   /** output budget: rolling 1s window + consecutive over-window counter */
   outWindowAt: number;
   outWindowBytes: number;
@@ -95,6 +96,7 @@ export class ExecGateway implements OnGatewayConnection, OnGatewayDisconnect {
       if (!auth.ticket || !auth.serverId) return fail('EXEC_BAD_HANDSHAKE');
       const { sub: userId } = this.tickets.verify(auth.ticket);
       const serverId = auth.serverId;
+      const readOnly = true; // Always read-only mode
 
       const row = await this.servers.requireOwned(userId, serverId).catch(() => null);
       if (!row) return fail('EXEC_NO_ACCESS');
@@ -141,6 +143,7 @@ export class ExecGateway implements OnGatewayConnection, OnGatewayDisconnect {
         maxTimer: setTimeout(() => this.close(client, 'max-time'), MAX_SESSION_MS),
         inputAt: [],
         closed: false,
+        readOnly,
         outWindowAt: Date.now(),
         outWindowBytes: 0,
         outOver: 0,
@@ -190,7 +193,7 @@ export class ExecGateway implements OnGatewayConnection, OnGatewayDisconnect {
         userAgent: 'ws-exec',
       }).catch(() => undefined);
 
-      client.emit('ready', { serverId });
+      client.emit('ready', { serverId, readOnly });
     } catch (e) {
       this.log.debug(`exec connect failed: ${(e as Error).message}`);
       fail('EXEC_DENIED');
@@ -206,6 +209,7 @@ export class ExecGateway implements OnGatewayConnection, OnGatewayDisconnect {
   onInput(@ConnectedSocket() client: Socket, @MessageBody() body: { data?: string }) {
     const s = this.bySocket.get(client.id);
     if (!s || s.closed) return { ok: false };
+    if (s.readOnly) return { ok: false, error: 'READ_ONLY_MODE' };
     if (typeof body?.data !== 'string') return { ok: false };
     const buf = Buffer.from(body.data, 'base64');
     if (buf.length > MAX_INPUT_BYTES) return { ok: false, error: 'INPUT_TOO_LARGE' };
@@ -228,6 +232,7 @@ export class ExecGateway implements OnGatewayConnection, OnGatewayDisconnect {
   ) {
     const s = this.bySocket.get(client.id);
     if (!s || s.closed) return { ok: false };
+    if (s.readOnly) return { ok: false, error: 'READ_ONLY_MODE' };
     const cols = Math.min(500, Math.max(1, Math.floor(body?.cols ?? 80)));
     const rows = Math.min(500, Math.max(1, Math.floor(body?.rows ?? 24)));
     await s.shell.resize(cols, rows);

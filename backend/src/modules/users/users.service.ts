@@ -1,9 +1,9 @@
 import { BadRequestException, Inject, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
-import { desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { Err } from '../../common/errors';
 import { hashPassword, verifyPassword } from '../../common/password';
 import { DB, Db } from '../../db/db.module';
-import { auditLogs, users } from '../../db/schema';
+import { auditLogs, users, oauthAccounts } from '../../db/schema';
 import { config } from '../../config/env';
 import { httpsUrlOk } from '../auth/oauth/oauth.helpers';
 import { verifyUnsubscribe } from '../email/email.tokens';
@@ -270,5 +270,130 @@ export class UsersService {
 
     this.log.log(`account ${u.email} deleted (${destroyed} sandboxes destroyed)`);
     return { ok: true };
+  }
+
+  // ---- Avatar management ------------------------------------------------------
+
+  /**
+   * Set a custom avatar (uploaded by user). Replaces any OAuth avatar.
+   */
+  async setCustomAvatar(userId: string, avatarUrl: string, ctx: { ip: string; userAgent?: string }) {
+    const [existing] = await this.db.select().from(users).where(eq(users.id, userId)).limit(1);
+    if (!existing) throw Err.unauthorized('USER_GONE');
+
+    // Update avatar URL and mark as custom
+    const [updated] = await this.db
+      .update(users)
+      .set({ avatarUrl, avatarSource: 'custom' })
+      .where(eq(users.id, userId))
+      .returning();
+
+    if (!updated) throw Err.unauthorized('USER_GONE');
+
+    await this.audit.record({
+      actorId: userId,
+      actorEmail: existing.email,
+      action: 'user.avatar.custom_set',
+      targetType: 'user',
+      targetId: userId,
+      ip: ctx.ip,
+      userAgent: ctx.userAgent,
+    });
+
+    return this.strip({ ...updated[0], avatarUrl: updated[0].avatarUrl, avatarSource: 'custom' });
+  }
+
+  /**
+   * Remove custom avatar, revert to OAuth avatar if available, otherwise default
+   */
+  async removeCustomAvatar(userId: string, ctx: { ip: string; userAgent?: string }) {
+    const [existing] = await this.db.select().from(users).where(eq(users.id, userId)).limit(1);
+    if (!existing) throw Err.unauthorized('USER_GONE');
+
+    // Check if there's an OAuth avatar to fall back to
+    const [oauthAccount] = await this.db
+      .select({ avatarUrl: oauthAccounts.avatarUrl, provider: oauthAccounts.provider })
+      .from(oauthAccounts)
+      .where(eq(oauthAccounts.userId, userId))
+      .limit(1);
+
+    const fallbackAvatar = oauthAccount?.avatarUrl ?? null;
+    const fallbackSource = oauthAccount ? 'oauth' : 'default';
+
+    const [updated] = await this.db
+      .update(users)
+      .set({ avatarUrl: fallbackAvatar, avatarSource: fallbackSource })
+      .where(eq(users.id, userId))
+      .returning();
+
+    if (!updated[0]) throw Err.unauthorized('USER_GONE');
+
+    await this.audit.record({
+      actorId: userId,
+      actorEmail: existing.email,
+      action: 'user.avatar.removed',
+      targetType: 'user',
+      targetId: userId,
+      ip: ctx.ip,
+      userAgent: ctx.userAgent,
+    });
+
+    return this.strip({ ...updated[0], avatarUrl: updated[0].avatarUrl, avatarSource: fallbackSource });
+  }
+
+  /**
+   * Set OAuth avatar (called when user logs in with OAuth)
+   * Only sets avatar if current avatar is from OAuth or default
+   */
+  async setOAuthAvatar(userId: string, provider: 'google' | 'discord', avatarUrl: string) {
+    const [existing] = await this.db.select().from(users).where(eq(users.id, userId)).limit(1);
+    if (!existing) return;
+
+    // Only set OAuth avatar if current avatar is from OAuth or default
+    if (existing.avatarSource === 'oauth' || existing.avatarSource === 'default') {
+      await this.db
+        .update(users)
+        .set({ avatarUrl, avatarSource: 'oauth' })
+        .where(eq(users.id, userId))
+        .catch(() => undefined);
+    }
+  }
+
+  /**
+   * Get avatar info for a user
+   */
+  async getAvatarInfo(userId: string) {
+    const [user] = await this.db
+      .select({
+        avatarUrl: users.avatarUrl,
+        avatarSource: users.avatarSource,
+      })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+
+    if (!user) throw Err.unauthorized('USER_GONE');
+
+    return {
+      avatarUrl: user.avatarUrl,
+      avatarSource: user.avatarSource,
+    };
+  }
+
+  /**
+   * Set OAuth avatar on login (called from OAuth callback)
+   */
+  async setOAuthAvatarOnLogin(userId: string, provider: 'google' | 'discord', avatarUrl: string) {
+    const [existing] = await this.db.select().from(users).where(eq(users.id, userId)).limit(1);
+    if (!existing) return;
+
+    // Only set OAuth avatar if current avatar is from OAuth or default
+    if (existing.avatarSource === 'oauth' || existing.avatarSource === 'default') {
+      await this.db
+        .update(users)
+        .set({ avatarUrl, avatarSource: 'oauth' })
+        .where(eq(users.id, userId))
+        .catch(() => undefined);
+    }
   }
 }

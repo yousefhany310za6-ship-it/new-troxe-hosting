@@ -111,6 +111,7 @@ export function depsPrelude(runtime: Runtime): string {
       return '';
   }
 }
+
 /**
  * The isolation policy for one client sandbox.
  *
@@ -173,22 +174,31 @@ export function buildSandboxConfig(spec: SandboxSpec): ContainerCreateOptions {
     // --- housekeeping -----------------------------------------------------
     AutoRemove: false,
     LogConfig: { Type: 'json-file', Config: { 'max-size': '10m', 'max-file': '3', 'compress': 'true' } },
-    // MaximumRetryCount is only valid with the "on-failure" policy.
-    // on-failure (not unless-stopped): a crashing startup must NOT loop
-    // forever — after 5 retries the container stays exited so the API can
-    // report a clear error instead of flapping online/offline.
-    RestartPolicy: spec.autoRestart ? { Name: 'on-failure', MaximumRetryCount: 5 } : { Name: 'no' },
+    // Use "no" restart policy — we handle crashes at the API level (settled/failStart).
+    // The container command wraps the user's startup so the container STAYS ALIVE
+    // even after the process crashes. This keeps the exec shell connected so the
+    // user can see the crash output in the console.
+    RestartPolicy: { Name: 'no' },
     // CgroupnsMode is supported by the engine but missing from @types/dockerode
   } as HostConfig;
+
+  // Wrap the startup command so the container STAYS RUNNING after the process
+  // exits (crashes or clean). This keeps the exec shell connected so the user
+  // can see the crash output, type commands, inspect files, etc.
+  const wrappedStartup = `
+${depsPrelude(spec.image.runtime)}${spec.startup}
+EXIT_CODE=$?
+echo
+echo "[troxe] Process exited with code $EXIT_CODE"
+echo "[troxe] Container kept alive for debugging. Connect via console to inspect."
+# Keep container alive without requiring stdin/TTY
+exec tail -f /dev/null
+`;
   return {
     name: containerName,
     Image: spec.image.image,
     Hostname: `srv-${spec.serverId.slice(0, 8)}`,
-    // startup is a single argv element — never interpolated into a host shell.
-    // A dependency prelude (same sandbox user, fixed commands, no client
-    // input) installs package.json/requirements.txt first when the manifest
-    // changed; unchanged restarts skip it via the .troxe-deps-<hash> marker.
-    Cmd: ['/bin/sh', '-c', depsPrelude(spec.image.runtime) + spec.startup],
+    Cmd: ['/bin/sh', '-c', wrappedStartup],
     Entrypoint: [],
     User: spec.image.user,
     WorkingDir: spec.image.workdir,
