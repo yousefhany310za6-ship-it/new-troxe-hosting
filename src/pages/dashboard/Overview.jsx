@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom';
 import { Activity, ArrowRight, Clock, Globe, MonitorSmartphone, Server, ShieldCheck } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
+import { Flag } from '@/components/ui/flag.jsx';
 import { useAuth } from '@/context/AuthContext.jsx';
 import { useServers, useAuthSessions } from '@/hooks/useQueries.jsx';
 
@@ -25,27 +26,6 @@ function StatCard({ label, value, hint, icon }) {
             <p className="mt-2 font-mono text-[1.7rem] font-bold text-foreground">{value}</p>
             <p className="mt-1 font-mono text-[0.75rem] text-ink-secondary">{hint}</p>
         </div>
-    );
-}
-
-function Flag({ code, name }) {
-    // Local flag-icons SVGs (bundled, offline) — the old flagcdn <img>
-    // showed broken images whenever the CDN was blocked or slow.
-    const cc = (code ?? '').toLowerCase();
-    if (!/^[a-z]{2}$/.test(cc) || cc === 'xx') {
-        return (
-            <span role="img" aria-label={name} title={name} className="inline-block w-6 text-center text-base leading-none">
-                🌐
-            </span>
-        );
-    }
-    return (
-        <span
-            title={name}
-            aria-label={name}
-            role="img"
-            className={`fi fi-${cc} inline-block w-6 overflow-hidden rounded-[3px] leading-none`}
-        />
     );
 }
 

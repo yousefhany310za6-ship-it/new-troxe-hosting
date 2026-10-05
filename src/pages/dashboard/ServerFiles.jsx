@@ -1,18 +1,22 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
     Archive,
-    ArrowLeft,
+    ArrowDownUp,
     Check,
     ChevronRight,
-    Download,
+    FilePlus,
     FileText,
     Folder,
     FolderPlus,
-    FilePlus,
+    Grid2X2,
     Home,
-    MoreHorizontal,
+    LayoutList,
+    List,
     Pencil,
     Plus,
+    RefreshCw,
+    RotateCcw,
+    Search,
     Trash2,
     Upload,
     X,
@@ -34,12 +38,15 @@ import {
     useServerFiles,
     useWriteFile,
 } from '@/hooks/useQueries.jsx';
+import { Sheet } from '@/components/ui/sheet.jsx';
+import { Select } from '@/components/ui/select.jsx';
+import { Skeleton } from '@/components/ui/field.jsx';
 
 // Modern controls: soft pills, normal-case labels.
 const btnSecondary =
-    'inline-flex min-h-10 items-center gap-1.5 rounded-full border border-hairline bg-white/[0.06] px-4 py-2 text-[0.8rem] font-semibold text-ink-secondary shadow-sm transition hover:border-hairline-hover hover:bg-white/[0.1] hover:text-foreground hover:shadow disabled:cursor-not-allowed disabled:opacity-40';
+    'inline-flex min-h-10 items-center gap-1.5 rounded-full border border-hairline bg-white/[0.06] px-4 py-2 text-[0.8rem] font-semibold text-ink-secondary transition hover:border-hairline-hover hover:bg-white/[0.1] hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40';
 const btnPrimary =
-    'inline-flex min-h-10 items-center gap-1.5 rounded-full bg-white px-4 py-2 text-[0.8rem] font-bold text-black shadow-md transition hover:bg-gray-200 hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-50';
+    'inline-flex min-h-10 items-center gap-1.5 rounded-full bg-white px-4 py-2 text-[0.8rem] font-bold text-black transition hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-50';
 const btnIcon =
     'inline-flex min-h-9 min-w-9 items-center justify-center rounded-xl p-2 text-ink-secondary transition hover:bg-white/10 hover:text-foreground hover:shadow disabled:opacity-40';
 const inputClass =
@@ -51,12 +58,19 @@ const EDIT_MAX = 512 * 1024;
 const UPLOAD_MAX = 2 * 1024 * 1024;
 const ARCHIVE_RE = /\.(zip|tar\.gz|tgz|tar)$/i;
 const MEDIA_RE = /\.(png|jpe?g|gif|webp|ico|bmp|mp4|webm|mov|mp3|wav|ogg|pdf|woff2?|ttf|eot|exe|dll|so|bin|dat|db|sqlite|mpkg|dmg|iso)$/i;
+const DIR_FIRST = (a, b) => (a.type === 'dir' ? 0 : 1) - (b.type === 'dir' ? 0 : 1);
+
+const SORTS = [
+    { value: 'name', label: 'Name' },
+    { value: 'size', label: 'Size' },
+    { value: 'modified', label: 'Modified' },
+];
 
 const fmtSize = (b) => {
     if (!b && b !== 0) return '—';
     if (b === 0) return '0 B';
     const u = ['B', 'KB', 'MB', 'GB'];
-    let i = 0, v = b;
+    let i = 0; let v = b;
     while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
     return `${v.toFixed(v < 10 && i > 0 ? 1 : 0)} ${u[i]}`;
 };
@@ -65,8 +79,9 @@ const fmtDate = (mtime) => {
     if (!mtime) return '—';
     const d = new Date(mtime * 1000);
     const now = new Date();
-    const sameDay = d.toDateString() === now.toDateString();
-    if (sameDay) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (d.toDateString() === now.toDateString()) return 'Today ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const y = new Date(now); y.setDate(now.getDate() - 1);
+    if (d.toDateString() === y.toDateString()) return 'Yesterday';
     return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: d.getFullYear() === now.getFullYear() ? undefined : 'numeric' });
 };
 
@@ -82,30 +97,31 @@ function openable(entry) {
 
 function notOpenableReason(entry) {
     if (entry.type !== 'file') return 'Only regular files can be opened — download it instead.';
-    if (ARCHIVE_RE.test(entry.name)) return 'Archives cannot be edited — extract or download it instead.';
+    if (ARCHIVE_RE.test(entry.name)) return 'Archives cannot be edited — extract or download instead.';
     if (entry.size > EDIT_MAX) return 'File exceeds the 512KB edit cap — download it instead.';
     return 'This file type cannot be edited — download it instead.';
 }
 
-function RowMenu({ entry, isDir, isArchiveFile, onAction, disabled }) {
+/** Kebab menu — the single entry point for every row action. */
+function RowMenu({ items, onSelect, disabled, align = 'right', trigger, label = 'Actions' }) {
     const [open, setOpen] = useState(false);
     const [pos, setPos] = useState({ top: 0, left: 0 });
     const btnRef = useRef(null);
-    const items = [];
-    if (isDir) items.push(['open', 'Open']);
-    else if (openable(entry)) items.push(['open', 'Open']);
-    if (isArchiveFile) items.push(['extract', 'Extract here']);
-    items.push(['download', isDir ? 'Download (.tar.gz)' : 'Download']);
-    items.push(['rename', 'Rename']);
-    items.push(['move', 'Move']);
-    items.push(['archive', 'Archive (.tar.gz)']);
-    items.push(['delete', 'Delete']);
 
-    // fixed positioning from the button rect: immune to overflow-hidden
-    // ancestors and row stacking on mobile; flips upward near the bottom.
+    useEffect(() => {
+        if (!open) return;
+        const close = () => setOpen(false);
+        document.addEventListener('mousedown', (e) => { if (!btnRef.current?.parentElement?.contains(e.target)) close(); });
+        window.addEventListener('resize', close);
+        window.addEventListener('scroll', close, true);
+        return () => {
+            document.removeEventListener('mousedown', close);
+            window.removeEventListener('resize', close);
+            window.removeEventListener('scroll', close, true);
+        };
+    }, [open]);
+
     const toggle = (e) => {
-        // the row itself navigates on click (folders) — never let the
-        // menu trigger bubble up to it.
         e?.stopPropagation?.();
         if (open) { setOpen(false); return; }
         const r = btnRef.current?.getBoundingClientRect();
@@ -114,129 +130,72 @@ function RowMenu({ entry, isDir, isArchiveFile, onAction, disabled }) {
         const up = r.bottom + menuH > window.innerHeight - 8;
         setPos({
             top: up ? Math.max(8, r.top - menuH) : r.bottom + 4,
-            left: Math.max(8, Math.min(r.right - 192, window.innerWidth - 200)),
+            left: align === 'right'
+                ? Math.max(8, Math.min(r.right - 208, window.innerWidth - 216))
+                : Math.max(8, Math.min(r.left, window.innerWidth - 216)),
         });
         setOpen(true);
     };
 
-    useEffect(() => {
-        if (!open) return;
-        const close = () => setOpen(false);
-        window.addEventListener('resize', close);
-        window.addEventListener('scroll', close, true);
-        return () => {
-            window.removeEventListener('resize', close);
-            window.removeEventListener('scroll', close, true);
-        };
-    }, [open ]);
-
     return (
-        <div className="shrink-0">
+        <>
             <button
                 ref={btnRef}
                 type="button"
-                aria-label={`Actions for ${entry.name}`}
+                aria-label={label}
                 aria-haspopup="menu"
                 aria-expanded={open}
-                onClick={toggle}
                 disabled={disabled}
-                className={cn(btnIcon, 'lg:hidden')}
+                onClick={toggle}
+                className={btnIcon}
             >
-                <MoreHorizontal className="size-5" />
+                {trigger ?? <List size={18} />}
             </button>
             {open && (
                 <>
-                    <div className="fixed inset-0 z-[60] lg:hidden" onClick={() => setOpen(false)} />
-                    <div
-                        role="menu"
-                        style={{ top: pos.top, left: pos.left }}
-                        className="fixed z-[61] w-52 overflow-hidden rounded-lg border border-hairline bg-card py-1 shadow-2xl"
-                    >
-                        {items.map(([key, label]) => (
+                    <div className="fixed inset-0 z-[60]" onClick={() => setOpen(false)} />
+                    <div role="menu" style={{ top: pos.top, left: pos.left }} className="fixed z-[61] w-52 overflow-hidden rounded-lg border border-hairline bg-card py-1 shadow-2xl">
+                        {items.map(([key, labelText, Icon, danger]) => (
                             <button
                                 key={key}
                                 type="button"
                                 role="menuitem"
-                                onClick={() => { setOpen(false); onAction(key, entry); }}
-                                className={cn(menuItem, 'min-h-11', key === 'delete' && 'text-red-400 hover:!text-red-300')}
+                                disabled={disabled}
+                                onClick={(e) => { e.stopPropagation(); setOpen(false); onSelect?.(key); }}
+                                className={cn(menuItem, danger && 'text-red-400 hover:!text-red-300')}
                             >
-                                {label}
+                                {Icon && <Icon size={15} />}
+                                {labelText}
                             </button>
                         ))}
                     </div>
                 </>
             )}
-        </div>
-    );
-}
-
-/**
- * Bottom-sheet on mobile, centered dialog on desktop. Replaces every
- * window.prompt/confirm in the file manager (native dialogs are cramped
- * and inconsistent on mobile browsers).
- */
-function Sheet({ title, subtitle, onClose, onSubmit, submitLabel, danger, children, submitDisabled }) {
-    useEffect(() => {
-        const onKey = (e) => { if (e.key === 'Escape') onClose(); };
-        window.addEventListener('keydown', onKey);
-        return () => window.removeEventListener('keydown', onKey);
-    }, [onClose ]);
-
-    return (
-        <div className="fixed inset-0 z-[70] flex items-end justify-center bg-black/70 p-0 sm:items-center sm:p-4" onClick={onClose}>
-            <form
-                onSubmit={(e) => { e.preventDefault(); onSubmit(); }}
-                onClick={(e) => e.stopPropagation()}
-                className="w-full rounded-t-2xl border border-hairline bg-card p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:max-w-md sm:rounded-xl sm:p-6"
-            >
-                <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-white/20 sm:hidden" />
-                <h2 className="text-[1.05rem] font-bold">{title}</h2>
-                {subtitle && <p className="mt-1 break-words font-mono text-[0.78rem] text-ink-secondary">{subtitle}</p>}
-                <div className="mt-4">{children}</div>
-                <div className="mt-5 flex gap-2">
-                    <button
-                        type="button"
-                        onClick={onClose}
-                        className="min-h-11 flex-1 rounded-md border border-hairline px-5 py-2.5 text-sm font-bold text-ink-secondary transition hover:text-foreground"
-                    >
-                        Cancel
-                    </button>
-                    <button
-                        type="submit"
-                        disabled={submitDisabled}
-                        className={cn(
-                            'min-h-11 flex-1 rounded-md px-5 py-2.5 text-sm font-bold transition disabled:opacity-50',
-                            danger
-                                ? 'bg-red-500 text-white hover:bg-red-400'
-                                : 'bg-white text-black hover:bg-gray-200',
-                        )}
-                    >
-                        {submitLabel}
-                    </button>
-                </div>
-            </form>
-        </div>
+        </>
     );
 }
 
 export default function ServerFiles({ server }) {
-    const toast = useToast();
     const [dir, setDir] = useState([]);
-    const [editing, setEditing] = useState(null); // rel path being edited
-    const [draft, setDraft] = useState('');
-    const [selected, setSelected] = useState([]); // entry names for bulk archive
-    const [newMenu, setNewMenu] = useState(false);
-    const [sheet, setSheet] = useState(null); // { type, entry?, value }
-    const [transfer, setTransfer] = useState(null); // { kind, name, ratio|null, abort }
-    const uploadRef = useRef(null);
-    const newBtnRef = useRef(null);
-    const [newPos, setNewPos] = useState({ top: 0, left: 0 });
-
     const dirPath = join(dir);
-    const { data, isLoading, error, refetch } = useServerFiles(server.id, dirPath);
-    const { data: fileData, isLoading: fileLoading, error: fileError } = useFileContent(
-        server.id, editing, editing !== null,
-    );
+    const { data, isLoading, error, refetch, isFetching } = useServerFiles(server.id, dirPath);
+    const { data: fileData, isLoading: fileLoading, error: fileError } = useFileContent(server.id, editing);
+    const [editing, setEditing] = useState(null);
+    const [draft, setDraft] = useState('');
+    const [sheet, setSheet] = useState(null);
+    const [selected, setSelected] = useState([]);
+    const [query, setQuery] = useState('');
+    const [sortBy, setSortBy] = useState('name');
+    const [sortDir, setSortDir] = useState('asc');
+    const [view, setView] = useState(() => (typeof window !== 'undefined' && window.innerWidth < 640 ? 'grid' : 'list'));
+    const [dragActive, setDragActive] = useState(false);
+    const [queue, setQueue] = useState([]);
+    const [download, setDownload] = useState(null);
+
+    const uploadRef = useRef(null);
+    const toast = useToast();
+    const dragDepth = useRef(0);
+
     const writeFile = useWriteFile(server.id);
     const mkdir = useMkdir(server.id);
     const remove = useDeleteFile(server.id);
@@ -250,17 +209,6 @@ export default function ServerFiles({ server }) {
 
     useEffect(() => { setSelected([]); }, [dirPath]);
 
-    useEffect(() => {
-        if (!newMenu) return;
-        const close = () => setNewMenu(false);
-        window.addEventListener('resize', close);
-        window.addEventListener('scroll', close, true);
-        return () => {
-            window.removeEventListener('resize', close);
-            window.removeEventListener('scroll', close, true);
-        };
-    }, [newMenu]);
-
     const fail = (e) => toast.error(e.message);
     const busy = writeFile.isPending || remove.isPending || rename.isPending || archive.isPending || extract.isPending || mkdir.isPending;
 
@@ -270,19 +218,44 @@ export default function ServerFiles({ server }) {
     const relOf = (name) => join([...dir, name]);
     const sheetVal = (sheet?.value ?? '').trim();
 
+    // ---- filtering / sorting -------------------------------------------------
+    const entries = useMemo(() => {
+        const list = [...(data?.entries ?? [])];
+        const q = query.trim().toLowerCase();
+        const filtered = q ? list.filter((e) => e.name.toLowerCase().includes(q)) : list;
+        filtered.sort((a, b) => {
+            const d = DIR_FIRST(a, b);
+            if (d !== 0) return d;
+            let cmp = 0;
+            if (sortBy === 'size') cmp = (a.size ?? 0) - (b.size ?? 0);
+            else if (sortBy === 'modified') cmp = (a.mtime ?? 0) - (b.mtime ?? 0);
+            else cmp = a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+            return sortDir === 'asc' ? cmp : -cmp;
+        });
+        return filtered;
+    }, [data, query, sortBy, sortDir]);
+
+    const dirStats = useMemo(() => {
+        const list = data?.entries ?? [];
+        return {
+            count: list.length,
+            bytes: list.reduce((acc, e) => acc + (e.type === 'file' ? e.size ?? 0 : 0), 0),
+        };
+    }, [data]);
+
+    const allChecked = entries.length > 0 && entries.every((e) => selected.includes(e.name));
+
+    // ---- navigation / editor ---------------------------------------------------
     const openEntry = (entry) => {
         const rel = relOf(entry.name);
-        if (entry.type === 'dir') { setDir([...dir, entry.name]); return; }
+        if (entry.type === 'dir') { setDir([...dir, entry.name]); setQuery(''); return; }
         if (!openable(entry)) { toast.info(notOpenableReason(entry)); return; }
         setEditing(rel);
         setDraft('');
     };
 
     const closeEditor = () => {
-        if (fileData && draft !== (fileData.content ?? '')) {
-            setSheet({ type: 'discard' });
-            return;
-        }
+        if (fileData && draft !== (fileData.content ?? '')) { setSheet({ type: 'discard' }); return; }
         setEditing(null);
     };
 
@@ -294,8 +267,126 @@ export default function ServerFiles({ server }) {
         } catch (e) { fail(e); }
     };
 
-    // ---- sheet confirmations ----
+    // ---- uploads (queue, multi-file, retry, cancel) ------------------------------
+    // The authoritative list lives in a ref so the sequential pump never reads
+    // stale state.
+    const queueRef = useRef([]);
+    const pumping = useRef(false);
 
+    const setItems = (items) => { queueRef.current = items; setQueue(items); };
+    const patchItem = (id, patch) =>
+        setItems(queueRef.current.map((it) => (it.id === id ? { ...it, ...patch } : it)));
+
+    const pump = async () => {
+        if (pumping.current) return;
+        pumping.current = true;
+        try {
+            for (;;) {
+                const next = queueRef.current.find((it) => it.status === 'pending');
+                if (!next) break;
+                const ctrl = new AbortController();
+                patchItem(next.id, { status: 'uploading', ratio: 0, error: null, abort: () => ctrl.abort() });
+                try {
+                    const b64 = await blobToBase64(next.file);
+                    await uploadServerFile(server.id, relOf(next.name), b64, {
+                        signal: ctrl.signal,
+                        onProgress: (r) => patchItem(next.id, { ratio: r }),
+                    });
+                    patchItem(next.id, { status: 'done', ratio: 1 });
+                    toast.success(`Uploaded ${next.name}.`);
+                } catch (err) {
+                    if (ctrl.signal.aborted || err?.code === 'ABORTED') patchItem(next.id, { status: 'cancelled' });
+                    else patchItem(next.id, { status: 'failed', error: err?.message || 'Upload failed' });
+                }
+            }
+            // let finished rows linger briefly so the bar is readable, then drop them
+            if (queueRef.current.some((it) => it.status === 'done')) {
+                setTimeout(() => {
+                    const rest = queueRef.current.filter((it) => it.status !== 'done');
+                    if (rest.length !== queueRef.current.length) setItems(rest);
+                }, 2500);
+            }
+        } finally {
+            pumping.current = false;
+            refetch();
+        }
+    };
+
+    const enqueue = (files) => {
+        const accepted = [];
+        for (const f of files) {
+            if (f.size > UPLOAD_MAX) { toast.error(`${f.name} is larger than the 2 MB upload cap.`); continue; }
+            accepted.push({
+                id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                file: f,
+                name: f.name,
+                size: f.size,
+                ratio: 0,
+                status: 'pending',
+                error: null,
+                abort: null,
+            });
+        }
+        if (!accepted.length) return;
+        setItems([...queueRef.current, ...accepted]);
+        pump();
+    };
+
+    const retryUpload = (id) => {
+        patchItem(id, { status: 'pending', error: null, ratio: 0 });
+        pump();
+    };
+
+    const onPick = (e) => {
+        const files = Array.from(e.target.files || []);
+        e.target.value = '';
+        enqueue(files);
+    };
+
+    // ---- downloads -------------------------------------------------------------
+    const onDownload = async (entry) => {
+        const name = entry.name.includes('/') ? entry.name : relOf(entry.name);
+        setDownload({ name: name.split('/').pop(), ratio: 0, abort: null });
+        const ctrl = new AbortController();
+        setDownload({ name: name.split('/').pop(), ratio: 0, abort: () => ctrl.abort() });
+        try {
+            await downloadServerFile(server.id, name, {
+                signal: ctrl.signal,
+                onProgress: (r) => setDownload((d) => (d ? { ...d, ratio: r } : d)),
+            });
+        } catch (e) {
+            if (e?.code === 'ABORTED') toast.info('Download cancelled.');
+            else fail(e);
+        } finally {
+            setDownload(null);
+        }
+    };
+
+    // ---- row actions ------------------------------------------------------------
+    const rowMenuItems = (entry, isDir, isArch) => {
+        const items = [];
+        if (isDir) items.push(['open', 'Open', Folder, false]);
+        else if (openable(entry)) items.push(['open', 'Open', Pencil, false]);
+        if (isArch) items.push(['extract', 'Extract here', Archive, false]);
+        items.push(['download', isDir ? 'Download (.tar.gz)' : 'Download', FileText, false]);
+        items.push(['rename', 'Rename', Pencil, false]);
+        items.push(['move', 'Move', FolderPlus, false]);
+        items.push(['archive', 'Compress (.tar.gz)', Archive, false]);
+        items.push(['delete', 'Delete', Trash2, true]);
+        return items;
+    };
+
+    const onMenu = (key, entry) => {
+        if (key === 'open') openEntry(entry);
+        else if (key === 'download') onDownload(entry);
+        else if (key === 'rename') setSheet({ type: 'rename', entry, value: entry.name });
+        else if (key === 'move') setSheet({ type: 'move', entry, value: relOf(entry.name) });
+        else if (key === 'archive') setSheet({ type: 'archive-one', entry, value: `${entry.name}.tar.gz` });
+        else if (key === 'extract') setSheet({ type: 'extract', entry, value: '' });
+        else if (key === 'delete') setSheet({ type: 'delete', entry, value: '' });
+    };
+
+    // ---- sheet actions ------------------------------------------------------------
     const submitSheet = async () => {
         if (!sheet) return;
         const v = sheetVal;
@@ -328,6 +419,23 @@ export default function ServerFiles({ server }) {
                     refetch();
                     break;
                 }
+                case 'move-many': {
+                    if (!v) { toast.error('Enter a destination path.'); return; }
+                    for (const n of sheet.names) {
+                        await rename.mutateAsync({ from: relOf(n), to: join([v.replace(/^\/+/, ''), n]) });
+                    }
+                    toast.success(`Moved ${sheet.names.length} item(s).`);
+                    setSelected([]);
+                    refetch();
+                    break;
+                }
+                case 'delete-many': {
+                    for (const n of sheet.names) await remove.mutateAsync(relOf(n));
+                    toast.success(`Deleted ${sheet.names.length} item(s).`);
+                    setSelected([]);
+                    refetch();
+                    break;
+                }
                 case 'archive-one': {
                     if (!/\.tar\.gz$/.test(v) && !/\.tgz$/.test(v)) { toast.error('Name must end in .tar.gz or .tgz.'); return; }
                     await archive.mutateAsync({ sources: [relOf(sheet.entry.name)], dest: relOf(v) });
@@ -344,7 +452,6 @@ export default function ServerFiles({ server }) {
                     break;
                 }
                 case 'extract': {
-                    // empty = extract in place (same folder as the archive)
                     const payload = { file: relOf(sheet.entry.name) };
                     if (v) payload.dest = join([...dir, v]);
                     await extract.mutateAsync(payload);
@@ -376,8 +483,10 @@ export default function ServerFiles({ server }) {
             case 'new-dir': return 'Create directory';
             case 'rename': return 'Rename';
             case 'move': return 'Move';
-            case 'archive-one': return 'Create archive';
-            case 'archive-many': return `Create archive (${sheet.names.length} items)`;
+            case 'move-many': return `Move ${sheet.names.length} item(s)`;
+            case 'delete-many': return `Delete ${sheet.names.length} item(s)`;
+            case 'archive-one':
+            case 'archive-many': return 'Create archive';
             case 'extract': return 'Extract archive';
             case 'delete': return 'Delete';
             case 'discard': return 'Discard changes?';
@@ -390,10 +499,13 @@ export default function ServerFiles({ server }) {
             case 'rename':
             case 'move':
             case 'delete':
-                return relOf(sheet.entry.name);
             case 'archive-one':
             case 'extract':
                 return relOf(sheet.entry.name);
+            case 'move-many':
+            case 'delete-many':
+            case 'archive-many':
+                return `${sheet.names.length} item(s) in ${dirPath || '/ (root)'}`;
             case 'discard':
                 return editing;
             default:
@@ -401,80 +513,16 @@ export default function ServerFiles({ server }) {
         }
     };
 
-    // ---- row actions ----
-
-    const onUpload = async (e) => {
-        const f = e.target.files?.[0];
-        e.target.value = '';
-        if (!f) return;
-        if (f.size > UPLOAD_MAX) { toast.error('Uploads are capped at 2MB.'); return; }
-        const ctrl = new AbortController();
-        setTransfer({ kind: 'upload', name: f.name, ratio: 0, abort: () => ctrl.abort() });
-        try {
-            const b64 = await blobToBase64(f);
-            await uploadServerFile(server.id, relOf(f.name), b64, {
-                signal: ctrl.signal,
-                onProgress: (r) => setTransfer((t) => (t ? { ...t, ratio: r } : t)),
-            });
-            toast.success(`Uploaded ${f.name}.`);
-            refetch();
-        } catch (err) {
-            if (err?.code === 'ABORTED') toast.info('Upload cancelled.');
-            else fail(err);
-        } finally {
-            setTransfer(null);
-        }
+    // ---- drag & drop -------------------------------------------------------------
+    const onDrop = (e) => {
+        e.preventDefault();
+        dragDepth.current = 0;
+        setDragActive(false);
+        const files = Array.from(e.dataTransfer?.files || []).filter((f) => f.size > 0);
+        if (files.length) enqueue(files);
     };
 
-    const onDownload = async (entry) => {
-        const rel = entry.name.includes('/') ? entry.name : relOf(entry.name);
-        const ctrl = new AbortController();
-        setTransfer({ kind: 'download', name: entry.name.split('/').pop(), ratio: 0, abort: () => ctrl.abort() });
-        try {
-            await downloadServerFile(server.id, rel, {
-                signal: ctrl.signal,
-                onProgress: (r) => setTransfer((t) => (t ? { ...t, ratio: r } : t)),
-            });
-        } catch (e) {
-            if (e?.code === 'ABORTED') toast.info('Download cancelled.');
-            else fail(e);
-        } finally {
-            setTransfer(null);
-        }
-    };
-
-    const onMenu = (key, entry) => {
-        if (key === 'open') openEntry(entry);
-        else if (key === 'download') onDownload(entry);
-        else if (key === 'rename') setSheet({ type: 'rename', entry, value: entry.name });
-        else if (key === 'move') setSheet({ type: 'move', entry, value: relOf(entry.name) });
-        else if (key === 'archive') {
-            setSheet({ type: 'archive-one', entry, value: `${entry.name}.tar.gz` });
-        }
-        else if (key === 'extract') {
-            // default: same folder — type a name only for a subfolder
-            setSheet({ type: 'extract', entry, value: '' });
-        }
-        else if (key === 'delete') setSheet({ type: 'delete', entry, value: '' });
-    };
-
-    const toggleNew = () => {
-        if (newMenu) { setNewMenu(false); return; }
-        const r = newBtnRef.current?.getBoundingClientRect();
-        if (r) {
-            setNewPos({
-                top: Math.max(8, r.top - (3 * 38 + 8)),
-                left: Math.max(8, Math.min(r.right - 192, window.innerWidth - 200)),
-            });
-        }
-        setNewMenu(true);
-    };
-
-    const entries = [...(data?.entries ?? [])].sort((a, b) =>
-        (a.type === 'dir' ? 0 : 1) - (b.type === 'dir' ? 0 : 1) || a.name.localeCompare(b.name));
-    const allChecked = entries.length > 0 && entries.every((e) => selected.includes(e.name));
-
-    // ---- full-page editor takeover (Pterodactyl-style code view) ----
+    // ---- full-page editor takeover ------------------------------------------------
     if (editing) {
         const dirty = !!fileData && draft !== (fileData.content ?? '');
         const icon = fileIcon(editing.split('/').pop(), 'file');
@@ -482,31 +530,27 @@ export default function ServerFiles({ server }) {
             <div className="flex min-h-[70vh] flex-col overflow-hidden rounded-lg border border-hairline bg-[#0d1117]">
                 <div className="flex items-center gap-2 border-b border-hairline bg-black/30 px-4 py-2.5 sm:px-5">
                     <button type="button" onClick={closeEditor} aria-label="Back to files" className="inline-flex min-h-11 shrink-0 items-center gap-1 text-[0.85rem] font-semibold text-ink-secondary transition hover:text-foreground sm:min-h-0">
-                        <ArrowLeft className="size-4" />
+                        <Pencil size={16} />
                     </button>
-                    {icon ? (
-                        <img src={icon} alt="" aria-hidden="true" className="size-5 shrink-0" draggable={false} />
-                    ) : null}
+                    {icon ? <img src={icon} alt="" aria-hidden="true" className="size-5 shrink-0" draggable={false} /> : null}
                     <span className="min-w-0 flex-1 truncate font-mono text-[0.85rem] font-semibold">{editing}</span>
                     {dirty
                         ? <span className="shrink-0 rounded bg-amber-500/15 px-2 py-0.5 text-[0.68rem] font-bold uppercase tracking-wide text-amber-400">unsaved</span>
-                        : <span className="hidden shrink-0 items-center gap-1 text-[0.7rem] text-ink-muted sm:inline-flex"><Check className="size-3.5" /> saved</span>}
+                        : <span className="hidden shrink-0 items-center gap-1 text-[0.7rem] text-ink-muted sm:inline-flex"><Check size={14} /> saved</span>}
                     <div className="ml-auto flex shrink-0 items-center gap-2">
-                        <button type="button" onClick={() => onDownload({ name: editing })} className={btnSecondary}>
-                            <Download className="size-3.5" /> <span className="hidden sm:inline">Download</span>
-                        </button>
-                        <button
-                            type="button"
-                            onClick={saveEdit}
-                            disabled={fileLoading || !!fileError || writeFile.isPending}
-                            className="inline-flex min-h-11 items-center gap-1.5 rounded-md bg-white px-5 py-2 text-[0.78rem] font-bold uppercase tracking-wide text-black transition hover:bg-gray-200 disabled:opacity-50 sm:min-h-9"
-                        >
+                        <button type="button" onClick={saveEdit} disabled={fileLoading || !!fileError || writeFile.isPending} className="btnPrimary">
                             {writeFile.isPending ? 'Saving…' : 'Save'}
                         </button>
                     </div>
                 </div>
                 <div className="flex min-h-0 flex-1 flex-col">
-                    {fileLoading && <p className="p-5 text-[0.85rem] text-ink-muted">Loading…</p>}
+                    {fileLoading && (
+                        <div className="flex flex-col gap-2 p-4">
+                            <Skeleton className="h-3 w-2/3" />
+                            <Skeleton className="h-3 w-5/6" />
+                            <Skeleton className="h-3 w-1/2" />
+                        </div>
+                    )}
                     {fileError && (
                         <p className="p-5 text-[0.85rem] text-red-400">
                             {fileError.code === 'FILE_BINARY'
@@ -539,234 +583,363 @@ export default function ServerFiles({ server }) {
         );
     }
 
+    const hasEntries = (data?.entries ?? []).length > 0;
+    const filterActive = !!query.trim();
+
     return (
-        <div className="overflow-hidden rounded-2xl border border-hairline bg-gradient-to-b from-white/[0.04] to-transparent bg-card shadow-xl">
-            {/* toolbar: breadcrumb + actions */}
-            <div className="flex items-center gap-2 border-b border-hairline/70 px-3 py-2.5 sm:px-5 sm:py-3">
-                <nav aria-label="Breadcrumb" className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto whitespace-nowrap py-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                    <button type="button" onClick={() => setDir([])} aria-label="Root directory" className="flex min-h-11 shrink-0 items-center gap-1.5 rounded-md px-2 font-mono text-[0.85rem] font-bold transition hover:bg-veil sm:min-h-9">
-                        <Home className="size-4 text-ink-secondary" />
-                    </button>
-                    {dir.map((seg, i) => (
-                        <span key={i} className="flex shrink-0 items-center gap-1">
-                            <ChevronRight className="size-3.5 text-ink-muted" />
-                            <button
-                                type="button"
-                                onClick={() => setDir(dir.slice(0, i + 1))}
-                                className="max-w-32 truncate rounded-md px-1.5 py-1 font-mono text-[0.85rem] text-ink-secondary transition hover:bg-veil hover:text-foreground"
-                            >
-                                {seg}
-                            </button>
-                        </span>
-                    ))}
-                </nav>
-                <div className="ml-auto flex shrink-0 items-center gap-1.5">
-                    <input ref={uploadRef} type="file" className="hidden" onChange={onUpload} />
-                    {/* mobile: single + menu */}
-                    <div className="relative sm:hidden">
-                        <button
-                            ref={newBtnRef}
-                            type="button"
-                            aria-label="Create or upload"
-                            aria-haspopup="menu"
-                            aria-expanded={newMenu}
-                            onClick={toggleNew}
-                            className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-md bg-white text-black transition hover:bg-gray-200"
-                        >
-                            <Plus className="size-5" />
+        <div
+            className="relative overflow-hidden rounded-2xl border border-hairline bg-card"
+            onDragEnter={(e) => { e.preventDefault(); dragDepth.current += 1; setDragActive(true); }}
+            onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }}
+            onDragLeave={() => { dragDepth.current = Math.max(0, dragDepth.current - 1); if (!dragDepth.current) setDragActive(false); }}
+            onDrop={onDrop}
+        >
+            {/* ============================ header ============================ */}
+            <div className="flex flex-col gap-3 border-b border-hairline px-4 py-3.5 sm:px-5">
+                <div className="flex items-center gap-2">
+                    <nav aria-label="Breadcrumb" className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                        <button type="button" onClick={() => { setDir([]); setQuery(''); }} aria-label="Root directory" className="flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1.5 font-mono text-[0.85rem] font-bold transition hover:bg-veil">
+                            <Home size={15} className="text-ink-secondary" />
+                            <span className="hidden sm:inline">root</span>
                         </button>
-                        {newMenu && (
-                            <>
-                                <div className="fixed inset-0 z-[60]" onClick={() => setNewMenu(false)} />
-                                <div
-                                    role="menu"
-                                    style={{ top: newPos.top, left: newPos.left }}
-                                    className="fixed z-[61] w-48 overflow-hidden rounded-lg border border-hairline bg-card py-1 shadow-2xl"
+                        {dir.map((seg, i) => (
+                            <span key={i} className="flex shrink-0 items-center gap-1">
+                                <ChevronRight size={14} className="text-ink-muted" />
+                                <button
+                                    type="button"
+                                    onClick={() => { setDir(dir.slice(0, i + 1)); setQuery(''); }}
+                                    className="max-w-32 truncate rounded-md px-1.5 py-1 font-mono text-[0.85rem] text-ink-secondary transition hover:bg-veil hover:text-foreground"
                                 >
-                                    <button type="button" role="menuitem" onClick={() => { setNewMenu(false); uploadRef.current?.click(); }} className={cn(menuItem, 'min-h-11')}>
-                                        <Upload className="size-4" /> Upload file
-                                    </button>
-                                    <button type="button" role="menuitem" onClick={() => { setNewMenu(false); setSheet({ type: 'new-file', value: '' }); }} className={cn(menuItem, 'min-h-11')}>
-                                        <FilePlus className="size-4" /> New file
-                                    </button>
-                                    <button type="button" role="menuitem" onClick={() => { setNewMenu(false); setSheet({ type: 'new-dir', value: '' }); }} className={cn(menuItem, 'min-h-11')}>
-                                        <FolderPlus className="size-4" /> New directory
-                                    </button>
-                                </div>
-                            </>
+                                    {seg}
+                                </button>
+                            </span>
+                        ))}
+                    </nav>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                        <input ref={uploadRef} type="file" multiple className="hidden" onChange={onPick} />
+                        <button type="button" onClick={() => uploadRef.current?.click()} disabled={busy || queue.some((q) => q.status === 'uploading')} className={btnPrimary}>
+                            <Upload size={16} /> <span className="hidden sm:inline">Upload</span>
+                        </button>
+                        <button type="button" onClick={() => setSheet({ type: 'new-dir', value: '' })} disabled={busy} className={btnSecondary}>
+                            <FolderPlus size={16} /> <span className="hidden sm:inline">New folder</span>
+                        </button>
+                        <RowMenu
+                            label="More file actions"
+                            disabled={busy}
+                            trigger={<Grid2X2 size={17} />}
+                            onSelect={(key) => {
+                                if (key === 'new-file') setSheet({ type: 'new-file', value: '' });
+                                else if (key === 'refresh') refetch();
+                            }}
+                            items={[
+                                ['new-file', 'New file', FilePlus, false],
+                                ['refresh', 'Refresh', RefreshCw, false],
+                            ]}
+                        />
+                    </div>
+                </div>
+
+                {/* search + sort + view */}
+                <div className="flex flex-wrap items-center gap-2">
+                    <div className="relative min-w-[180px] flex-1">
+                        <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ink-muted" />
+                        <input
+                            value={query}
+                            onChange={(e) => setQuery(e.target.value)}
+                            placeholder={filterActive ? 'No matches' : 'Search in this folder…'}
+                            aria-label="Search files in this folder"
+                            className="input-field pl-9"
+                        />
+                        {query && (
+                            <button type="button" onClick={() => setQuery('')} aria-label="Clear search" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-ink-muted hover:text-ink">
+                                <X size={14} />
+                            </button>
                         )}
                     </div>
-                    {/* desktop: modern pill buttons */}
-                    <div className="hidden items-center gap-2 sm:flex">
-                        <button type="button" onClick={() => uploadRef.current?.click()} disabled={!!transfer} className={btnPrimary}>
-                            <Upload className="size-4" /> Upload
+                    <Select
+                        ariaLabel="Sort files by"
+                        value={sortBy}
+                        onChange={setSortBy}
+                        options={SORTS}
+                        className="w-[130px]"
+                    />
+                    <button
+                        type="button"
+                        onClick={() => setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))}
+                        aria-label={`Sort ${sortDir === 'asc' ? 'descending' : 'ascending'}`}
+                        className={btnIcon}
+                    >
+                        <ArrowDownUp size={16} className={cn('transition', sortDir === 'asc' && 'rotate-180')} />
+                    </button>
+                    <div className="flex items-center gap-1 rounded-full border border-hairline p-0.5">
+                        <button
+                            type="button"
+                            onClick={() => setView('list')}
+                            aria-label="List view"
+                            aria-pressed={view === 'list'}
+                            className={cn('rounded-full p-1.5 transition', view === 'list' ? 'bg-veil text-ink' : 'text-ink-muted hover:text-ink')}
+                        >
+                            <LayoutList size={16} />
                         </button>
-                        <button type="button" onClick={() => setSheet({ type: 'new-file', value: '' })} className={btnSecondary}>
-                            <FilePlus className="size-4" /> New file
-                        </button>
-                        <button type="button" onClick={() => setSheet({ type: 'new-dir', value: '' })} className={btnSecondary}>
-                            <FolderPlus className="size-4" /> New folder
+                        <button
+                            type="button"
+                            onClick={() => setView('grid')}
+                            aria-label="Grid view"
+                            aria-pressed={view === 'grid'}
+                            className={cn('rounded-full p-1.5 transition', view === 'grid' ? 'bg-veil text-ink' : 'text-ink-muted hover:text-ink')}
+                        >
+                            <Grid2X2 size={16} />
                         </button>
                     </div>
                 </div>
             </div>
 
-            {transfer && (
-                <div className="flex items-center gap-3 border-b border-hairline bg-veil/60 px-4 py-3">
-                    <span className="min-w-0 flex-1 truncate font-mono text-[0.78rem] text-ink-secondary">
-                        {transfer.kind === 'upload' ? 'Uploading' : 'Downloading'} {transfer.name}
-                    </span>
-                    <div className="h-2 w-24 shrink-0 overflow-hidden rounded-full bg-white/10 sm:w-40">
-                        <div
-                            className="h-full rounded-full bg-white transition-[width]"
-                            style={{ width: transfer.ratio === null ? '100%' : `${Math.round(transfer.ratio * 100)}%` }}
-                        />
-                    </div>
-                    <span className="w-11 shrink-0 text-right font-mono text-[0.75rem] text-ink-secondary">
-                        {transfer.ratio === null ? '…' : `${Math.round(transfer.ratio * 100)}%`}
-                    </span>
-                    <button type="button" onClick={transfer.abort} className="shrink-0 rounded-md border border-red-500/40 px-3 py-1 font-mono text-[0.72rem] font-bold text-red-400">
-                        Stop
-                    </button>
+            {/* ============================ transfers ============================ */}
+            {(queue.length > 0 || download) && (
+                <div className="flex flex-col gap-2 border-b border-hairline bg-veil/40 px-4 py-3">
+                    <p className="text-[0.75rem] font-bold uppercase tracking-wide text-ink-muted">
+                        {queue.length ? `Uploading ${queue.length} file${queue.length === 1 ? '' : 's'}…` : `Downloading ${download?.name}…`}
+                    </p>
+                    {queue.map((it) => (
+                        <div key={it.id} className="flex flex-col gap-1.5">
+                            <div className="flex items-center gap-3">
+                                <span className="min-w-0 flex-1 truncate font-mono text-[0.78rem] text-ink-secondary">{it.name}</span>
+                                <span className="shrink-0 font-mono text-[0.72rem] text-ink-muted">
+                                    {fmtSize(it.size)} · {it.status === 'failed' ? 'failed' : `${Math.round((it.ratio ?? 0) * 100)}%`}
+                                </span>
+                                {it.status === 'failed' && (
+                                    <button type="button" onClick={() => retryUpload(it.id)} className="shrink-0 rounded-md border border-hairline px-2 py-0.5 font-mono text-[0.7rem] font-bold text-ink-secondary hover:text-ink">Retry</button>
+                                )}
+                                <button type="button" onClick={() => { it.abort?.(); patchItem(it.id, { status: 'cancelled' }); }} aria-label={`Cancel ${it.name}`} className="shrink-0 rounded-md p-1 text-ink-muted hover:text-red-400">
+                                    <X size={14} />
+                                </button>
+                            </div>
+                            <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+                                <div
+                                    className={cn('h-full rounded-full transition-[width]', it.status === 'failed' ? 'bg-red-500' : 'bg-white')}
+                                    style={{ width: `${Math.round((it.ratio ?? 0) * 100)}%` }}
+                                />
+                            </div>
+                            {it.error && <p className="text-[0.72rem] text-red-400">{it.error}</p>}
+                        </div>
+                    ))}
+                    {download && (
+                        <div className="flex flex-col gap-1.5">
+                            <div className="flex items-center gap-3">
+                                <span className="min-w-0 flex-1 truncate font-mono text-[0.78rem] text-ink-secondary">{download.name}</span>
+                                <span className="shrink-0 font-mono text-[0.72rem] text-ink-muted">{Math.round((download.ratio ?? 0) * 100)}%</span>
+                                <button type="button" onClick={() => download.abort?.()} className="shrink-0 rounded-md border border-red-500/40 px-2 py-0.5 font-mono text-[0.7rem] font-bold text-red-400">Stop</button>
+                            </div>
+                            <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+                                <div className="h-full rounded-full bg-white transition-[width]" style={{ width: `${Math.round((download.ratio ?? 0) * 100)}%` }} />
+                            </div>
+                        </div>
+                    )}
                 </div>
             )}
 
-            {/* cards */}
-            <div className="flex flex-col gap-2 p-3 sm:p-4">
-                {isLoading && <p className="px-4 py-10 text-center text-[0.88rem] text-ink-muted">Loading…</p>}
-                {error && <p className="px-4 py-10 text-center text-[0.88rem] text-red-400">Failed to load: {error.message}</p>}
-                {!isLoading && !error && entries.length === 0 && (
-                    <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-hairline px-4 py-12 text-center">
-                        <Folder className="size-9 text-ink-muted" />
-                        <p className="text-[0.92rem] font-semibold">This directory is empty</p>
-                        <p className="max-w-60 text-[0.82rem] text-ink-secondary">Upload files or create a new one to get started.</p>
+            {/* ============================ content ============================ */}
+            <div className="p-3 sm:p-4">
+                {isLoading && (
+                    <div className="flex flex-col gap-2" aria-busy="true">
+                        {Array.from({ length: 6 }).map((_, i) => (
+                            <div key={i} className="flex items-center gap-3 rounded-xl border border-hairline/60 p-3">
+                                <Skeleton className="size-11 rounded-xl" />
+                                <div className="flex flex-1 flex-col gap-2">
+                                    <Skeleton className="h-3 w-2/5" />
+                                    <Skeleton className="h-2.5 w-1/6" />
+                                </div>
+                            </div>
+                        ))}
                     </div>
                 )}
-                {entries.map((entry) => {
-                    const isDir = entry.type === 'dir';
-                    const isArch = entry.type === 'file' && ARCHIVE_RE.test(entry.name);
-                    const icon = !isDir ? fileIcon(entry.name, entry.type) : null;
-                    const checked = selected.includes(entry.name);
-                    return (
-                        <div
-                            key={entry.name}
-                            onClick={isDir ? () => openEntry(entry) : undefined}
-                            className={cn(
-                                'group flex min-h-[4rem] items-center gap-3 rounded-2xl border px-3 py-2.5 shadow-sm transition duration-150 sm:px-4',
-                                checked
-                                    ? 'border-blue-400/50 bg-blue-500/10 shadow-md'
-                                    : 'border-hairline/70 bg-white/[0.03] hover:border-hairline-hover hover:bg-white/[0.06] hover:shadow-lg',
-                                isDir && 'cursor-pointer',
-                            )}
-                        >
-                            <input
-                                type="checkbox"
-                                checked={checked}
-                                onChange={() => toggleSelect(entry.name)}
-                                onClick={(e) => e.stopPropagation()}
-                                aria-label={`Select ${entry.name}`}
-                                className="size-5 shrink-0 cursor-pointer rounded-md accent-white"
-                            />
-                            <button
-                                type="button"
-                                onClick={() => openEntry(entry)}
-                                className="flex min-w-0 flex-1 items-center gap-3 text-left"
-                                aria-label={isDir ? `Open folder ${entry.name}` : `Open file ${entry.name}`}
-                            >
-                                <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-white/10 to-white/[0.02] shadow-inner">
-                                    {isDir ? (
-                                        <Folder className="size-6 text-sky-300/90" />
-                                    ) : icon ? (
-                                        <img src={icon} alt="" aria-hidden="true" className="size-6" draggable={false} />
-                                    ) : (
-                                        <FileText className="size-5 text-ink-muted" />
-                                    )}
-                                </span>
-                                <span className="min-w-0 flex-1">
-                                    <span className="block truncate text-[0.92rem] font-semibold text-gray-100">{entry.name}</span>
-                                    <span className="mt-1 flex items-center gap-2 font-mono text-[0.7rem] text-ink-muted">
-                                        <span className="rounded-full bg-white/[0.06] px-2 py-0.5">
-                                            {isDir ? 'Folder' : fmtSize(entry.size)}
-                                        </span>
-                                        <span className="sm:hidden">{fmtDate(entry.mtime)}</span>
-                                    </span>
-                                </span>
+
+                {!isLoading && error && (
+                    <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-red-500/40 px-4 py-12 text-center">
+                        <p className="text-[0.95rem] font-semibold text-red-400">Unable to load files</p>
+                        <p className="max-w-sm text-[0.82rem] text-ink-secondary">{error.message}</p>
+                        <button type="button" onClick={() => refetch()} className={btnPrimary}>
+                            <RotateCcw size={15} /> Retry
+                        </button>
+                    </div>
+                )}
+
+                {!isLoading && !error && !hasEntries && (
+                    <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-hairline px-4 py-14 text-center">
+                        <Folder size={34} className="text-ink-muted" />
+                        <p className="text-[0.95rem] font-semibold">No files here</p>
+                        <p className="max-w-xs text-[0.84rem] text-ink-secondary">Upload files or create a new folder to get started.</p>
+                        <div className="mt-1 flex flex-wrap items-center justify-center gap-2">
+                            <button type="button" onClick={() => uploadRef.current?.click()} className={btnPrimary}>
+                                <Upload size={15} /> Upload files
                             </button>
-                            <span className="hidden w-28 shrink-0 text-right font-mono text-[0.75rem] text-ink-muted md:block">
-                                {fmtDate(entry.mtime)}
-                            </span>
-                            <span className="hidden w-20 shrink-0 text-right font-mono text-[0.75rem] text-ink-muted sm:block">
-                                {isDir ? '—' : fmtSize(entry.size)}
-                            </span>
-                            {/* desktop hover actions */}
-                            <span className="hidden shrink-0 items-center gap-1 rounded-full border border-hairline/60 bg-black/30 p-1 opacity-0 shadow-sm transition group-hover:opacity-100 focus-within:opacity-100 lg:flex">
-                                {entry.type === 'file' && !isArch && (
-                                    <button type="button" title="Edit" aria-label={`Edit ${entry.name}`} onClick={() => openEntry(entry)} className={btnIcon}>
-                                        <Pencil className="size-4" />
-                                    </button>
-                                )}
-                                {entry.type === 'file' && isArch && (
-                                    <button type="button" title="Extract" aria-label={`Extract ${entry.name}`} onClick={() => onMenu('extract', entry)} className={btnIcon}>
-                                        <Archive className="size-4" />
-                                    </button>
-                                )}
-                                <button type="button" title="Download" aria-label={`Download ${entry.name}`} onClick={() => onDownload(entry)} className={btnIcon}>
-                                    <Download className="size-4" />
-                                </button>
-                                <button
-                                    type="button"
-                                    title="Delete"
-                                    aria-label={`Delete ${entry.name}`}
-                                    onClick={() => onMenu('delete', entry)}
-                                    className={cn(btnIcon, 'hover:!text-red-400')}
-                                >
-                                    <Trash2 className="size-4" />
-                                </button>
-                            </span>
-                            {/* mobile / overflow menu */}
-                            <span className="lg:hidden">
-                                <RowMenu
-                                    entry={entry}
-                                    isDir={isDir}
-                                    isArchiveFile={isArch}
-                                    disabled={busy || !!transfer}
-                                    onAction={onMenu}
-                                />
-                            </span>
+                            <button type="button" onClick={() => setSheet({ type: 'new-dir', value: '' })} className={btnSecondary}>
+                                <FolderPlus size={15} /> New folder
+                            </button>
                         </div>
-                    );
-                })}
+                    </div>
+                )}
+
+                {!isLoading && !error && hasEntries && filterActive && entries.length === 0 && (
+                    <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-hairline px-4 py-12 text-center">
+                        <Search size={28} className="text-ink-muted" />
+                        <p className="text-[0.92rem] font-semibold">No matches for “{query.trim()}”</p>
+                        <button type="button" onClick={() => setQuery('')} className={btnSecondary}>Clear search</button>
+                    </div>
+                )}
+
+                {!isLoading && !error && entries.length > 0 && (
+                    view === 'grid' ? (
+                        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+                            {entries.map((entry) => {
+                                const isDir = entry.type === 'dir';
+                                const isArch = entry.type === 'file' && ARCHIVE_RE.test(entry.name);
+                                const icon = !isDir ? fileIcon(entry.name, entry.type) : null;
+                                const checked = selected.includes(entry.name);
+                                return (
+                                    <div
+                                        key={entry.name}
+                                        onClick={isDir ? () => openEntry(entry) : undefined}
+                                        className={cn(
+                                            'group relative flex flex-col gap-2 rounded-xl border p-3 transition',
+                                            checked ? 'border-blue-400/50 bg-blue-500/10' : 'border-hairline/70 bg-white/[0.03] hover:border-hairline-hover hover:bg-white/[0.06]',
+                                            isDir && 'cursor-pointer',
+                                        )}
+                                    >
+                                        <div className="flex items-start justify-between gap-2">
+                                            <input
+                                                type="checkbox"
+                                                checked={checked}
+                                                onChange={() => toggleSelect(entry.name)}
+                                                onClick={(e) => e.stopPropagation()}
+                                                aria-label={`Select ${entry.name}`}
+                                                className="size-4 shrink-0 cursor-pointer accent-white"
+                                            />
+                                            <span onClick={(e) => e.stopPropagation()}>
+                                                <RowMenu
+                                                    label={`Actions for ${entry.name}`}
+                                                    items={rowMenuItems(entry, isDir, isArch)}
+                                                    onSelect={(k) => onMenu(k, entry)}
+                                                    disabled={busy}
+                                                />
+                                            </span>
+                                        </div>
+                                        <button type="button" onClick={() => openEntry(entry)} className="flex min-w-0 flex-1 flex-col items-center gap-2 text-center">
+                                            <span className="flex size-14 items-center justify-center rounded-xl bg-gradient-to-br from-white/10 to-white/[0.02]">
+                                                {isDir ? <Folder size={26} className="text-sky-300/90" /> : icon ? <img src={icon} alt="" aria-hidden="true" className="size-7" draggable={false} /> : <FileText size={22} className="text-ink-muted" />}
+                                            </span>
+                                            <span className="w-full truncate text-[0.82rem] font-semibold">{entry.name}</span>
+                                            <span className="font-mono text-[0.7rem] text-ink-muted">{isDir ? 'Folder' : fmtSize(entry.size)}</span>
+                                        </button>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    ) : (
+                        <div className="flex flex-col gap-1.5">
+                            {entries.map((entry) => {
+                                const isDir = entry.type === 'dir';
+                                const isArch = entry.type === 'file' && ARCHIVE_RE.test(entry.name);
+                                const icon = !isDir ? fileIcon(entry.name, entry.type) : null;
+                                const checked = selected.includes(entry.name);
+                                return (
+                                    <div
+                                        key={entry.name}
+                                        onClick={isDir ? () => openEntry(entry) : undefined}
+                                        className={cn(
+                                            'group flex items-center gap-3 rounded-xl border px-3 py-2.5 transition',
+                                            checked ? 'border-blue-400/50 bg-blue-500/10' : 'border-hairline/70 bg-white/[0.03] hover:border-hairline-hover hover:bg-white/[0.06]',
+                                            isDir && 'cursor-pointer',
+                                        )}
+                                    >
+                                        <input
+                                            type="checkbox"
+                                            checked={checked}
+                                            onChange={() => toggleSelect(entry.name)}
+                                            onClick={(e) => e.stopPropagation()}
+                                            aria-label={`Select ${entry.name}`}
+                                            className="size-5 shrink-0 cursor-pointer accent-white"
+                                        />
+                                        <button type="button" onClick={() => openEntry(entry)} className="flex min-w-0 flex-1 items-center gap-3 text-left">
+                                            <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-white/10 to-white/[0.02]">
+                                                {isDir ? <Folder size={20} className="text-sky-300/90" /> : icon ? <img src={icon} alt="" aria-hidden="true" className="size-5" draggable={false} /> : <FileText size={18} className="text-ink-muted" />}
+                                            </span>
+                                            <span className="min-w-0 flex-1">
+                                                <span className="block truncate text-[0.9rem] font-semibold">{entry.name}</span>
+                                                <span className="mt-0.5 block font-mono text-[0.7rem] text-ink-muted sm:hidden">
+                                                    {isDir ? 'Folder' : fmtSize(entry.size)} · {fmtDate(entry.mtime)}
+                                                </span>
+                                            </span>
+                                        </button>
+                                        <span className="hidden w-24 shrink-0 text-right font-mono text-[0.75rem] text-ink-muted md:block">{fmtDate(entry.mtime)}</span>
+                                        <span className="hidden w-20 shrink-0 text-right font-mono text-[0.75rem] text-ink-muted sm:block">{isDir ? '—' : fmtSize(entry.size)}</span>
+                                        <span onClick={(e) => e.stopPropagation()}>
+                                            <RowMenu
+                                                label={`Actions for ${entry.name}`}
+                                                items={rowMenuItems(entry, isDir, isArch)}
+                                                onSelect={(k) => onMenu(k, entry)}
+                                                disabled={busy || !!download}
+                                            />
+                                        </span>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )
+                )}
             </div>
 
-            {/* bulk selection bar */}
-            {(selected.length > 0 || entries.length > 0) && !isLoading && !error && (
-                <div className="mx-3 mb-3 flex flex-wrap items-center gap-2 rounded-full border border-hairline bg-black/40 px-4 py-2.5 shadow-lg backdrop-blur sm:mx-4 sm:mb-4">
+            {/* ============================ footer / bulk bar ============================ */}
+            {!isLoading && !error && hasEntries && (
+                <div className="flex flex-wrap items-center gap-2 border-t border-hairline px-4 py-2.5">
                     <input
                         type="checkbox"
                         checked={allChecked}
                         onChange={() => setSelected(allChecked ? [] : entries.map((e) => e.name))}
-                        aria-label="Select all"
+                        aria-label="Select all in this folder"
                         className="size-5 shrink-0 cursor-pointer accent-white"
                     />
                     {selected.length > 0 ? (
                         <>
                             <span className="font-mono text-[0.75rem] text-ink-secondary">{selected.length} selected</span>
-                            <button type="button" onClick={() => setSheet({ type: 'archive-many', names: [...selected], value: `${selected.length === 1 ? selected[0] : (dir[dir.length - 1] ?? server.name)}.tar.gz` })} disabled={archive.isPending} className={btnSecondary}>
-                                <Archive className="size-3.5" /> Archive
+                            <button type="button" onClick={() => setSheet({ type: 'archive-many', names: [...selected], value: `${selected.length === 1 ? selected[0] : (dir[dir.length - 1] ?? server.name)}.tar.gz` })} disabled={busy} className={btnSecondary}>
+                                <Archive size={15} /> Archive
                             </button>
-                            <button type="button" onClick={() => setSelected([])} className="font-mono text-[0.75rem] text-ink-secondary hover:text-foreground">
-                                Clear
+                            <button type="button" onClick={() => setSheet({ type: 'move-many', names: [...selected], value: dirPath })} disabled={busy} className={btnSecondary}>
+                                <FolderPlus size={15} /> Move
                             </button>
+                            <button type="button" onClick={() => setSheet({ type: 'delete-many', names: [...selected], value: '' })} disabled={busy} className={btnSecondary}>
+                                <Trash2 size={15} /> Delete
+                            </button>
+                            <button type="button" onClick={() => setSelected([])} className="font-mono text-[0.75rem] text-ink-secondary hover:text-foreground">Clear</button>
                         </>
                     ) : (
                         <span className="font-mono text-[0.72rem] text-ink-muted">
-                            {entries.length} item{entries.length === 1 ? '' : 's'}
+                            {dirStats.count} item{dirStats.count === 1 ? '' : 's'} · {fmtSize(dirStats.bytes)} in this folder
                         </span>
                     )}
+                    <button
+                        type="button"
+                        onClick={() => refetch()}
+                        disabled={isFetching}
+                        aria-label="Refresh file list"
+                        className="btnIcon ml-auto"
+                    >
+                        <RefreshCw size={16} className={cn(isFetching && 'animate-spin')} />
+                    </button>
                 </div>
             )}
 
-            {/* unified sheet */}
+            {/* ============================ drop overlay ============================ */}
+            {dragActive && (
+                <div className="pointer-events-none absolute inset-0 z-30 flex flex-col items-center justify-center gap-2 bg-black/70 backdrop-blur-sm">
+                    <Upload size={30} className="text-white" />
+                    <p className="text-[0.95rem] font-bold">Drop to upload</p>
+                    <p className="font-mono text-[0.75rem] text-ink-secondary">into {dirPath || '/ (root)'}</p>
+                </div>
+            )}
+
+            {/* ============================ sheets ============================ */}
             {sheet && sheet.type !== 'discard' && (
                 <Sheet
                     title={sheetTitle()}
@@ -774,20 +947,23 @@ export default function ServerFiles({ server }) {
                     onClose={() => setSheet(null)}
                     onSubmit={submitSheet}
                     submitLabel={
-                        sheet.type === 'delete' ? 'Delete' :
+                        sheet.type.startsWith('delete') ? 'Delete' :
                         sheet.type === 'extract' ? 'Extract' :
                         sheet.type.startsWith('archive') ? 'Compress' :
                         sheet.type.startsWith('new') ? 'Create' : 'Save'
                     }
-                    danger={sheet.type === 'delete'}
+                    danger={sheet.type.startsWith('delete')}
                 >
-                    {sheet.type === 'delete' ? (
+                    {sheet.type.startsWith('delete') ? (
                         <p className="text-[0.88rem] text-ink-secondary">
-                            {sheet.entry.type === 'dir'
-                                ? 'This directory and everything inside it will be permanently removed.'
-                                : 'This file will be permanently removed.'} This cannot be undone.
+                            {sheet.names?.length
+                                ? `${sheet.names.length} item(s) will be permanently removed. Folders are deleted with everything inside. This cannot be undone.`
+                                : sheet.entry.type === 'dir'
+                                    ? 'This directory and everything inside it will be permanently removed.'
+                                    : 'This file will be permanently removed.'}{' '}
+                            This cannot be undone.
                         </p>
-                    ) : sheet.type === 'move' ? (
+                    ) : sheet.type === 'move' || sheet.type === 'move-many' ? (
                         <>
                             <input
                                 autoFocus
@@ -796,7 +972,7 @@ export default function ServerFiles({ server }) {
                                 placeholder="path/inside/storage"
                                 className={cn(inputClass, 'font-mono')}
                             />
-                            <p className="mt-2 font-mono text-[0.72rem] text-ink-muted">Full path inside storage — folders are created as needed.</p>
+                            <p className="mt-2 font-mono text-[0.72rem] text-ink-muted">Destination path inside storage — folders are created as needed.</p>
                         </>
                     ) : sheet.type === 'extract' ? (
                         <>

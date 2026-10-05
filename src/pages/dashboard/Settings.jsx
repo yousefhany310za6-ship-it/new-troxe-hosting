@@ -1,87 +1,99 @@
-import { useEffect, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { BadgeCheck, CalendarClock, Camera, Loader2, Trash2 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
-import { apiPatch, apiPost } from '@/lib/api.js';
+import { apiDelete, apiPatch } from '@/lib/api.js';
 import { useAuth } from '@/context/AuthContext.jsx';
-import { useOAuthLinkConfirm, useOAuthLinkStart, useOAuthStatus, useOAuthUnlink, useSetPassword } from '@/hooks/useQueries.jsx';
+import {
+    useChangePassword,
+    useOAuthLinkConfirm,
+    useOAuthLinkStart,
+    useOAuthStatus,
+    useOAuthUnlink,
+    useRemoveAvatar,
+    useSetPassword,
+    useUpdateProfile,
+    useUploadAvatar,
+} from '@/hooks/useQueries.jsx';
+import { useToast } from '@/hooks/useToast.jsx';
+import { Modal } from '@/components/ui/modal.jsx';
+import { ConfirmModal } from '@/components/ui/confirm-modal.jsx';
+import { Field, Input, PasswordInput, Skeleton } from '@/components/ui/field.jsx';
+import { PasswordStrength } from '@/components/ui/password-strength.jsx';
+import { AvatarCropModal } from '@/components/AvatarCropModal.jsx';
+import { AvatarBadge } from '@/components/AvatarBadge.jsx';
 
-const inputClass =
-    'w-full rounded-xl border border-hairline bg-white/10 px-5 py-3 text-[0.92rem] text-foreground placeholder-ink-muted transition focus:border-primary focus:ring-2 focus:ring-ring/40 focus:outline-none';
+const USERNAME_COOLDOWN_MS = 30 * 24 * 60 * 60 * 1000;
+const PASSWORD_RULES = [
+    { id: 'length', label: '8 characters or more', test: (v) => v.length >= 8 },
+    { id: 'letter', label: 'A letter', test: (v) => /[A-Za-z]/.test(v) },
+    { id: 'digit', label: 'A number', test: (v) => /\d/.test(v) },
+];
+const NAME_RE = /^[\p{L}\p{N}._-]+(?: [\p{L}\p{N}._-]+)*$/u;
 
-function Section({ title, subtitle, children }) {
+function Section({ title, subtitle, children, danger = false }) {
     return (
-        <section className="rounded-xl border border-hairline bg-card p-6 sm:p-8">
-            <h2 className="text-[1.1rem] font-bold">{title}</h2>
+        <section className={cn('rounded-xl border bg-card p-6 sm:p-8', danger ? 'border-red-500/30' : 'border-hairline')}>
+            <h2 className={cn('text-[1.1rem] font-bold', danger && 'text-red-400')}>{title}</h2>
             {subtitle && <p className="mt-1 text-[0.88rem] text-ink-secondary">{subtitle}</p>}
             <div className="mt-6">{children}</div>
         </section>
     );
 }
 
-function Toggle({ checked, onChange, label, hint }) {
+function Toggle({ checked, onChange, label, hint, busy }) {
     return (
         <button
             type="button"
             role="switch"
             aria-checked={checked}
+            disabled={busy}
             onClick={() => onChange(!checked)}
-            className="flex w-full items-center gap-4 py-3 text-left"
+            className="flex w-full items-center gap-4 py-3 text-left disabled:opacity-60"
         >
-            <span
-                className={cn(
-                    'relative h-6 w-11 shrink-0 rounded-full transition',
-                    checked ? 'bg-white' : 'bg-white/15'
-                )}
-            >
-                <span
-                    className={cn(
-                        'absolute top-0.5 size-5 rounded-full transition-all',
-                        checked ? 'left-[22px] bg-black' : 'left-0.5 bg-white'
-                    )}
-                />
+            <span className={cn('relative h-6 w-11 shrink-0 rounded-full transition', checked ? 'bg-white' : 'bg-white/15')}>
+                <span className={cn('absolute top-0.5 size-5 rounded-full transition-all', checked ? 'left-[22px] bg-black' : 'left-0.5 bg-white')} />
             </span>
             <span>
                 <span className="block text-[0.92rem] font-semibold">{label}</span>
                 {hint && <span className="block text-[0.82rem] text-ink-secondary">{hint}</span>}
             </span>
+            {busy && <Loader2 size={14} className="ml-auto animate-spin text-ink-muted" />}
         </button>
     );
 }
 
 export default function Settings() {
-    const { user, reloadUser } = useAuth();
-    const [profile, setProfile] = useState({ name: '', email: '' });
-    const [avatar, setAvatar] = useState(null);
-    const [avatarUrl, setAvatarUrl] = useState('');
-    const fileRef = useRef(null);
+    const { user, reloadUser, signOut } = useAuth();
+    const navigate = useNavigate();
+    const toast = useToast();
     const [searchParams, setSearchParams] = useSearchParams();
+
+    const updateProfile = useUpdateProfile();
+    const uploadAvatar = useUploadAvatar();
+    const removeAvatar = useRemoveAvatar();
+    const changePassword = useChangePassword();
     const oauth = useOAuthStatus();
     const linkStart = useOAuthLinkStart();
     const linkConfirm = useOAuthLinkConfirm();
     const unlinkOAuth = useOAuthUnlink();
     const setPassword = useSetPassword();
-    const [newPw, setNewPw] = useState({ next: '', confirm: '' });
+
+    const fileRef = useRef(null);
+    const [cropFile, setCropFile] = useState(null);
+    const [nameModal, setNameModal] = useState(false);
+    const [nameValue, setNameValue] = useState('');
+    const [nameError, setNameError] = useState(null);
+    const [unlinkTarget, setUnlinkTarget] = useState(null);
+    const [deleteOpen, setDeleteOpen] = useState(false);
+    const [deletePw, setDeletePw] = useState('');
     const [passwords, setPasswords] = useState({ current: '', next: '', confirm: '' });
-    const [notif, setNotif] = useState({ restarts: true, invoices: true, marketing: false });
-    const [msg, setMsg] = useState({ text: '', ok: true });
-    const [loading, setLoading] = useState(true);
+    const [pwErrors, setPwErrors] = useState({});
+    const [newPw, setNewPw] = useState({ next: '', confirm: '' });
+    const [notifBusy, setNotifBusy] = useState(null);
 
-    useEffect(() => {
-        if (user) {
-            setProfile({ name: user.name, email: user.email });
-            setAvatarUrl(user.avatarUrl || '');
-            setNotif({
-                restarts: user.notifyRestarts ?? true,
-                invoices: user.notifyInvoices ?? true,
-                marketing: user.notifyMarketing ?? false,
-            });
-            setLoading(false);
-        }
-    }, [user]);
-
-    // Returning from a provider link flow (?oauth_link=…&provider=…): confirm
-    // once under the live session, then drop the token from the URL.
+    // Returning from a provider link flow (?oauth_link=…&provider=…)
     useEffect(() => {
         const token = searchParams.get('oauth_link');
         const provider = searchParams.get('provider');
@@ -89,9 +101,9 @@ export default function Settings() {
         (async () => {
             try {
                 await linkConfirm.mutateAsync(token);
-                setMsg({ text: `${provider} account linked.`, ok: true });
+                toast.success(`${provider} account linked.`);
             } catch (err) {
-                setMsg({ text: err.message, ok: false });
+                toast.error(err.message);
             } finally {
                 setSearchParams({}, { replace: true });
             }
@@ -99,99 +111,122 @@ export default function Settings() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    const handleAvatar = (e) => {
+    // ---- username cooldown (backend is the source of truth; this is UX) ----
+    const nextNameChangeAt = useMemo(() => {
+        if (!user?.usernameChangedAt) return null;
+        const t = new Date(user.usernameChangedAt).getTime() + USERNAME_COOLDOWN_MS;
+        return t > Date.now() ? new Date(t) : null;
+    }, [user?.usernameChangedAt]);
+
+    const daysLeft = nextNameChangeAt
+        ? Math.max(1, Math.ceil((nextNameChangeAt.getTime() - Date.now()) / 86400000))
+        : 0;
+
+    // ---- avatar ------------------------------------------------------------
+    const onPickAvatar = (e) => {
         const file = e.target.files?.[0];
+        e.target.value = '';
         if (!file) return;
-        if (!file.type.startsWith('image/')) {
-            setMsg({ text: 'Please choose an image file.', ok: false });
+        if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+            toast.error('Only JPEG, PNG and WebP images are allowed.');
             return;
         }
-        if (file.size > 2 * 1024 * 1024) {
-            setMsg({ text: 'Image must be smaller than 2MB.', ok: false });
+        if (file.size > 5 * 1024 * 1024) {
+            toast.error('Image must be smaller than 5 MB.');
             return;
         }
-        if (avatar) URL.revokeObjectURL(avatar);
-        setAvatar(URL.createObjectURL(file));
-        setMsg({ text: 'Avatar updated locally. Save profile to persist.', ok: true });
+        setCropFile(file);
     };
 
-    const removeAvatar = () => {
-        if (avatar) URL.revokeObjectURL(avatar);
-        setAvatar(null);
-        setAvatarUrl('');
-        if (fileRef.current) fileRef.current.value = '';
-        setMsg({ text: 'Avatar removed. Save profile to persist.', ok: true });
+    const saveAvatar = async (blob) => {
+        try {
+            await uploadAvatar.mutateAsync(blob);
+            setCropFile(null);
+            toast.success('Avatar updated.');
+            reloadUser();
+        } catch (err) {
+            toast.error(err.message);
+        }
     };
 
-    const saveProfile = async (e) => {
+    const doRemoveAvatar = async () => {
+        try {
+            await removeAvatar.mutateAsync();
+            toast.success('Avatar removed.');
+            reloadUser();
+        } catch (err) {
+            toast.error(err.message);
+        }
+    };
+
+    // ---- username ------------------------------------------------------------
+    const openNameModal = () => {
+        setNameValue(user?.name ?? '');
+        setNameError(null);
+        setNameModal(true);
+    };
+
+    const saveName = async () => {
+        const name = nameValue.trim();
+        if (name.length < 3 || name.length > 30) return setNameError('Username must be 3–30 characters.');
+        if (!NAME_RE.test(name)) return setNameError('Only letters, numbers, spaces, dots, dashes and underscores.');
+        try {
+            await updateProfile.mutateAsync({ name });
+            setNameModal(false);
+            toast.success('Username updated.');
+            reloadUser();
+        } catch (err) {
+            if (err.code === 'NAME_CHANGE_TOO_SOON' && err.nextChangeAt) {
+                setNameError(`You can change it again on ${new Date(err.nextChangeAt).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })}.`);
+            } else {
+                setNameError(err.message);
+            }
+        }
+    };
+
+    // ---- password ------------------------------------------------------------
+    const submitPassword = async (e) => {
         e.preventDefault();
-        if (!profile.name.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(profile.email)) {
-            setMsg({ text: 'Please enter a valid name and email.', ok: false });
-            return;
-        }
-        if (avatarUrl && !/^https:\/\/[^/\s]+(\/\S*)?$/.test(avatarUrl.trim())) {
-            setMsg({ text: 'Avatar URL must be a valid https:// link (or empty to clear).', ok: false });
-            return;
-        }
+        const errs = {};
+        if (!passwords.current) errs.current = 'Enter your current password.';
+        if (passwords.next.length < 8) errs.next = 'At least 8 characters.';
+        else if (!/[A-Za-z]/.test(passwords.next) || !/\d/.test(passwords.next)) errs.next = 'Needs a letter and a number.';
+        if (passwords.confirm !== passwords.next) errs.confirm = 'Passwords do not match.';
+        setPwErrors(errs);
+        if (Object.keys(errs).length) return;
         try {
-            await apiPatch('/users/me', { ...profile, avatarUrl: avatarUrl.trim() });
-            setMsg({ text: 'Profile saved.', ok: true });
-            reloadUser();
+            const res = await changePassword.mutateAsync(passwords);
+            toast.success(`Password changed. ${res?.revokedSessions ? 'All sessions were signed out.' : 'Please sign in again.'}`);
+            await signOut();
+            navigate('/signin', { replace: true });
         } catch (err) {
-            setMsg({ text: err.message, ok: false });
+            setPwErrors(err.code === 'WRONG_CURRENT_PASSWORD' || /current/i.test(err.message)
+                ? { current: 'Current password is incorrect.' }
+                : { form: err.message });
         }
     };
 
-    const changePassword = async (e) => {
-        e.preventDefault();
-        if (!passwords.current || !passwords.next || !passwords.confirm) {
-            setMsg({ text: 'Please fill in all password fields.', ok: false });
-            return;
-        }
-        if (passwords.next.length < 8) {
-            setMsg({ text: 'New password must be at least 8 characters.', ok: false });
-            return;
-        }
-        if (passwords.next !== passwords.confirm) {
-            setMsg({ text: 'New passwords do not match.', ok: false });
-            return;
-        }
+    // ---- notifications ---------------------------------------------------------
+    const saveNotif = async (key, value) => {
+        setNotifBusy(key);
         try {
-            await apiPost('/users/me/password', passwords);
-            setMsg({ text: 'Password changed. You will be logged out of other sessions.', ok: true });
-            setPasswords({ current: '', next: '', confirm: '' });
+            await apiPatch('/users/me/notifications', { [key]: value });
+            toast.success('Preference saved.');
             reloadUser();
         } catch (err) {
-            setMsg({ text: err.message, ok: false });
+            toast.error(err.message);
+        } finally {
+            setNotifBusy(null);
         }
     };
 
-    const saveNotifications = async () => {
-        try {
-            await apiPatch('/users/me/notifications', notif);
-            setMsg({ text: 'Notifications updated.', ok: true });
-            reloadUser();
-        } catch (err) {
-            setMsg({ text: err.message, ok: false });
-        }
-    };
-
+    // ---- oauth -----------------------------------------------------------------
     const startLink = async (provider) => {
         try {
             const { url } = await linkStart.mutateAsync(provider);
             window.location.assign(url);
         } catch (err) {
-            setMsg({ text: err.message, ok: false });
-        }
-    };
-
-    const doUnlink = async (provider) => {
-        if (!window.confirm(`Unlink ${provider} from your account?`)) return;
-        try {
-            await unlinkOAuth.mutateAsync(provider);
-            setMsg({ text: `${provider} unlinked.`, ok: true });
-        } catch (err) {
-            setMsg({ text: err.message, ok: false });
+            toast.error(err.message);
         }
     };
 
@@ -199,169 +234,161 @@ export default function Settings() {
         e.preventDefault();
         try {
             await setPassword.mutateAsync(newPw);
-            setMsg({ text: 'Password set. You can now sign in with email + password too.', ok: true });
+            toast.success('Password set. You can now sign in with email + password too.');
             setNewPw({ next: '', confirm: '' });
             oauth.refetch();
         } catch (err) {
-            setMsg({ text: err.message, ok: false });
+            toast.error(err.message);
         }
     };
 
-    const deleteAccount = async () => {
-        const password = window.prompt('This will DELETE your account and ALL servers permanently. Enter your password to confirm:');
-        if (!password) {
-            setMsg({ text: 'Deletion cancelled.', ok: false });
-            return;
-        }
-        try {
-            await apiPost('/users/me', { current: password });
-            setMsg({ text: 'Account deleted.', ok: true });
-            setTimeout(() => window.location.href = '/', 1500);
-        } catch (err) {
-            setMsg({ text: err.message, ok: false });
-        }
+    // ---- delete account ----------------------------------------------------------
+    const doDeleteAccount = async () => {
+        await apiDelete('/users/me', { body: { current: deletePw } });
+        toast.success('Account deleted.');
+        setTimeout(() => { window.location.href = '/'; }, 800);
     };
 
-    if (loading) {
-        return <div className="flex items-center justify-center h-64 text-ink-muted">Loading…</div>;
+    if (!user) {
+        return (
+            <div className="flex flex-col gap-6">
+                <Skeleton className="h-9 w-48" />
+                <Skeleton className="h-64 w-full rounded-xl" />
+                <Skeleton className="h-48 w-full rounded-xl" />
+            </div>
+        );
     }
 
     return (
         <div className="flex flex-col gap-6">
             <div>
                 <h1 className="text-[1.6rem] font-extrabold tracking-tight">Settings</h1>
-                <p className="mt-1 text-[0.92rem] text-ink-secondary">
-                    Manage your account and preferences.
-                </p>
+                <p className="mt-1 text-[0.92rem] text-ink-secondary">Manage your account and preferences.</p>
             </div>
 
-            {msg.text && (
-                <p className={cn('text-sm', msg.ok ? 'text-emerald-400' : 'text-red-400')}>
-                    {msg.text}
-                </p>
-            )}
-
+            {/* ============================== Profile ============================== */}
             <Section title="Profile" subtitle="How you appear across Troxe Host.">
-                <div className="mb-6 flex items-center gap-4">
-                    <div className="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-full bg-white/10 text-xl font-bold text-white">
-                        {avatar || avatarUrl ? (
-                            <img src={avatar || avatarUrl} alt="Profile photo" className="size-full object-cover" />
-                        ) : (
-                            (profile.name.charAt(0) || 'U').toUpperCase()
-                        )}
-                    </div>
+                <div className="flex flex-wrap items-center gap-4">
+                    <AvatarBadge url={user.avatarUrl} name={user.name} />
                     <div className="flex flex-wrap items-center gap-2">
-                        <input
-                            ref={fileRef}
-                            type="file"
-                            accept="image/*"
-                            onChange={handleAvatar}
-                            className="hidden"
-                        />
+                        <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" onChange={onPickAvatar} className="hidden" />
                         <button
                             type="button"
                             onClick={() => fileRef.current?.click()}
-                            className="rounded-full bg-white px-5 py-2 text-[0.83rem] font-bold text-black transition hover:bg-gray-200"
+                            className="inline-flex items-center gap-2 rounded-full bg-white px-5 py-2 text-[0.83rem] font-bold text-black transition hover:bg-gray-200"
                         >
-                            Change photo
+                            <Camera size={14} />
+                            Change avatar
                         </button>
-                        {avatar && (
+                        {user.avatarSource === 'custom' && (
                             <button
                                 type="button"
-                                onClick={removeAvatar}
-                                className="rounded-full border border-hairline px-5 py-2 text-[0.83rem] font-bold text-ink-secondary transition hover:border-hairline-hover hover:text-foreground"
+                                onClick={doRemoveAvatar}
+                                disabled={removeAvatar.isPending}
+                                className="inline-flex items-center gap-2 rounded-full border border-hairline px-5 py-2 text-[0.83rem] font-bold text-ink-secondary transition hover:border-hairline-hover hover:text-foreground disabled:opacity-60"
                             >
+                                {removeAvatar.isPending ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
                                 Remove
                             </button>
                         )}
                     </div>
-                </div>
-                <div className="mb-4">
-                    <label className="flex flex-col gap-1.5 text-[0.85rem] font-semibold">
-                        Avatar image URL
-                        <input
-                            value={avatarUrl}
-                            onChange={(e) => setAvatarUrl(e.target.value)}
-                            placeholder="https://… (empty clears it)"
-                            inputMode="url"
-                            className={inputClass}
-                        />
-                    </label>
-                    <p className="mt-1 text-[0.8rem] text-ink-muted">
-                        Set once manually, it is never replaced by Google/Discord pictures again.
+                    <p className="w-full text-[0.8rem] text-ink-muted">
+                        JPEG, PNG or WebP, up to 5 MB — resized to 256×256.
+                        {user.avatarSource === 'oauth' && ' Currently using your provider picture: uploading your own stops it from syncing.'}
                     </p>
                 </div>
-                <form onSubmit={saveProfile} className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
-                    <label className="flex flex-col gap-1.5 text-[0.85rem] font-semibold">
-                        Username
-                        <input
-                            value={profile.name}
-                            onChange={(e) => setProfile({ ...profile, name: e.target.value })}
-                            className={inputClass}
-                        />
-                    </label>
-                    <label className="flex flex-col gap-1.5 text-[0.85rem] font-semibold">
-                        Email
-                        <input
-                            type="email"
-                            value={profile.email}
-                            onChange={(e) => setProfile({ ...profile, email: e.target.value })}
-                            className={inputClass}
-                        />
-                    </label>
-                    <div className="col-span-2 max-md:col-span-1">
-                        <button
-                            type="submit"
-                            className="rounded-full bg-white px-6 py-2.5 text-sm font-bold text-black transition hover:bg-gray-200"
-                        >
-                            Save changes
-                        </button>
+
+                <div className="mt-6 grid grid-cols-2 gap-4 max-md:grid-cols-1">
+                    <div>
+                        <span className="mb-1.5 block text-[0.82rem] font-medium text-ink-secondary">Username</span>
+                        <div className="flex items-center gap-2">
+                            <Input value={user.name} readOnly disabled className="font-mono" />
+                            <button
+                                type="button"
+                                onClick={openNameModal}
+                                disabled={!!nextNameChangeAt}
+                                className="shrink-0 rounded-full border border-hairline px-4 py-2 text-[0.8rem] font-bold text-ink-secondary transition hover:border-hairline-hover hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                                Change
+                            </button>
+                        </div>
+                        {nextNameChangeAt && (
+                            <p className="mt-1.5 flex items-center gap-1.5 text-[0.78rem] text-ink-muted">
+                                <CalendarClock size={13} />
+                                Username can be changed again in {daysLeft} day{daysLeft === 1 ? '' : 's'} — {nextNameChangeAt.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })}
+                            </p>
+                        )}
                     </div>
-                </form>
+                    <div>
+                        <span className="mb-1.5 block text-[0.82rem] font-medium text-ink-secondary">Email</span>
+                        <div className="flex items-center gap-2">
+                            <Input value={user.email} readOnly disabled className="font-mono" />
+                            {user.emailVerified ? (
+                                <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-500/15 px-2.5 py-1 text-[0.72rem] font-bold text-emerald-400">
+                                    <BadgeCheck size={13} /> Verified
+                                </span>
+                            ) : (
+                                <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-500/15 px-2.5 py-1 text-[0.72rem] font-bold text-amber-400">
+                                    Unverified
+                                </span>
+                            )}
+                        </div>
+                        <p className="mt-1.5 text-[0.78rem] text-ink-muted">Your email is permanent — it's the identity of the account.</p>
+                    </div>
+                </div>
             </Section>
 
-            <Section title="Password" subtitle="Use at least 8 characters.">
-                <form onSubmit={changePassword} className="grid grid-cols-1 gap-4">
-                    <input
-                        type="password"
-                        placeholder="Current password"
-                        autoComplete="current-password"
-                        value={passwords.current}
-                        onChange={(e) => setPasswords({ ...passwords, current: e.target.value })}
-                        className={inputClass}
-                    />
+            {/* ============================== Password ============================== */}
+            <Section title="Password" subtitle="Changing it signs out every session, including this one.">
+                <form onSubmit={submitPassword} className="grid grid-cols-1 gap-4" noValidate>
+                    <Field label="Current password" error={pwErrors.current}>
+                        <PasswordInput
+                            autoComplete="current-password"
+                            value={passwords.current}
+                            invalid={!!pwErrors.current}
+                            onChange={(e) => setPasswords({ ...passwords, current: e.target.value })}
+                        />
+                    </Field>
                     <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
-                        <input
-                            type="password"
-                            placeholder="New password"
-                            autoComplete="new-password"
-                            value={passwords.next}
-                            onChange={(e) => setPasswords({ ...passwords, next: e.target.value })}
-                            className={inputClass}
-                        />
-                        <input
-                            type="password"
-                            placeholder="Confirm new password"
-                            autoComplete="new-password"
-                            value={passwords.confirm}
-                            onChange={(e) => setPasswords({ ...passwords, confirm: e.target.value })}
-                            className={inputClass}
-                        />
+                        <Field label="New password" error={pwErrors.next}>
+                            <PasswordInput
+                                autoComplete="new-password"
+                                value={passwords.next}
+                                invalid={!!pwErrors.next}
+                                onChange={(e) => setPasswords({ ...passwords, next: e.target.value })}
+                            />
+                        </Field>
+                        <Field label="Confirm new password" error={pwErrors.confirm}>
+                            <PasswordInput
+                                autoComplete="new-password"
+                                value={passwords.confirm}
+                                invalid={!!pwErrors.confirm}
+                                onChange={(e) => setPasswords({ ...passwords, confirm: e.target.value })}
+                            />
+                        </Field>
                     </div>
+                    <PasswordStrength value={passwords.next} rules={PASSWORD_RULES} />
+                    {pwErrors.form && <p className="text-[0.82rem] text-red-400" role="alert">{pwErrors.form}</p>}
                     <div>
                         <button
                             type="submit"
-                            className="rounded-full border border-hairline bg-transparent px-6 py-2.5 text-sm font-bold text-foreground transition hover:border-primary hover:bg-primary hover:text-primary-foreground"
+                            disabled={changePassword.isPending}
+                            className="inline-flex items-center gap-2 rounded-full border border-hairline bg-transparent px-6 py-2.5 text-sm font-bold text-foreground transition hover:border-primary hover:bg-primary hover:text-primary-foreground disabled:opacity-60"
                         >
+                            {changePassword.isPending && <Loader2 size={14} className="animate-spin" />}
                             Update password
                         </button>
                     </div>
                 </form>
             </Section>
 
+            {/* ============================== Sign-in methods ============================== */}
             <Section title="Sign-in methods" subtitle="Google and Discord live next to your password. Linking never merges accounts by email alone.">
                 {oauth.isLoading ? (
-                    <p className="text-[0.88rem] text-ink-muted">Loading…</p>
+                    <div className="flex flex-col gap-3">
+                        <Skeleton className="h-16 w-full rounded-xl" />
+                        <Skeleton className="h-16 w-full rounded-xl" />
+                    </div>
                 ) : (
                     <div className="flex flex-col gap-3">
                         {['google', 'discord'].map((p) => {
@@ -380,9 +407,8 @@ export default function Settings() {
                                     {row ? (
                                         <button
                                             type="button"
-                                            onClick={() => doUnlink(p)}
-                                            disabled={unlinkOAuth.isPending}
-                                            className="rounded-full border border-hairline px-5 py-2 text-[0.83rem] font-bold text-ink-secondary transition hover:border-hairline-hover hover:text-foreground disabled:opacity-60"
+                                            onClick={() => setUnlinkTarget(p)}
+                                            className="rounded-full border border-hairline px-5 py-2 text-[0.83rem] font-bold text-ink-secondary transition hover:border-hairline-hover hover:text-foreground"
                                         >
                                             Unlink
                                         </button>
@@ -406,28 +432,29 @@ export default function Settings() {
                         <p className="col-span-2 text-[0.85rem] text-ink-secondary max-md:col-span-1">
                             You signed up with a provider and have no password yet — set one to enable email + password sign-in.
                         </p>
-                        <input
-                            type="password"
-                            placeholder="New password"
-                            autoComplete="new-password"
-                            value={newPw.next}
-                            onChange={(e) => setNewPw({ ...newPw, next: e.target.value })}
-                            className={inputClass}
-                        />
-                        <input
-                            type="password"
-                            placeholder="Confirm new password"
-                            autoComplete="new-password"
-                            value={newPw.confirm}
-                            onChange={(e) => setNewPw({ ...newPw, confirm: e.target.value })}
-                            className={inputClass}
-                        />
+                        <Field error={newPw.next && newPw.next.length < 8 ? 'At least 8 characters.' : null}>
+                            <PasswordInput
+                                placeholder="New password"
+                                autoComplete="new-password"
+                                value={newPw.next}
+                                onChange={(e) => setNewPw({ ...newPw, next: e.target.value })}
+                            />
+                        </Field>
+                        <Field error={newPw.confirm && newPw.confirm !== newPw.next ? 'Passwords do not match.' : null}>
+                            <PasswordInput
+                                placeholder="Confirm new password"
+                                autoComplete="new-password"
+                                value={newPw.confirm}
+                                onChange={(e) => setNewPw({ ...newPw, confirm: e.target.value })}
+                            />
+                        </Field>
                         <div className="col-span-2 max-md:col-span-1">
                             <button
                                 type="submit"
-                                disabled={setPassword.isPending}
-                                className="rounded-full bg-white px-6 py-2.5 text-sm font-bold text-black transition hover:bg-gray-200 disabled:opacity-60"
+                                disabled={setPassword.isPending || newPw.next.length < 8 || newPw.next !== newPw.confirm}
+                                className="inline-flex items-center gap-2 rounded-full bg-white px-6 py-2.5 text-sm font-bold text-black transition hover:bg-gray-200 disabled:opacity-60"
                             >
+                                {setPassword.isPending && <Loader2 size={14} className="animate-spin" />}
                                 Set password
                             </button>
                         </div>
@@ -435,42 +462,108 @@ export default function Settings() {
                 )}
             </Section>
 
+            {/* ============================== Notifications ============================== */}
             <Section title="Notifications" subtitle="Choose what lands in your inbox.">
                 <div className="flex flex-col divide-y divide-hairline">
                     <Toggle
-                        checked={notif.restarts}
-                        onChange={(v) => { setNotif({ ...notif, restarts: v }); saveNotifications(); }}
+                        checked={user.notifyRestarts ?? true}
+                        busy={notifBusy === 'restarts'}
+                        onChange={(v) => saveNotif('restarts', v)}
                         label="Restarts & incidents"
                         hint="When a server goes down or recovers."
                     />
                     <Toggle
-                        checked={notif.invoices}
-                        onChange={(v) => { setNotif({ ...notif, invoices: v }); saveNotifications(); }}
+                        checked={user.notifyInvoices ?? true}
+                        busy={notifBusy === 'invoices'}
+                        onChange={(v) => saveNotif('invoices', v)}
                         label="Billing & invoices"
                         hint="Receipts, renewals and failed payments."
                     />
                     <Toggle
-                        checked={notif.marketing}
-                        onChange={(v) => { setNotif({ ...notif, marketing: v }); saveNotifications(); }}
+                        checked={user.notifyMarketing ?? false}
+                        busy={notifBusy === 'marketing'}
+                        onChange={(v) => saveNotif('marketing', v)}
                         label="Product news"
                         hint="New runtimes, features and offers."
                     />
                 </div>
             </Section>
 
-            <section className="rounded-xl border border-red-500/30 bg-card p-6 sm:p-8">
-                <h2 className="text-[1.1rem] font-bold text-red-400">Danger zone</h2>
-                <p className="mt-1 text-[0.88rem] text-ink-secondary">
-                    Deleting your account stops all servers immediately. This cannot be undone.
-                </p>
+            {/* ============================== Danger zone ============================== */}
+            <Section danger title="Danger zone" subtitle="Deleting your account stops all servers immediately. This cannot be undone.">
                 <button
                     type="button"
-                    onClick={deleteAccount}
-                    className="mt-5 rounded-full border border-red-500/40 px-6 py-2.5 text-sm font-bold text-red-400 transition hover:bg-red-500 hover:text-white"
+                    onClick={() => { setDeletePw(''); setDeleteOpen(true); }}
+                    className="rounded-full border border-red-500/40 px-6 py-2.5 text-sm font-bold text-red-400 transition hover:bg-red-500 hover:text-white"
                 >
                     Delete account
                 </button>
-            </section>
+            </Section>
+
+            {/* ============================== Modals ============================== */}
+            <AvatarCropModal
+                open={!!cropFile}
+                file={cropFile}
+                onClose={() => setCropFile(null)}
+                onSave={saveAvatar}
+                busy={uploadAvatar.isPending}
+            />
+
+            <Modal
+                open={nameModal}
+                onClose={() => setNameModal(false)}
+                title="Change username"
+                description="You can change your username once every 30 days."
+                footer={
+                    <>
+                        <button type="button" onClick={() => setNameModal(false)} className="btn-ghost-modal">Cancel</button>
+                        <button type="button" onClick={saveName} disabled={updateProfile.isPending || nameValue.trim() === user.name} className="btn-primary-modal">
+                            {updateProfile.isPending && <Loader2 size={15} className="animate-spin" />}
+                            Save username
+                        </button>
+                    </>
+                }
+            >
+                <Field label="New username" error={nameError} hint="3–30 characters: letters, numbers, spaces, dots, dashes, underscores.">
+                    <Input
+                        value={nameValue}
+                        invalid={!!nameError}
+                        onChange={(e) => { setNameValue(e.target.value); setNameError(null); }}
+                        maxLength={30}
+                        autoComplete="off"
+                    />
+                </Field>
+            </Modal>
+
+            <ConfirmModal
+                open={!!unlinkTarget}
+                onClose={() => setUnlinkTarget(null)}
+                title={`Unlink ${unlinkTarget === 'google' ? 'Google' : 'Discord'}?`}
+                description="You'll no longer be able to sign in with this provider. Your account and servers stay untouched."
+                confirmLabel="Unlink"
+                onConfirm={async () => {
+                    await unlinkOAuth.mutateAsync(unlinkTarget);
+                    toast.success('Provider unlinked.');
+                }}
+            />
+
+            <ConfirmModal
+                open={deleteOpen}
+                onClose={() => setDeleteOpen(false)}
+                title="Delete your account?"
+                description="This permanently deletes your account, ALL servers, files and backups. There is no way back."
+                confirmLabel="Delete everything"
+                confirmDisabled={!deletePw}
+                onConfirm={doDeleteAccount}
+            >
+                <Field label="Confirm with your password">
+                    <PasswordInput
+                        value={deletePw}
+                        autoComplete="current-password"
+                        onChange={(e) => setDeletePw(e.target.value)}
+                    />
+                </Field>
+            </ConfirmModal>
         </div>
     );
 }

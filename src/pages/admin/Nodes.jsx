@@ -9,6 +9,7 @@ import {
     useAdminNodes,
     useAdminUpdateNode,
 } from '@/hooks/useAdminQueries.jsx';
+import { ConfirmModal } from '@/components/ui/confirm-modal.jsx';
 
 const inputClass =
     'w-full rounded-xl border border-hairline bg-white/10 px-4 py-2 text-[0.85rem] text-foreground placeholder-ink-muted transition focus:border-primary focus:outline-none';
@@ -168,6 +169,7 @@ function NodeCard({ node, checking, fw, onCheck, onRotate }) {
     const update = useAdminUpdateNode(node.id);
     const del = useAdminDeleteNode(node.id);
     const isLocal = node.id === 'local';
+    const [removeOpen, setRemoveOpen] = useState(false);
 
     const toggle = async (field, value, label) => {
         try {
@@ -177,9 +179,8 @@ function NodeCard({ node, checking, fw, onCheck, onRotate }) {
     };
 
     const remove = async () => {
-        if (!window.confirm(`Remove node "${node.id}" from the fleet?`)) return;
-        try { await del.mutateAsync(); toast.success('Node removed.'); }
-        catch (e) { toast.error(e.message); }
+        await del.mutateAsync();
+        toast.success('Node removed.');
     };
 
     return (
@@ -205,7 +206,7 @@ function NodeCard({ node, checking, fw, onCheck, onRotate }) {
                             <button type="button" onClick={onRotate} className={actionBtn}>Rotate TLS</button>
                             <button
                                 type="button"
-                                onClick={remove}
+                                onClick={() => setRemoveOpen(true)}
                                 className={cn(actionBtn, 'hover:!border-red-500/50 hover:!text-red-400')}
                             >
                                 Remove
@@ -238,6 +239,19 @@ function NodeCard({ node, checking, fw, onCheck, onRotate }) {
                     </span>
                 )}
             </div>
+            <ConfirmModal
+                open={removeOpen}
+                onClose={() => setRemoveOpen(false)}
+                title="Remove node"
+                description="The node is deregistered from the fleet. Servers already running on it are NOT migrated."
+                confirmLabel="Remove node"
+                onConfirm={remove}
+            >
+                <p className="text-[0.85rem] text-ink-secondary">
+                    Node: <span className="font-mono font-bold text-ink">{node.id}</span>
+                    {node.serverCount ? ` — ${node.serverCount} server${node.serverCount === 1 ? '' : 's'} on it` : ''}
+                </p>
+            </ConfirmModal>
         </div>
     );
 }

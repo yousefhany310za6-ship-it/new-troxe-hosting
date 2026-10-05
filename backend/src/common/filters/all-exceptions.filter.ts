@@ -1,6 +1,7 @@
 import { ArgumentsHost, Catch, ExceptionFilter, HttpException, HttpStatus, Logger } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { config } from '../../config/env';
+import { AppError } from '../errors';
 
 const PG_CODE_MAP: Record<string, { status: number; code: string }> = {
   '23505': { status: 409, code: 'CONFLICT' }, // unique_violation
@@ -49,6 +50,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
     let code = 'INTERNAL_ERROR';
     let message = 'Internal server error';
     let details: unknown;
+    let meta: Record<string, unknown> | undefined;
 
     if (exception instanceof HttpException) {
       status = exception.getStatus();
@@ -70,6 +72,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       }
       // silent handling of noisy framework errors
       if (status === 404 && code === 'ERROR') code = 'NOT_FOUND';
+      if (exception instanceof AppError && exception.meta) meta = exception.meta;
     } else {
       // drizzle ≥0.44 wraps driver errors ("Failed query: ...", code on
       // `.cause`), so walk the cause chain to find a PG code.
@@ -92,6 +95,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       code,
       message,
       ...(details !== undefined ? { details } : {}),
+      ...(meta ?? {}),
       requestId,
       path,
       timestamp: new Date().toISOString(),

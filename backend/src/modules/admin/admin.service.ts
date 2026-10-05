@@ -5,6 +5,7 @@ import { DB, Db } from '../../db/db.module';
 import { users, servers, plans, backups, auditLogs, sessions, authSessions } from '../../db/schema';
 import { ServersService } from '../servers/servers.service';
 import { AuditService } from '../audit/audit.module';
+import { GeoIpService } from '../../common/geoip/geoip.service';
 import { config } from '../../config/env';
 import { Err } from '../../common/errors';
 import type { CreateServerDto, UpdateServerDto } from '../servers/dto';
@@ -47,7 +48,36 @@ export class AdminService {
     private serversSvc: ServersService,
     private audit: AuditService,
     private jwt: JwtService,
+    private geo: GeoIpService,
   ) {}
+
+  /**
+   * Country of the user's most recent geolocatable successful login.
+   * Private/loopback IPs intentionally resolve to null ("Unknown" in UI).
+   */
+  private async lastKnownCountry(userId: string): Promise<{ location: string; countryCode: string } | null> {
+    const rows = await this.db
+      .select({ ip: sessions.ip, location: sessions.location, countryCode: sessions.countryCode })
+      .from(sessions)
+      .where(and(eq(sessions.userId, userId), eq(sessions.status, 'success')))
+      .orderBy(desc(sessions.createdAt))
+      .limit(10);
+    for (const r of rows) {
+      if (r.location && r.countryCode) return { location: r.location, countryCode: r.countryCode };
+      const geo = this.geo.lookup(r.ip);
+      if (geo?.countryCode) {
+        const location = this.geo.formatLocation(geo) ?? geo.country ?? geo.countryCode;
+        // persist so subsequent reads are cheap
+        this.db
+          .update(sessions)
+          .set({ location, countryCode: geo.countryCode })
+          .where(and(eq(sessions.userId, userId), eq(sessions.ip, r.ip!), isNull(sessions.countryCode)))
+          .catch(() => undefined);
+        return { location, countryCode: geo.countryCode };
+      }
+    }
+    return null;
+  }
 
   // ============ USERS ============
 
@@ -86,6 +116,7 @@ export class AdminService {
           email: users.email,
           role: users.role,
           planId: users.planId,
+          avatarUrl: users.avatarUrl,
           failedLogins: users.failedLogins,
           lockedUntil: users.lockedUntil,
           createdAt: users.createdAt,
@@ -101,8 +132,12 @@ export class AdminService {
       this.db.select({ count: count() }).from(users).where(whereClause as SQL),
     ]);
 
+    const data = await Promise.all(
+      rows.map(async (r) => ({ ...r, country: await this.lastKnownCountry(r.id) })),
+    );
+
     return {
-      data: rows,
+      data,
       pagination: {
         page,
         limit,
@@ -120,6 +155,8 @@ export class AdminService {
         email: users.email,
         role: users.role,
         planId: users.planId,
+        avatarUrl: users.avatarUrl,
+        emailVerified: users.emailVerified,
         failedLogins: users.failedLogins,
         lockedUntil: users.lockedUntil,
         notifyRestarts: users.notifyRestarts,
@@ -135,7 +172,7 @@ export class AdminService {
 
     if (!user) throw new NotFoundException('USER_NOT_FOUND');
 
-    const [serverCount, activeSessions, recentLogins] = await Promise.all([
+    const [serverCount, activeSessions, recentLogins, country] = await Promise.all([
       this.db.select({ count: count() }).from(servers).where(eq(servers.ownerId, userId)),
       this.db
         .select({ count: count() })
@@ -147,13 +184,29 @@ export class AdminService {
         .where(eq(sessions.userId, userId))
         .orderBy(desc(sessions.createdAt))
         .limit(10),
+      this.lastKnownCountry(userId),
     ]);
+
+    // lazily resolve geo for logins recorded before GeoIP existed
+    const logins = recentLogins.map((s) => {
+      if (s.location || !s.ip) return s;
+      const geo = this.geo.lookup(s.ip);
+      if (!geo) return s;
+      const location = this.geo.formatLocation(geo);
+      this.db
+        .update(sessions)
+        .set({ location, countryCode: geo.countryCode })
+        .where(eq(sessions.id, s.id))
+        .catch(() => undefined);
+      return { ...s, location, countryCode: geo.countryCode };
+    });
 
     return {
       ...user,
       serverCount: serverCount[0]?.count ?? 0,
       activeSessions: activeSessions[0]?.count ?? 0,
-      recentLogins,
+      country,
+      recentLogins: logins,
     };
   }
 

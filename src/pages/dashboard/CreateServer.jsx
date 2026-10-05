@@ -5,6 +5,7 @@ import { ArrowLeft, Check, Loader2, Plus, Server as ServerIcon } from 'lucide-re
 import { cn } from '@/lib/utils';
 import { apiGet, apiPost } from '@/lib/api.js';
 import { useRuntimeCatalog } from '@/hooks/useQueries.jsx';
+import { Select } from '@/components/ui/select.jsx';
 
 const inputClass =
     'w-full rounded-xl border border-hairline bg-white/10 px-4 py-2.5 text-[0.88rem] text-foreground placeholder-ink-muted transition focus:border-primary focus:ring-2 focus:ring-ring/40 focus:outline-none';
@@ -183,29 +184,27 @@ export default function CreateServer({ adminMode = false }) {
                     <div className="grid grid-cols-2 gap-4">
                         <label className="flex flex-col gap-1.5 text-[0.85rem] font-semibold">
                             Runtime
-                            <select
+                            <Select
+                                ariaLabel="Runtime"
                                 value={runtime}
-                                onChange={(e) => setRuntime(e.target.value)}
-                                className={inputClass}
+                                onChange={setRuntime}
                                 disabled={creating}
-                            >
-                                {(catalog ?? []).map((c) => (
-                                    <option key={c.runtime} value={c.runtime}>{c.label}</option>
-                                ))}
-                            </select>
+                                loading={!catalog}
+                                searchable
+                                options={(catalog ?? []).map((c) => ({ value: c.runtime, label: c.label }))}
+                                className="w-full"
+                            />
                         </label>
                         <label className="flex flex-col gap-1.5 text-[0.85rem] font-semibold">
                             Version
-                            <select
+                            <Select
+                                ariaLabel="Version"
                                 value={version}
-                                onChange={(e) => setVersion(e.target.value)}
-                                className={inputClass}
-                                disabled={creating}
-                            >
-                                {(entry?.versions ?? []).map((v) => (
-                                    <option key={v.version} value={v.version}>{v.label}</option>
-                                ))}
-                            </select>
+                                onChange={setVersion}
+                                disabled={creating || !entry}
+                                options={(entry?.versions ?? []).map((v) => ({ value: v.version, label: v.label }))}
+                                className="w-full"
+                            />
                         </label>
                     </div>
                 </div>

@@ -244,6 +244,8 @@ export interface AppConfig {
   readonly HARDEN_NETWORK: boolean;
   readonly CONTAINER_PIDS_LIMIT: number;
   readonly BACKUP_DIR: string;
+  readonly AVATAR_STORAGE_PATH: string;
+  readonly AVATAR_MAX_SIZE_BYTES: number;
   readonly BACKUP_MAX_TOTAL_MB: number;
   /** Hard ceiling for a SINGLE archive (stream/tar is aborted past it). */
   readonly BACKUP_MAX_MB: number;
@@ -309,6 +311,8 @@ export const config: AppConfig = Object.freeze({
   CONTAINER_PIDS_LIMIT: num('CONTAINER_PIDS_LIMIT', 512, 32, 8192),
 
   BACKUP_DIR: raw.BACKUP_DIR ?? './data/backups',
+  AVATAR_STORAGE_PATH: raw.AVATAR_STORAGE_PATH ?? './data/avatars',
+  AVATAR_MAX_SIZE_BYTES: num('AVATAR_MAX_SIZE_BYTES', 5 * 1024 * 1024, 64 * 1024, 25 * 1024 * 1024),
   BACKUP_MAX_TOTAL_MB: num('BACKUP_MAX_TOTAL_MB', 2048, 16, 1024 * 1024),
   BACKUP_MAX_MB: num('BACKUP_MAX_MB', 2048, 16, 1024 * 1024),
   DISK_BLOCK_PCT: num('DISK_BLOCK_PCT', 90, 1, 100),

@@ -30,3 +30,6 @@ Thumbs.db
 
 # smoke-render build artifact
 test-frontend/.build/
+
+# uploaded user avatars (generated at runtime)
+backend/data/avatars/

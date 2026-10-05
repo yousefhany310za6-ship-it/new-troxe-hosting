@@ -5,6 +5,7 @@ import { config } from './config/env';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { RequestContextInterceptor } from './common/interceptors/request-context.interceptor';
 import { DbModule } from './db/db.module';
+import { GeoIpModule } from './common/geoip/geoip.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { AuthModule } from './modules/auth/auth.module';
@@ -23,6 +24,7 @@ import { UsersModule } from './modules/users/users.module';
       ],
     }),
     DbModule,
+    GeoIpModule,
     AuditModule,
     AuthModule,
     UsersModule,

@@ -4,7 +4,6 @@ import {
     ArrowLeft,
     Check,
     Database,
-    Download,
     FileText,
     Folder,
     History,
@@ -22,6 +21,8 @@ import { cn } from '@/lib/utils';
 import { apiGet, apiPost, apiPatch, apiDelete } from '@/lib/api.js';
 import { STATUS_STYLE } from './Overview.jsx';
 import { RUNTIME_ICONS } from './Servers.jsx';
+import { ConfirmModal } from '@/components/ui/confirm-modal.jsx';
+import { Select } from '@/components/ui/select.jsx';
 import ServerFiles from './ServerFiles.jsx';
 import ExecTerminal from './ExecTerminal.jsx';
 
@@ -51,6 +52,10 @@ export default function ServerDetail() {
     const [tab, setTab] = useState('overview');
     const [status, setStatus] = useState('offline');
     const [msg, setMsg] = useState({ text: '', ok: true });
+    const [reinstallOpen, setReinstallOpen] = useState(false);
+    const [deleteOpen, setDeleteOpen] = useState(false);
+    const [restoreTarget, setRestoreTarget] = useState(null);
+    const [deleteBackupTarget, setDeleteBackupTarget] = useState(null);
 
     const logRef = useRef(null);
 
@@ -188,15 +193,10 @@ export default function ServerDetail() {
     };
 
     const restoreBackup = async (backupId) => {
-        setMsg({ text: 'Restoring backup…', ok: true });
-        try {
-            await apiPost(`/servers/${id}/backups/${backupId}/restore`);
-            setMsg({ text: 'Restore started', ok: true });
-            fetchBackups();
-            fetchServer();
-        } catch (e) {
-            setMsg({ text: e.message, ok: false });
-        }
+        await apiPost(`/servers/${id}/backups/${backupId}/restore`);
+        setMsg({ text: 'Restore started', ok: true });
+        fetchBackups();
+        fetchServer();
     };
 
     const deleteBackup = async (backupId) => {
@@ -231,36 +231,14 @@ export default function ServerDetail() {
     };
 
     const reinstall = async () => {
-        if (!window.confirm('Reinstall will WIPE all data on this server. Type the server name to confirm.')) return;
-        const confirmName = window.prompt('Confirm server name:');
-        if (confirmName !== server.name) {
-            setMsg({ text: 'Name mismatch. Reinstall cancelled.', ok: false });
-            return;
-        }
-        setMsg({ text: 'Reinstalling…', ok: true });
-        try {
-            await apiPost(`/servers/${id}/reinstall`);
-            setMsg({ text: 'Reinstall started', ok: true });
-            fetchServer();
-        } catch (e) {
-            setMsg({ text: e.message, ok: false });
-        }
+        await apiPost(`/servers/${id}/reinstall`);
+        setMsg({ text: 'Reinstall started', ok: true });
+        fetchServer();
     };
 
     const deleteServer = async () => {
-        if (!window.confirm('This will DELETE the server and ALL its data permanently. Type DELETE to confirm.')) return;
-        const confirm = window.prompt('Type DELETE to confirm:');
-        if (confirm !== 'DELETE') {
-            setMsg({ text: 'Confirmation failed. Deletion cancelled.', ok: false });
-            return;
-        }
-        setMsg({ text: 'Deleting server…', ok: true });
-        try {
-            await apiDelete(`/servers/${id}`);
-            navigate('/dashboard/servers');
-        } catch (e) {
-            setMsg({ text: e.message, ok: false });
-        }
+        await apiDelete(`/servers/${id}`);
+        navigate('/dashboard/servers');
     };
 
     const fmtBytes = (bytes, limit) => {
@@ -438,24 +416,22 @@ export default function ServerDetail() {
                             Auto
                         </label>
                         {server.autoBackup && (
-                            <label className="flex items-center gap-2 text-[0.85rem] font-semibold">
+                            <span className="flex items-center gap-2 text-[0.85rem] font-semibold">
                                 Keep
-                                <select
-                                    value={server.autoBackupRetain ?? 7}
-                                    onChange={async (e) => {
+                                <Select
+                                    ariaLabel="Backup retention"
+                                    value={String(server.autoBackupRetain ?? 7)}
+                                    onChange={async (v) => {
                                         try {
-                                            await apiPatch(`/servers/${id}`, { autoBackupRetain: Number(e.target.value) });
-                                            setMsg({ text: `Retention set to ${e.target.value} snapshots.`, ok: true });
+                                            await apiPatch(`/servers/${id}`, { autoBackupRetain: Number(v) });
+                                            setMsg({ text: `Retention set to ${v} snapshots.`, ok: true });
                                             fetchServer();
                                         } catch (err) { setMsg({ text: err.message, ok: false }); }
                                     }}
-                                    className="rounded-lg border border-hairline bg-white/10 px-2 py-1.5 font-mono text-[0.82rem] text-foreground focus:border-primary focus:outline-none"
-                                >
-                                    {[1, 3, 7, 14, 30].map((n) => (
-                                        <option key={n} value={n}>{n}</option>
-                                    ))}
-                                </select>
-                            </label>
+                                    options={[1, 3, 7, 14, 30].map((n) => ({ value: String(n), label: `${n} snapshot${n === 1 ? '' : 's'}` }))}
+                                    buttonClassName="px-2.5 py-1.5 font-mono text-[0.82rem]"
+                                />
+                            </span>
                         )}
                     </div>
                     <div className="flex flex-wrap items-center justify-between gap-3">
@@ -489,7 +465,7 @@ export default function ServerDetail() {
                             <div className="ml-auto flex items-center gap-2">
                                 <button
                                     type="button"
-                                    onClick={() => restoreBackup(backup.id)}
+                                    onClick={() => setRestoreTarget(backup)}
                                     disabled={backup.status !== 'ready'}
                                     className={cn(actionBtn, backup.status !== 'ready' && 'opacity-50')}
                                 >
@@ -497,15 +473,8 @@ export default function ServerDetail() {
                                 </button>
                                 <button
                                     type="button"
-                                    onClick={() => setMsg({ text: 'Downloads are not implemented yet.', ok: false })}
-                                    className={actionBtn}
-                                >
-                                    <Download className="size-3.5" /> Download
-                                </button>
-                                <button
-                                    type="button"
                                     aria-label={`Delete ${backup.name}`}
-                                    onClick={() => deleteBackup(backup.id)}
+                                    onClick={() => setDeleteBackupTarget(backup)}
                                     className={cn(actionBtn, 'hover:!border-red-500/50 hover:!text-red-400')}
                                 >
                                     <Trash2 className="size-3.5" />
@@ -602,14 +571,14 @@ export default function ServerDetail() {
                         <div className="mt-4 flex flex-wrap gap-2">
                             <button
                                 type="button"
-                                onClick={reinstall}
+                                onClick={() => setReinstallOpen(true)}
                                 className="rounded-full border border-hairline px-5 py-2 text-[0.83rem] font-bold text-ink-secondary transition hover:border-hairline-hover hover:text-foreground"
                             >
                                 Reinstall server
                             </button>
                             <button
                                 type="button"
-                                onClick={deleteServer}
+                                onClick={() => setDeleteOpen(true)}
                                 className="rounded-full border border-red-500/40 px-5 py-2 text-[0.83rem] font-bold text-red-400 transition hover:bg-red-500 hover:text-white"
                             >
                                 Delete server
@@ -618,6 +587,63 @@ export default function ServerDetail() {
                     </div>
                 </div>
             )}
+
+            {/* ---------- destructive-action modals ---------- */}
+            <ConfirmModal
+                open={reinstallOpen}
+                onClose={() => setReinstallOpen(false)}
+                title="Reinstall server"
+                description="This wipes the server's filesystem and re-provisions it from scratch. Environment variables are kept; all files and data are lost."
+                confirmLabel="Reinstall"
+                confirmPhrase={server?.name ?? ''}
+                phraseHint={server ? <>Type the server name <span className="font-mono font-bold text-ink">{server.name}</span> to confirm</> : null}
+                onConfirm={reinstall}
+            >
+                <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-[0.82rem] text-amber-300">
+                    Server: <span className="font-mono font-bold">{server?.name}</span> — all current files will be permanently erased.
+                </p>
+            </ConfirmModal>
+
+            <ConfirmModal
+                open={deleteOpen}
+                onClose={() => setDeleteOpen(false)}
+                title="Delete server"
+                description="This permanently deletes the server, its files and ALL its backups. This action is irreversible."
+                confirmLabel="Delete server"
+                confirmPhrase="DELETE"
+                onConfirm={deleteServer}
+            >
+                <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2.5 text-[0.82rem] text-red-300">
+                    Server: <span className="font-mono font-bold">{server?.name}</span> — files, data and backups will all be destroyed.
+                </p>
+            </ConfirmModal>
+
+            <ConfirmModal
+                open={!!restoreTarget}
+                onClose={() => setRestoreTarget(null)}
+                title="Restore backup"
+                description="The server's current files will be replaced with this snapshot. Files created after the snapshot are lost."
+                confirmLabel="Restore"
+                onConfirm={() => restoreBackup(restoreTarget.id)}
+            >
+                <p className="text-[0.85rem] text-ink-secondary">
+                    Snapshot: <span className="font-mono font-bold text-ink">{restoreTarget?.name}</span>
+                    {' '}({restoreTarget && new Date(restoreTarget.createdAt).toLocaleString()})
+                </p>
+            </ConfirmModal>
+
+            <ConfirmModal
+                open={!!deleteBackupTarget}
+                onClose={() => setDeleteBackupTarget(null)}
+                title="Delete backup"
+                description="This snapshot will be permanently removed. The server itself is not affected."
+                confirmLabel="Delete backup"
+                onConfirm={() => deleteBackup(deleteBackupTarget.id)}
+            >
+                <p className="text-[0.85rem] text-ink-secondary">
+                    Snapshot: <span className="font-mono font-bold text-ink">{deleteBackupTarget?.name}</span>
+                </p>
+            </ConfirmModal>
         </div>
     );
 }

@@ -1,307 +1,293 @@
-import { Injectable, Logger, BadRequestException, Inject } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import sharp from 'sharp';
-import { createHash } from 'crypto';
+import { Inject, Injectable, Logger } from '@nestjs/common';
+import { eq } from 'drizzle-orm';
+import { randomBytes } from 'crypto';
+import { promises as fs } from 'fs';
+import * as path from 'path';
+import sharp, { type Metadata, type Sharp } from 'sharp';
+import { config } from '../../config/env';
 import { Err } from '../../common/errors';
-import { ReqCtx } from '../../common/request-context';
 import { DB, Db } from '../../db/db.module';
-import type { Request } from 'express';
+import { oauthAccounts, users } from '../../db/schema';
+import { AuditService } from '../audit/audit.module';
 
-/**
- * Avatar service for handling uploads, validation, cropping, and OAuth avatars
- */
+/** Declared-MIME → magic-byte signature. The declared type is never trusted. */
+const SIGNATURES: Record<string, (b: Buffer) => boolean> = {
+  'image/jpeg': (b) => b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff,
+  'image/png': (b) =>
+    b.length > 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 && b[4] === 0x0d && b[5] === 0x0a && b[6] === 0x1a && b[7] === 0x0a,
+  'image/webp': (b) => b.length > 12 && b.toString('ascii', 0, 4) === 'RIFF' && b.toString('ascii', 8, 12) === 'WEBP',
+};
 
-export interface AvatarUploadResult {
-  url: string;
-  path: string;
-  size: number;
-  mimeType: string;
-  width: number;
-  height: number;
-}
+const ALLOWED_MIME = new Set(Object.keys(SIGNATURES));
+const ORIGINAL_MAX_PX = 1024; // stored original is normalized to fit inside
+const AVATAR_PX = 256; // served avatar
+const MAX_DIMENSION = 8192; // absurd-pixel bomb guard
+const KEY_RE = /^[A-Za-z0-9_-]{16,128}\.webp$/;
 
-export interface AvatarUploadOptions {
-  maxSizeBytes?: number;
-  allowedMimeTypes?: string[];
-  maxDimensions?: { width: number; height: number };
-  crop?: {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-  };
-  resize?: {
-    width: number;
-    height: number;
-    fit?: 'cover' | 'contain' | 'fill' | 'inside' | 'outside';
-  };
-}
-
-const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
-const DEFAULT_MAX_SIZE_BYTES = 5 * 1024 * 1024; // 5MB
-const DEFAULT_MAX_DIMENSIONS = { width: 1024, height: 1024 };
-const AVATAR_SIZES = [
-  { size: 32, suffix: '32' },
-  { size: 64, suffix: '64' },
-  { size: 128, suffix: '128' },
-  { size: 256, suffix: '256' },
-  { size: 512, suffix: '512' },
-];
-
-interface UploadedFile {
-  buffer: Buffer;
-  originalName: string;
-  mimeType: string;
+export interface CropRect {
+  x: number;
+  y: number;
   size: number;
 }
 
 @Injectable()
 export class AvatarService {
-  private readonly logger = new Logger(AvatarService.name);
-  private readonly baseUrl: string;
-  private readonly avatarPath: string;
-  private readonly maxSizeBytes: number;
-  private readonly allowedMimeTypes: string[];
-  private readonly maxDimensions: { width: number; height: number };
+  private readonly log = new Logger(AvatarService.name);
+  private readonly dir = path.resolve(config.AVATAR_STORAGE_PATH);
 
   constructor(
-    private configService: ConfigService,
-  ) {
-    this.baseUrl = this.configService.get('APP_URL') || 'http://localhost:3000';
-    this.avatarPath = this.configService.get('AVATAR_STORAGE_PATH') || './uploads/avatars';
-    this.maxSizeBytes = this.configService.get<number>('AVATAR_MAX_SIZE_BYTES') || 5 * 1024 * 1024; // 5MB
-    this.allowedMimeTypes = ['image/jpeg', 'image/png', 'image/webp'];
-    this.maxDimensions = { width: 1024, height: 1024 };
+    @Inject(DB) private db: Db,
+    private audit: AuditService,
+  ) {}
+
+  // ---------------------------------------------------------------- storage
+
+  private async ensureDir() {
+    await fs.mkdir(this.dir, { recursive: true, mode: 0o750 });
   }
+
+  /** Public URL path stored in users.avatar_url — served by AvatarController. */
+  private urlFor(key: string) {
+    return `/api/v1/users/avatars/${key}.webp`;
+  }
+
+  private origPath(key: string, ext: string) {
+    return path.join(this.dir, `${key}_orig.${ext}`);
+  }
+
+  private avatarPath(key: string) {
+    return path.join(this.dir, `${key}.webp`);
+  }
+
+  /** Extract the storage key from one of our avatar URLs (null if foreign). */
+  private keyFromUrl(url: string | null): string | null {
+    if (!url) return null;
+    const m = /^\/api\/v1\/users\/avatars\/([A-Za-z0-9_-]{16,128})\.webp$/.exec(url);
+    return m ? m[1] : null;
+  }
+
+  private async unlinkQuiet(p: string) {
+    await fs.unlink(p).catch(() => undefined);
+  }
+
+  private async deleteFiles(key: string | null) {
+    if (!key) return;
+    await this.unlinkQuiet(this.avatarPath(key));
+    // original extension is unknown — try the three we accept
+    for (const ext of ['jpg', 'png', 'webp']) await this.unlinkQuiet(this.origPath(key, ext));
+  }
+
+  // ------------------------------------------------------------ validation
 
   /**
-   * Validate an uploaded file for avatar use
+   * Validate the uploaded buffer beyond its declared type:
+   *  - size cap (multer enforces too, belt-and-suspenders)
+   *  - declared MIME allowlist
+   *  - magic-byte signature must match the declared type
+   *  - sharp must actually parse it as an image (polyglot guard)
+   *  - sane pixel dimensions (decompression-bomb guard)
    */
-  async validateAvatarFile(file: Express.Multer.File): Promise<{ buffer: Buffer; originalName: string; mimeType: string; size: number }> {
-    if (!file) {
-      throw new BadRequestException('No file provided');
+  private async validate(file: Express.Multer.File): Promise<Sharp> {
+    if (!file?.buffer?.length) throw Err.invalid('AVATAR_EMPTY', 'No file uploaded');
+    if (file.size > config.AVATAR_MAX_SIZE_BYTES) {
+      throw Err.invalid('AVATAR_TOO_LARGE', `Avatar must be ≤ ${Math.floor(config.AVATAR_MAX_SIZE_BYTES / 1048576)} MB`);
     }
-
-    // Check file size
-    if (file.size > this.maxSizeBytes) {
-      throw new BadRequestException(`File size exceeds maximum allowed size of ${this.maxSizeBytes / (1024 * 1024)}MB`);
+    const sniff = SIGNATURES[file.mimetype];
+    if (!sniff || !ALLOWED_MIME.has(file.mimetype) || !sniff(file.buffer)) {
+      throw Err.invalid('AVATAR_TYPE_INVALID', 'Only JPEG, PNG and WebP images are allowed');
     }
-
-    // Check MIME type
-    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype)) {
-      throw new BadRequestException(`Invalid file type. Allowed types: image/jpeg, image/png, image/webp`);
+    let img: Sharp;
+    let meta: Metadata;
+    try {
+      img = sharp(file.buffer, { failOn: 'error' });
+      meta = await img.metadata();
+    } catch {
+      throw Err.invalid('AVATAR_CORRUPT', 'The file is not a valid image');
     }
-
-    // Verify file signature (magic bytes)
-    const actualMimeType = await this.detectMimeType(file.buffer);
-    if (actualMimeType !== file.mimetype || !['image/jpeg', 'image/png', 'image/webp'].includes(actualMimeType)) {
-      throw new BadRequestException('File content does not match declared type');
+    const w = meta.width ?? 0;
+    const h = meta.height ?? 0;
+    if (!w || !h || w > MAX_DIMENSION || h > MAX_DIMENSION) {
+      throw Err.invalid('AVATAR_DIMENSIONS_INVALID', 'Image dimensions are invalid');
     }
-
-    // Check image dimensions
-    const metadata = await sharp(file.buffer).metadata();
-    if (metadata.width > this.maxDimensions.width || metadata.height > this.maxDimensions.height) {
-      throw new BadRequestException(`Image dimensions exceed maximum allowed (${this.maxDimensions.width}x${this.maxDimensions.height})`);
-    }
-
-    return {
-      buffer: file.buffer,
-      originalName: file.originalname,
-      mimeType: actualMimeType,
-      size: file.size,
-    };
+    return img;
   }
+
+  // ------------------------------------------------------------------ API
 
   /**
-   * Detect actual MIME type from file buffer using magic bytes
+   * Upload → validate → store normalized original + 256px webp derivative →
+   * persist users.avatar_url/avatar_source. Returns the new avatar URL.
    */
-  private async detectMimeType(buffer: Buffer): Promise<string> {
-    const signatures: Record<string, number[]> = {
-      'image/jpeg': [0xFF, 0xD8, 0xFF],
-      'image/png': [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A],
-      'image/webp': [0x52, 0x49, 0x46, 0x46], // RIFF header
-    };
+  async setCustomAvatar(userId: string, file: Express.Multer.File, ctx: { ip: string; userAgent?: string }) {
+    const img = await this.validate(file);
+    await this.ensureDir();
 
-    for (const [mime, signature] of Object.entries(signatures)) {
-      if (signature.every((byte, i) => buffer[i] === byte)) {
-        // Additional check for WebP
-        if (mime === 'image/webp') {
-          const webpSignature = buffer.slice(8, 12).toString();
-          if (webpSignature !== 'WEBP') continue;
-        }
-        return mime;
-      }
+    const key = randomBytes(24).toString('base64url');
+    const ext = file.mimetype === 'image/png' ? 'png' : file.mimetype === 'image/webp' ? 'webp' : 'jpg';
+
+    // normalized original: re-encoded (strips metadata/polyglot tails), ≤1024px
+    await img
+      .clone()
+      .rotate() // respect EXIF orientation
+      .resize(ORIGINAL_MAX_PX, ORIGINAL_MAX_PX, { fit: 'inside', withoutEnlargement: true })
+      .toFormat(ext === 'png' ? 'png' : ext === 'webp' ? 'webp' : 'jpeg', { quality: 92 })
+      .toFile(this.origPath(key, ext));
+
+    // default derivative: centered square 256×256 webp
+    await sharp(this.origPath(key, ext))
+      .resize(AVATAR_PX, AVATAR_PX, { fit: 'cover', position: 'centre' })
+      .webp({ quality: 88 })
+      .toFile(this.avatarPath(key));
+
+    const [existing] = await this.db
+      .select({ email: users.email, avatarUrl: users.avatarUrl })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+    if (!existing) {
+      await this.deleteFiles(key);
+      throw Err.unauthorized('USER_GONE');
     }
-    return 'application/octet-stream';
-  }
 
-  /**
-   * Generate a unique storage key for the avatar
-   */
-  private generateStorageKey(userId: string, originalName: string, mimeType: string): string {
-    const hash = createHash('sha256').update(`${Date.now()}-${Math.random()}`).digest('hex').substring(0, 16);
-    const ext = this.getExtensionFromMimeType('image/png');
-    return `avatars/${Date.now()}-${hash}.${ext}`;
-  }
-
-  private getExtensionFromMimeType(mimeType: string): string {
-    switch (mimeType) {
-      case 'image/jpeg': return 'jpg';
-      case 'image/png': return 'png';
-      case 'image/webp': return 'webp';
-      default: return 'bin';
+    const oldKey = this.keyFromUrl(existing.avatarUrl);
+    const avatarUrl = this.urlFor(key);
+    const [updated] = await this.db
+      .update(users)
+      .set({ avatarUrl, avatarSource: 'custom' })
+      .where(eq(users.id, userId))
+      .returning();
+    if (!updated) {
+      await this.deleteFiles(key);
+      throw Err.unauthorized('USER_GONE');
     }
-  }
 
-  /**
-   * Process and store avatar with all sizes
-   */
-  async processAndStoreAvatar(
-    userId: string,
-    file: Express.Multer.File,
-    options: {
-      crop?: { x: number; y: number; width: number; height: number };
-      resize?: { width: number; height: number; fit?: 'cover' | 'contain' | 'fill' | 'inside' | 'outside' };
-    } = {}
-  ): Promise<Array<{ url: string; path: string; size: number; mimeType: string; width: number; height: number }>> {
-    const validatedFile = await this.validateAvatarFile({ ...file, mimetype: file.mimetype });
+    // only after the DB points at the new files
+    await this.deleteFiles(oldKey);
 
-    // Apply crop if specified
-    let processedBuffer = await this.applyCrop(file.buffer, { x: 0, y: 0, width: 100, height: 100 });
-
-    // Apply resize
-    processedBuffer = await this.resizeImage(file.buffer, { width: 512, height: 512, fit: 'cover' });
-
-    // Generate all sizes
-    const results: Array<{ url: string; path: string; size: number; mimeType: string; width: number; height: number }> = [];
-
-    // Store original
-    const originalKey = `avatars/original`;
-    await this.storeAvatar(userId, 'original', processedBuffer, file.mimetype);
-    const metadata = await sharp(processedBuffer).metadata();
-    results.push({
-      url: `${this.baseUrl}/avatars/original`,
-      path: originalKey,
-      size: processedBuffer.length,
-      mimeType: file.mimetype,
-      width: metadata.width,
-      height: metadata.height,
+    await this.audit.record({
+      actorId: userId,
+      actorEmail: existing.email,
+      action: 'user.avatar.custom_set',
+      targetType: 'user',
+      targetId: userId,
+      ip: ctx.ip,
+      userAgent: ctx.userAgent,
     });
+    this.log.log(`avatar set for ${userId} → ${key}`);
+    return { avatarUrl, avatarSource: 'custom' as const };
+  }
 
-    // Generate and store all sizes
-    const AVATAR_SIZES = [
-      { size: 32, suffix: '32' },
-      { size: 64, suffix: '64' },
-      { size: 128, suffix: '128' },
-      { size: 256, suffix: '256' },
-      { size: 512, suffix: '512' },
-    ];
+  /**
+   * Re-derive the 256px avatar from the stored original using a crop rect
+   * (pixels relative to the stored, orientation-normalized original).
+   */
+  async cropAvatar(userId: string, rect: CropRect, ctx: { ip: string; userAgent?: string }) {
+    const [user] = await this.db
+      .select({ avatarUrl: users.avatarUrl, avatarSource: users.avatarSource })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+    if (!user || user.avatarSource !== 'custom') throw Err.invalid('NO_CUSTOM_AVATAR', 'Upload an avatar first');
+    const key = this.keyFromUrl(user.avatarUrl);
+    if (!key) throw Err.invalid('NO_CUSTOM_AVATAR', 'Upload an avatar first');
 
-    for (const { size, suffix } of AVATAR_SIZES) {
-      const resized = await sharp(processedBuffer)
-        .resize(size, size, { fit: 'cover', position: 'center' })
-        .toBuffer();
+    let orig: string | null = null;
+    for (const ext of ['jpg', 'png', 'webp']) {
+      const p = this.origPath(key, ext);
+      if (await fs.stat(p).then(() => true, () => false)) { orig = p; break; }
+    }
+    if (!orig) throw Err.notFound('AVATAR_ORIGINAL_GONE');
 
-      const key = this.generateStorageKey(userId, suffix, file.mimetype);
-      await this.storeAvatar(userId, suffix, resized, file.mimetype);
-
-      results.push({
-        url: `${this.baseUrl}/avatars/${suffix}`,
-        path: key,
-        size: resized.length,
-        mimeType: file.mimetype,
-        width: size,
-        height: size,
-      });
+    const meta = await sharp(orig).metadata();
+    const W = meta.width ?? 0;
+    const H = meta.height ?? 0;
+    const x = Math.round(rect.x);
+    const y = Math.round(rect.y);
+    const size = Math.round(rect.size);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(size) || size < 1 || x < 0 || y < 0 || x + size > W || y + size > H) {
+      throw Err.invalid('CROP_INVALID', `Crop must fit inside ${W}×${H}`);
     }
 
-    return results;
-  }
+    await sharp(orig)
+      .extract({ left: x, top: y, width: size, height: size })
+      .resize(AVATAR_PX, AVATAR_PX, { fit: 'cover' })
+      .webp({ quality: 88 })
+      .toFile(this.avatarPath(key) + '.tmp');
+    await fs.rename(this.avatarPath(key) + '.tmp', this.avatarPath(key));
 
-  /**
-   * Apply crop to image
-   */
-  private async applyCrop(buffer: Buffer, crop?: { x: number; y: number; width: number; height: number }): Promise<Buffer> {
-    if (!crop) return Buffer.from(await sharp(Buffer.from(buffer)).toBuffer());
-    return sharp(buffer)
-      .extract({ left: crop.x, top: crop.y, width: crop.width, height: crop.height })
-      .toBuffer();
-  }
-
-  private async resizeImage(buffer: Buffer, options: { width: number; height: number; fit?: 'cover' | 'contain' | 'fill' | 'inside' | 'outside' }): Promise<Buffer> {
-    return sharp(Buffer.from(buffer))
-      .resize(options.width, options.height, { fit: options.fit || 'inside', position: 'center' })
-      .toBuffer();
-  }
-
-  /**
-   * Store avatar in storage (local filesystem for now, can be extended to S3)
-   */
-  private async storeAvatar(userId: string, sizeSuffix: string, buffer: Buffer, mimeType: string): Promise<string> {
-    // In production, this would upload to S3/Cloudflare R2
-    // For now, we'll store locally
-    const fs = await import('fs/promises');
-    const path = await import('path');
-    
-    const avatarDir = path.join(this.avatarPath, 'avatars');
-    await import('fs/promises').then(fs => fs.mkdir(avatarDir, { recursive: true }));
-    
-    const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}.${this.getExtensionFromMimeType('image/png')}`;
-    const filePath = path.join(this.avatarPath, 'avatars', fileName);
-    
-    await import('fs/promises').then(fs => fs.writeFile(filePath, Buffer.from('placeholder')));
-    
-    // In production, upload to S3/R2 and return the URL
-    return `/avatars/${path.basename(filePath)}`;
-  }
-
-  /**
-   * Delete all avatar variants for a user
-   */
-  async deleteUserAvatars(userId: string): Promise<void> {
-    // Delete from storage (S3/local)
-    // Update database to clear avatarUrl
-  }
-
-  /**
-   * Handle OAuth avatar - store provider avatar URL, don't download
-   */
-  async setOAuthAvatar(userId: string, provider: 'google' | 'discord', avatarUrl: string): Promise<void> {
-    // Store the provider URL directly, don't download
-    // Track source as 'oauth'
-  }
-
-  /**
-   * Set custom avatar (user uploaded) - replaces OAuth avatar
-   */
-  async setCustomAvatar(userId: string, file: Express.Multer.File): Promise<string> {
-    const results = await this.processAndStoreAvatar(userId, file, {
-      resize: { width: 512, height: 512, fit: 'cover' },
+    await this.audit.record({
+      actorId: userId,
+      action: 'user.avatar.cropped',
+      targetType: 'user',
+      targetId: userId,
+      ip: ctx.ip,
+      userAgent: ctx.userAgent,
     });
-    return results[0].url;
+    return { avatarUrl: this.urlFor(key), avatarSource: 'custom' as const };
   }
 
   /**
-   * Remove custom avatar, revert to OAuth or default
+   * Remove the custom avatar. Falls back to the latest OAuth avatar snapshot
+   * when one exists, otherwise to the generated default (NULL url).
    */
-  async removeCustomAvatar(userId: string): Promise<void> {
-    // Delete custom avatar files
-    // Revert to OAuth avatar if available, otherwise default
+  async removeCustomAvatar(userId: string, ctx: { ip: string; userAgent?: string }) {
+    const [existing] = await this.db
+      .select({ email: users.email, avatarUrl: users.avatarUrl })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+    if (!existing) throw Err.unauthorized('USER_GONE');
+
+    const [oauth] = await this.db
+      .select({ avatarUrl: oauthAccounts.avatarUrl })
+      .from(oauthAccounts)
+      .where(eq(oauthAccounts.userId, userId))
+      .limit(1);
+
+    const fallbackUrl = oauth?.avatarUrl ?? null;
+    const fallbackSource: 'oauth' | 'default' = oauth?.avatarUrl ? 'oauth' : 'default';
+    const oldKey = this.keyFromUrl(existing.avatarUrl);
+
+    const [updated] = await this.db
+      .update(users)
+      .set({ avatarUrl: fallbackUrl, avatarSource: fallbackSource })
+      .where(eq(users.id, userId))
+      .returning();
+    if (!updated) throw Err.unauthorized('USER_GONE');
+
+    await this.deleteFiles(oldKey);
+    await this.audit.record({
+      actorId: userId,
+      actorEmail: existing.email,
+      action: 'user.avatar.removed',
+      targetType: 'user',
+      targetId: userId,
+      ip: ctx.ip,
+      userAgent: ctx.userAgent,
+    });
+    return { avatarUrl: fallbackUrl, avatarSource: fallbackSource };
+  }
+
+  async getAvatarInfo(userId: string) {
+    const [user] = await this.db
+      .select({ avatarUrl: users.avatarUrl, avatarSource: users.avatarSource })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+    if (!user) throw Err.unauthorized('USER_GONE');
+    return user;
   }
 
   /**
-   * Get avatar info for a user
+   * Resolve a public avatar key to a file path for streaming.
+   * Keys are unguessable random ids; the filename pattern is strictly
+   * validated so the lookup can never escape the storage directory.
    */
-  async getAvatarInfo(userId: string): Promise<{
-    url: string;
-    source: 'oauth' | 'custom' | 'default';
-    provider?: 'google' | 'discord';
-    customUrl?: string;
-  }> {
-    // Return avatar info from database
-    return {
-      url: '',
-      source: 'default',
-    };
+  async resolveFile(filename: string): Promise<{ path: string; contentType: string } | null> {
+    if (!KEY_RE.test(filename)) return null;
+    const p = this.avatarPath(filename.slice(0, -5)); // strip .webp
+    if (path.dirname(p) !== this.dir) return null;
+    const ok = await fs.stat(p).then((s) => s.isFile(), () => false);
+    return ok ? { path: p, contentType: 'image/webp' } : null;
   }
 }

@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
+import { BadgeCheck, UserCheck } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
+import { apiPost } from '@/lib/api.js';
 import { useToast } from '@/hooks/useToast.jsx';
 import {
     useAdminDeleteUser,
@@ -12,9 +14,11 @@ import {
     useAdminUpdateRole,
     useAdminUser,
 } from '@/hooks/useAdminQueries.jsx';
-
-const inputClass =
-    'rounded-xl border border-hairline bg-white/10 px-4 py-2 text-[0.85rem] text-foreground transition focus:border-primary focus:outline-none';
+import { ConfirmModal } from '@/components/ui/confirm-modal.jsx';
+import { Flag } from '@/components/ui/flag.jsx';
+import { Select } from '@/components/ui/select.jsx';
+import { Skeleton } from '@/components/ui/field.jsx';
+import { AvatarBadge } from '@/components/AvatarBadge.jsx';
 
 export default function AdminUserDetail() {
     const { id } = useParams();
@@ -27,51 +31,79 @@ export default function AdminUserDetail() {
     const updatePlan = useAdminUpdatePlan(id);
     const resetLogins = useAdminResetLogins(id);
     const deleteUser = useAdminDeleteUser(id);
-    const [msg, setMsg] = useState({ text: '', ok: true });
+    const [roleTarget, setRoleTarget] = useState(null);
+    const [deleteOpen, setDeleteOpen] = useState(false);
+    const [impBusy, setImpBusy] = useState(false);
 
-    if (isLoading) return <div className="flex h-64 items-center justify-center text-ink-muted">Loading…</div>;
+    if (isLoading) {
+        return (
+            <div className="flex flex-col gap-6">
+                <Skeleton className="h-4 w-28" />
+                <Skeleton className="h-16 w-full rounded-xl" />
+                <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
+                    {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-20 rounded-xl" />)}
+                </div>
+            </div>
+        );
+    }
     if (error) return <div className="text-red-400">Failed to load: {error.message}</div>;
 
-    const fail = (e) => { setMsg({ text: e.message, ok: false }); toast.error(e.message); };
-    const ok = (t) => { setMsg({ text: t, ok: true }); toast.success(t); };
-
-    const changeRole = async (role) => {
-        if (!window.confirm(`Change ${user.email} role to "${role}"?`)) return;
-        try { await updateRole.mutateAsync(role); ok(`Role changed to ${role}.`); }
-        catch (e) { fail(e); }
+    const changeRole = async () => {
+        await updateRole.mutateAsync(roleTarget);
+        toast.success(`Role changed to ${roleTarget}.`);
     };
 
     const changePlan = async (planId) => {
-        try { await updatePlan.mutateAsync(planId); ok(`Plan changed to ${planId}.`); }
-        catch (e) { fail(e); }
+        try { await updatePlan.mutateAsync(planId); toast.success(`Plan changed to ${planId}.`); }
+        catch (e) { toast.error(e.message); }
     };
 
     const reset = async () => {
-        try { await resetLogins.mutateAsync(); ok('Failed logins reset, lock cleared.'); }
-        catch (e) { fail(e); }
+        try { await resetLogins.mutateAsync(); toast.success('Failed logins reset, lock cleared.'); }
+        catch (e) { toast.error(e.message); }
     };
 
     const remove = async () => {
-        if (!window.confirm(`DELETE ${user.email} and ALL their servers? This cannot be undone.`)) return;
-        if (window.prompt('Type DELETE to confirm:') !== 'DELETE') {
-            setMsg({ text: 'Confirmation failed. Deletion cancelled.', ok: false });
-            return;
+        await deleteUser.mutateAsync();
+        toast.success('User deleted.');
+        navigate('/admin/users');
+    };
+
+    const impersonate = async () => {
+        setImpBusy(true);
+        try {
+            const res = await apiPost(`/admin/users/${user.id}/impersonate`);
+            localStorage.setItem('impersonation_token', res.token);
+            toast.success(`Now viewing as ${user.email} (5 minutes).`);
+            window.location.href = '/dashboard';
+        } catch (e) {
+            toast.error(e.message);
+            setImpBusy(false);
         }
-        try { await deleteUser.mutateAsync(); toast.success('User deleted.'); navigate('/admin/users'); }
-        catch (e) { fail(e); }
     };
 
     return (
         <div className="flex flex-col gap-6">
             <Link to="/admin/users" className="w-fit text-[0.85rem] font-semibold text-ink-secondary hover:text-foreground">← All users</Link>
-            <div>
-                <h1 className="font-mono text-[1.4rem] font-extrabold">{user.name}</h1>
-                <p className="mt-1 font-mono text-[0.9rem] text-ink-secondary">{user.email}</p>
+
+            <div className="flex flex-wrap items-center gap-4">
+                <AvatarBadge url={user.avatarUrl} name={user.name} />
+                <div className="min-w-0">
+                    <h1 className="truncate font-mono text-[1.4rem] font-extrabold">{user.name}</h1>
+                    <p className="mt-1 flex flex-wrap items-center gap-2 font-mono text-[0.9rem] text-ink-secondary">
+                        <span className="truncate">{user.email}</span>
+                        {user.emailVerified ? (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[0.7rem] font-bold text-emerald-400">
+                                <BadgeCheck size={12} /> Verified
+                            </span>
+                        ) : (
+                            <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[0.7rem] font-bold text-amber-400">Unverified</span>
+                        )}
+                    </p>
+                </div>
             </div>
 
-            {msg.text && <p className={cn('text-sm', msg.ok ? 'text-emerald-400' : 'text-red-400')}>{msg.text}</p>}
-
-            <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
+            <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1 lg:grid-cols-3">
                 {[
                     ['Role', user.role],
                     ['Plan', user.planId],
@@ -87,22 +119,57 @@ export default function AdminUserDetail() {
                         <p className="mt-1 font-mono text-[0.95rem] font-bold">{String(value)}</p>
                     </div>
                 ))}
+                <div className="rounded-xl border border-hairline bg-card p-5">
+                    <p className="text-[0.8rem] text-ink-muted">Country</p>
+                    <p className="mt-1 flex items-center gap-2 text-[0.95rem] font-bold">
+                        {user.country ? (
+                            <>
+                                <Flag code={user.country.countryCode} name={user.country.location} />
+                                {user.country.location}
+                            </>
+                        ) : (
+                            <span className="flex items-center gap-2 text-ink-muted"><Flag name="Unknown" /> Unknown</span>
+                        )}
+                    </p>
+                </div>
             </div>
 
             <div className="rounded-xl border border-hairline bg-card p-6">
                 <h2 className="text-[1.05rem] font-bold">Actions</h2>
                 <div className="mt-4 flex flex-wrap items-center gap-2">
-                    <select value={user.role} onChange={(e) => changeRole(e.target.value)} className={inputClass} disabled={updateRole.isPending}>
-                        <option value="user">user</option>
-                        <option value="admin">admin</option>
-                    </select>
-                    <select value={user.planId} onChange={(e) => changePlan(e.target.value)} className={inputClass} disabled={updatePlan.isPending}>
-                        {(plans ?? []).map((p) => <option key={p.id} value={p.id}>{p.id}</option>)}
-                    </select>
-                    <button type="button" onClick={reset} disabled={resetLogins.isPending} className="rounded-full border border-hairline px-5 py-2 text-[0.83rem] font-bold text-ink-secondary transition hover:text-foreground">
+                    <Select
+                        ariaLabel="Role"
+                        value={user.role}
+                        onChange={(v) => { if (v !== user.role) setRoleTarget(v); }}
+                        disabled={updateRole.isPending}
+                        options={[
+                            { value: 'user', label: 'user' },
+                            { value: 'admin', label: 'admin' },
+                        ]}
+                    />
+                    <Select
+                        ariaLabel="Plan"
+                        value={user.planId}
+                        onChange={changePlan}
+                        disabled={updatePlan.isPending || !plans}
+                        loading={!plans}
+                        searchable={(plans ?? []).length > 6}
+                        options={(plans ?? []).map((p) => ({ value: p.id, label: p.id }))}
+                    />
+                    <button type="button" onClick={reset} disabled={resetLogins.isPending} className="rounded-full border border-hairline px-5 py-2 text-[0.83rem] font-bold text-ink-secondary transition hover:text-foreground disabled:opacity-50">
                         Reset lockout
                     </button>
-                    <button type="button" onClick={remove} disabled={deleteUser.isPending} className="rounded-full border border-red-500/40 px-5 py-2 text-[0.83rem] font-bold text-red-400 transition hover:bg-red-500 hover:text-white">
+                    {user.role !== 'admin' && (
+                        <button
+                            type="button"
+                            onClick={impersonate}
+                            disabled={impBusy}
+                            className="inline-flex items-center gap-1.5 rounded-full border border-hairline px-5 py-2 text-[0.83rem] font-bold text-ink-secondary transition hover:border-hairline-hover hover:text-foreground disabled:opacity-50"
+                        >
+                            <UserCheck size={14} /> Impersonate (5 min)
+                        </button>
+                    )}
+                    <button type="button" onClick={() => setDeleteOpen(true)} className="rounded-full border border-red-500/40 px-5 py-2 text-[0.83rem] font-bold text-red-400 transition hover:bg-red-500 hover:text-white">
                         Delete user
                     </button>
                 </div>
@@ -137,12 +204,46 @@ export default function AdminUserDetail() {
                         <div key={l.id} className="flex flex-wrap items-center gap-3 py-2.5 font-mono text-[0.78rem] text-ink-secondary">
                             <span className={cn('rounded-full px-2 py-0.5 text-[0.7rem] font-bold', l.status === 'success' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-red-500/15 text-red-400')}>{l.status}</span>
                             <span>{l.ip}</span>
+                            <span className="inline-flex items-center gap-1.5">
+                                <Flag code={l.countryCode} name={l.location ?? 'Unknown'} className="w-4" />
+                                {l.location ?? 'Unknown'}
+                            </span>
                             <span className="ml-auto">{new Date(l.createdAt).toLocaleString()}</span>
                         </div>
                     ))}
                     {(user.recentLogins ?? []).length === 0 && <p className="py-3 text-[0.85rem] text-ink-muted">No login history.</p>}
                 </div>
             </div>
+
+            <ConfirmModal
+                open={!!roleTarget}
+                onClose={() => setRoleTarget(null)}
+                title="Change role"
+                description={roleTarget === 'admin' ? 'Admins can manage every user and server on the platform.' : 'The user loses admin access immediately.'}
+                confirmLabel="Change role"
+                danger={roleTarget !== 'admin'}
+                onConfirm={changeRole}
+            >
+                <p className="text-[0.85rem] text-ink-secondary">
+                    Change <span className="font-mono font-bold text-ink">{user.email}</span> from{' '}
+                    <span className="font-mono font-bold text-ink">{user.role}</span> to{' '}
+                    <span className="font-mono font-bold text-ink">{roleTarget}</span>?
+                </p>
+            </ConfirmModal>
+
+            <ConfirmModal
+                open={deleteOpen}
+                onClose={() => setDeleteOpen(false)}
+                title="Delete user"
+                description="This permanently deletes the account, ALL their servers, files and backups. This action is irreversible."
+                confirmLabel="Delete user"
+                confirmPhrase="DELETE"
+                onConfirm={remove}
+            >
+                <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2.5 text-[0.82rem] text-red-300">
+                    <span className="font-mono font-bold">{user.email}</span> and {user.serverCount} server{user.serverCount === 1 ? '' : 's'} will be destroyed.
+                </p>
+            </ConfirmModal>
         </div>
     );
 }

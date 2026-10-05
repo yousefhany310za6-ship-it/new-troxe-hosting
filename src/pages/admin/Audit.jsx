@@ -2,9 +2,8 @@ import { useState } from 'react';
 
 import { cn } from '@/lib/utils';
 import { useAdminAudit } from '@/hooks/useAdminQueries.jsx';
-
-const inputClass =
-    'rounded-xl border border-hairline bg-white/10 px-4 py-2 text-[0.85rem] text-foreground placeholder-ink-muted transition focus:border-primary focus:outline-none';
+import { Select } from '@/components/ui/select.jsx';
+import { Skeleton } from '@/components/ui/field.jsx';
 
 export default function AdminAudit() {
     const [page, setPage] = useState(1);
@@ -24,18 +23,28 @@ export default function AdminAudit() {
             </div>
 
             <form onSubmit={submit} className="flex flex-wrap items-center gap-2">
-                <input value={action} onChange={(e) => setAction(e.target.value)} placeholder="Filter by action (e.g. admin.server)…" className={cn(inputClass, 'w-72')} />
-                <select value={targetType} onChange={(e) => { setTargetType(e.target.value); setPage(1); }} className={inputClass}>
-                    <option value="">All targets</option>
-                    <option value="user">user</option>
-                    <option value="server">server</option>
-                    <option value="plan">plan</option>
-                    <option value="backup">backup</option>
-                </select>
+                <input value={action} onChange={(e) => setAction(e.target.value)} placeholder="Filter by action (e.g. admin.server)…" className="input-field w-72" />
+                <Select
+                    ariaLabel="Filter by target type"
+                    value={targetType}
+                    onChange={(v) => { setTargetType(v); setPage(1); }}
+                    options={[
+                        { value: '', label: 'All targets' },
+                        { value: 'user', label: 'user' },
+                        { value: 'server', label: 'server' },
+                        { value: 'plan', label: 'plan' },
+                        { value: 'backup', label: 'backup' },
+                    ]}
+                    className="w-44"
+                />
                 <button type="submit" className="rounded-full bg-white px-5 py-2 text-sm font-bold text-black transition hover:bg-gray-200">Filter</button>
             </form>
 
-            {isLoading && <p className="text-ink-muted">Loading…</p>}
+            {isLoading && (
+                <div className="flex flex-col gap-2">
+                    {Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-11 rounded-lg" />)}
+                </div>
+            )}
             {error && <p className="text-red-400">Failed to load: {error.message}</p>}
 
             {data && (

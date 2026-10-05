@@ -1,6 +1,6 @@
 import { BadRequestException, Inject, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { and, desc, eq, sql } from 'drizzle-orm';
-import { Err } from '../../common/errors';
+import { Err, pgCodeOf } from '../../common/errors';
 import { hashPassword, verifyPassword } from '../../common/password';
 import { DB, Db } from '../../db/db.module';
 import { auditLogs, users, oauthAccounts } from '../../db/schema';
@@ -54,62 +54,62 @@ export class UsersService {
     return { data: rows.slice(0, safeLimit), hasMore: rows.length > safeLimit, page: safePage };
   }
 
+  /** Usernames may only change once per 30 days. */
+  static readonly USERNAME_CHANGE_COOLDOWN_MS = 30 * 24 * 60 * 60 * 1000;
+
+  /** Names that can never be taken (impersonation / routing confusion). */
+  private static readonly RESERVED_NAMES = new Set([
+    'admin', 'administrator', 'root', 'system', 'support', 'help', 'staff',
+    'moderator', 'mod', 'official', 'troxe', 'api', 'www', 'mail', 'null',
+    'undefined', 'anonymous', 'unknown', 'server', 'bot', 'security', 'billing',
+  ]);
+
+  /** Next allowed rename timestamp given the last change (null = now). */
+  static usernameNextChangeAt(usernameChangedAt: Date | null): Date | null {
+    if (!usernameChangedAt) return null;
+    return new Date(usernameChangedAt.getTime() + UsersService.USERNAME_CHANGE_COOLDOWN_MS);
+  }
+
   async updateProfile(userId: string, dto: UpdateProfileDto) {
-    const email = dto.email.toLowerCase().trim();
+    const name = dto.name.trim();
     const [existing] = await this.db.select().from(users).where(eq(users.id, userId)).limit(1);
     if (!existing) throw Err.unauthorized('USER_GONE');
 
-    // an email change re-points recovery: it must be confirmed with the
-    // password (a stolen short-lived token alone cannot persist a hijack).
-    // OAuth-only accounts have no password — they must set one first.
-    if (email !== existing.email) {
-      if (!existing.passwordHash) throw Err.invalid('PASSWORD_REQUIRED', 'Set a password before changing your email');
-      if (!dto.current || !(await verifyPassword(dto.current, existing.passwordHash))) {
-        await this.audit.record({
-          actorId: userId,
-          actorEmail: existing.email,
-          action: 'user.email.fail',
-          targetType: 'user',
-          targetId: userId,
-        });
-        throw new BadRequestException('WRONG_CURRENT_PASSWORD');
-      }
+    const nameChanged = name.toLowerCase() !== existing.name.toLowerCase();
+    if (!nameChanged) return this.strip(existing); // idempotent no-op
+
+    if (UsersService.RESERVED_NAMES.has(name.toLowerCase())) {
+      throw Err.invalid('NAME_RESERVED', 'This username is reserved');
     }
+
+    // 30-day cooldown — enforced here (source of truth); the UI only renders it.
+    const nextAt = UsersService.usernameNextChangeAt(existing.usernameChangedAt);
+    if (nextAt && nextAt.getTime() > Date.now()) {
+      throw Err.tooMany('NAME_CHANGE_TOO_SOON').withMeta({ nextChangeAt: nextAt.toISOString() });
+    }
+
     try {
-      // email change re-points recovery: bump the token generation like a
-      // role change does, so outstanding access JWTs (which carry the old
-      // email claim) die instead of lingering up to TTL.
-      const emailChanged = email !== existing.email;
-      const patch: { name: string; email: string; avatarUrl?: string | null } = { name: dto.name.trim(), email };
-      if (dto.avatarUrl !== undefined) {
-        if (dto.avatarUrl === '') {
-          patch.avatarUrl = null; // explicit clear
-        } else {
-          const ok = httpsUrlOk(dto.avatarUrl);
-          if (!ok) throw new BadRequestException('AVATAR_URL_INVALID');
-          patch.avatarUrl = ok;
-        }
-      }
+      // Case-insensitive uniqueness is guaranteed by the unique index on
+      // lower(name) (migration 0013): a concurrent rename racing this one
+      // loses with 23505 instead of silently duplicating the name.
       const [u] = await this.db
         .update(users)
-        .set(emailChanged ? { ...patch, tokenVersion: sql`token_version + 1` } : patch)
+        .set({ name, usernameChangedAt: new Date() })
         .where(eq(users.id, userId))
         .returning();
       if (!u) throw Err.unauthorized('USER_GONE');
-      if (emailChanged) {
-        await this.audit.record({
-          actorId: userId,
-          actorEmail: email,
-          action: 'user.email.change',
-          targetType: 'user',
-          targetId: userId,
-          meta: { from: existing.email },
-        });
-      }
+      await this.audit.record({
+        actorId: userId,
+        actorEmail: existing.email,
+        action: 'user.name.change',
+        targetType: 'user',
+        targetId: userId,
+        meta: { from: existing.name },
+      });
       return this.strip(u);
     } catch (e) {
-      if ((e as { code?: string }).code === '23505') {
-        throw Err.conflict('EMAIL_TAKEN', 'An account with this email already exists');
+      if (pgCodeOf(e) === '23505') {
+        throw Err.conflict('NAME_TAKEN', 'This username is already taken');
       }
       throw e;
     }
@@ -277,123 +277,4 @@ export class UsersService {
   /**
    * Set a custom avatar (uploaded by user). Replaces any OAuth avatar.
    */
-  async setCustomAvatar(userId: string, avatarUrl: string, ctx: { ip: string; userAgent?: string }) {
-    const [existing] = await this.db.select().from(users).where(eq(users.id, userId)).limit(1);
-    if (!existing) throw Err.unauthorized('USER_GONE');
-
-    // Update avatar URL and mark as custom
-    const [updated] = await this.db
-      .update(users)
-      .set({ avatarUrl, avatarSource: 'custom' })
-      .where(eq(users.id, userId))
-      .returning();
-
-    if (!updated) throw Err.unauthorized('USER_GONE');
-
-    await this.audit.record({
-      actorId: userId,
-      actorEmail: existing.email,
-      action: 'user.avatar.custom_set',
-      targetType: 'user',
-      targetId: userId,
-      ip: ctx.ip,
-      userAgent: ctx.userAgent,
-    });
-
-    return this.strip({ ...updated[0], avatarUrl: updated[0].avatarUrl, avatarSource: 'custom' });
-  }
-
-  /**
-   * Remove custom avatar, revert to OAuth avatar if available, otherwise default
-   */
-  async removeCustomAvatar(userId: string, ctx: { ip: string; userAgent?: string }) {
-    const [existing] = await this.db.select().from(users).where(eq(users.id, userId)).limit(1);
-    if (!existing) throw Err.unauthorized('USER_GONE');
-
-    // Check if there's an OAuth avatar to fall back to
-    const [oauthAccount] = await this.db
-      .select({ avatarUrl: oauthAccounts.avatarUrl, provider: oauthAccounts.provider })
-      .from(oauthAccounts)
-      .where(eq(oauthAccounts.userId, userId))
-      .limit(1);
-
-    const fallbackAvatar = oauthAccount?.avatarUrl ?? null;
-    const fallbackSource = oauthAccount ? 'oauth' : 'default';
-
-    const [updated] = await this.db
-      .update(users)
-      .set({ avatarUrl: fallbackAvatar, avatarSource: fallbackSource })
-      .where(eq(users.id, userId))
-      .returning();
-
-    if (!updated[0]) throw Err.unauthorized('USER_GONE');
-
-    await this.audit.record({
-      actorId: userId,
-      actorEmail: existing.email,
-      action: 'user.avatar.removed',
-      targetType: 'user',
-      targetId: userId,
-      ip: ctx.ip,
-      userAgent: ctx.userAgent,
-    });
-
-    return this.strip({ ...updated[0], avatarUrl: updated[0].avatarUrl, avatarSource: fallbackSource });
-  }
-
-  /**
-   * Set OAuth avatar (called when user logs in with OAuth)
-   * Only sets avatar if current avatar is from OAuth or default
-   */
-  async setOAuthAvatar(userId: string, provider: 'google' | 'discord', avatarUrl: string) {
-    const [existing] = await this.db.select().from(users).where(eq(users.id, userId)).limit(1);
-    if (!existing) return;
-
-    // Only set OAuth avatar if current avatar is from OAuth or default
-    if (existing.avatarSource === 'oauth' || existing.avatarSource === 'default') {
-      await this.db
-        .update(users)
-        .set({ avatarUrl, avatarSource: 'oauth' })
-        .where(eq(users.id, userId))
-        .catch(() => undefined);
-    }
-  }
-
-  /**
-   * Get avatar info for a user
-   */
-  async getAvatarInfo(userId: string) {
-    const [user] = await this.db
-      .select({
-        avatarUrl: users.avatarUrl,
-        avatarSource: users.avatarSource,
-      })
-      .from(users)
-      .where(eq(users.id, userId))
-      .limit(1);
-
-    if (!user) throw Err.unauthorized('USER_GONE');
-
-    return {
-      avatarUrl: user.avatarUrl,
-      avatarSource: user.avatarSource,
-    };
-  }
-
-  /**
-   * Set OAuth avatar on login (called from OAuth callback)
-   */
-  async setOAuthAvatarOnLogin(userId: string, provider: 'google' | 'discord', avatarUrl: string) {
-    const [existing] = await this.db.select().from(users).where(eq(users.id, userId)).limit(1);
-    if (!existing) return;
-
-    // Only set OAuth avatar if current avatar is from OAuth or default
-    if (existing.avatarSource === 'oauth' || existing.avatarSource === 'default') {
-      await this.db
-        .update(users)
-        .set({ avatarUrl, avatarSource: 'oauth' })
-        .where(eq(users.id, userId))
-        .catch(() => undefined);
-    }
-  }
 }

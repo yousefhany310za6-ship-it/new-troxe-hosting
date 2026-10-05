@@ -1,29 +1,19 @@
-import { IsBoolean, IsEmail, IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator';
+import { IsBoolean, IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator';
 
+/**
+ * Profile PATCH is username-only: email is immutable (accounts are keyed by
+ * it) and avatars have dedicated upload/remove endpoints. `whitelist +
+ * forbidNonWhitelisted` on the global ValidationPipe turns any attempt to
+ * send `email` / `avatarUrl` here into a hard 400 — the restriction is
+ * enforced server-side, not just hidden in the UI.
+ */
 export class UpdateProfileDto {
-  @MinLength(3)
-  @MaxLength(30)
-  @Matches(/^[^\s<>{}]+(?: [^\s<>{}]+)*$/, { message: 'name contains invalid characters' })
+  @MinLength(3, { message: 'NAME_TOO_SHORT' })
+  @MaxLength(30, { message: 'NAME_TOO_LONG' })
+  @Matches(/^[\p{L}\p{N}._-]+(?: [\p{L}\p{N}._-]+)*$/u, {
+    message: 'NAME_INVALID_CHARS',
+  })
   name!: string;
-
-  @IsEmail({}, { message: 'EMAIL_INVALID' })
-  @MaxLength(255)
-  email!: string;
-
-  /** Required when (and only when) the email address changes. */
-  @IsOptional()
-  @MaxLength(128)
-  current?: string;
-
-  /**
-   * Avatar URL (https only, ≤2048 chars). Absent = unchanged; empty string =
-   * clear. OAuth fills this only while it is null, so a manual value set here
-   * is never overwritten by a later provider login.
-   */
-  @IsOptional()
-  @IsString()
-  @MaxLength(2048)
-  avatarUrl?: string;
 }
 
 export class UpdatePasswordDto {

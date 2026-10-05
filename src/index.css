@@ -185,6 +185,75 @@
 }
 
 @layer components {
+    /* === Shared form controls (dashboard + admin) === */
+    .input-field {
+        width: 100%;
+        border-radius: 10px;
+        border: 1px solid var(--hairline);
+        background: var(--background);
+        padding: 9px 12px;
+        font-size: 0.9rem;
+        color: var(--foreground);
+        outline: none;
+        transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .input-field::placeholder {
+        color: var(--ink-muted);
+    }
+    .input-field:focus {
+        border-color: var(--hairline-hover);
+        box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.06);
+    }
+    .input-field:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+    .input-field[aria-invalid='true'] {
+        border-color: rgba(239, 68, 68, 0.5);
+    }
+
+    .btn-primary-modal,
+    .btn-ghost-modal,
+    .btn-danger-modal {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        border-radius: 9999px;
+        padding: 9px 18px;
+        font-size: 0.86rem;
+        font-weight: 600;
+        transition: background 0.15s, color 0.15s, border-color 0.15s;
+    }
+    .btn-primary-modal {
+        background: var(--foreground);
+        color: var(--background);
+    }
+    .btn-primary-modal:hover:not(:disabled) {
+        opacity: 0.88;
+    }
+    .btn-ghost-modal {
+        border: 1px solid var(--hairline);
+        color: var(--ink-secondary);
+    }
+    .btn-ghost-modal:hover:not(:disabled) {
+        border-color: var(--hairline-hover);
+        color: var(--foreground);
+    }
+    .btn-danger-modal {
+        background: #ef4444;
+        color: #fff;
+    }
+    .btn-danger-modal:hover:not(:disabled) {
+        background: #dc2626;
+    }
+    .btn-primary-modal:disabled,
+    .btn-ghost-modal:disabled,
+    .btn-danger-modal:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+    }
+
     /* White fading to grey — used for depth, never for colour */
     .gradient-text {
         color: var(--foreground);

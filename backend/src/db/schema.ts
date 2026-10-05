@@ -1,4 +1,5 @@
 import { bigint, boolean, index, integer, jsonb, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 
 // ---- Enums ------------------------------------------------------------------
 export const userRole = pgEnum('user_role', ['user', 'admin']);
@@ -66,7 +67,10 @@ export const users = pgTable('users', {
   /** When the username was last changed. Used for the 30-day change restriction. */
   usernameChangedAt: timestamp('username_changed_at'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
-});
+}, (t) => [
+  // case-insensitive username uniqueness — the race-condition guard for renames
+  uniqueIndex('users_name_lower_unique').on(sql`lower(${t.name})`),
+]);
 
 // ---- OAuth linked accounts (Google / Discord) ---------------------------------
 export const oauthAccounts = pgTable('oauth_accounts', {

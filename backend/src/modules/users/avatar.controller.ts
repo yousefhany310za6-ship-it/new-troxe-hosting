@@ -1,61 +1,98 @@
-import { Controller, Post, UploadedFile, UseInterceptors, Delete, HttpCode, UseGuards, Get, Req, Body, HttpCode as HttpCodeDec } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  NotFoundException,
+  Param,
+  Post,
+  Req,
+  Res,
+  UploadedFile,
+  UseGuards,
+  UseInterceptors,
+} from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { Throttle } from '@nestjs/throttler';
 import { memoryStorage } from 'multer';
+import { createReadStream } from 'fs';
+import type { Request, Response } from 'express';
 import { JwtAuthGuard, type ReqUser } from '../auth/jwt.guard';
-import { AvatarService } from './avatar.service';
-import { ReqCtx } from '../../common/request-context';
-import { ctxOf } from '../../common/request-context';
-import { Request } from 'express';
 import { CurrentUser } from '../auth/current-user';
+import { ctxOf } from '../../common/request-context';
+import { config } from '../../config/env';
+import { AvatarService, type CropRect } from './avatar.service';
 
-@Controller({ path: 'users/me/avatar', version: '1' })
+@Controller({ path: 'users', version: '1' })
 export class AvatarController {
   constructor(private avatarService: AvatarService) {}
 
-  @Post()
+  /** Upload a new avatar (multipart field `avatar`, JPEG/PNG/WebP ≤ 5MB). */
+  @Post('me/avatar')
   @UseGuards(JwtAuthGuard)
-  @UseInterceptors(FileInterceptor('avatar', {
-    storage: memoryStorage(),
-    limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
-    fileFilter: (req, file, cb) => {
-      const allowed = ['image/jpeg', 'image/png', 'image/webp'];
-      if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype)) {
-        return cb(new Error('Invalid file type. Only JPEG, PNG, and WebP are allowed.'), false);
-      }
-      cb(null, true);
-    },
-  }))
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @UseInterceptors(
+    FileInterceptor('avatar', {
+      storage: memoryStorage(),
+      limits: { fileSize: config.AVATAR_MAX_SIZE_BYTES, files: 1 },
+      fileFilter: (_req, file, cb) => {
+        const allowed = ['image/jpeg', 'image/png', 'image/webp'];
+        if (!allowed.includes(file.mimetype)) {
+          return cb(new BadRequestException({ statusCode: 400, code: 'AVATAR_TYPE_INVALID', message: 'Only JPEG, PNG and WebP images are allowed' }), false);
+        }
+        cb(null, true);
+      },
+    }),
+  )
   @HttpCode(200)
-  async uploadAvatar(
-    @CurrentUser() user: { sub: string },
-    @UploadedFile() file: Express.Multer.File,
-    @Req() req: Request,
-  ) {
-    const avatarUrl = await this.avatarService.setCustomAvatar(user.sub, file);
-    return { avatarUrl };
+  uploadAvatar(@CurrentUser() u: ReqUser, @UploadedFile() file: Express.Multer.File, @Req() req: Request) {
+    const ctx = ctxOf(req);
+    return this.avatarService.setCustomAvatar(u.sub, file, { ip: ctx.ip, userAgent: ctx.device });
   }
 
-  @Get()
+  /** Re-crop the stored original (pixels relative to the original image). */
+  @Post('me/avatar/crop')
   @UseGuards(JwtAuthGuard)
-  async getAvatar(@CurrentUser() user: { sub: string }) {
-    return this.avatarService.getAvatarInfo(user.sub);
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @HttpCode(200)
+  cropAvatar(@CurrentUser() u: ReqUser, @Body() body: CropRect, @Req() req: Request) {
+    const ctx = ctxOf(req);
+    return this.avatarService.cropAvatar(u.sub, body ?? { x: NaN, y: NaN, size: NaN }, { ip: ctx.ip, userAgent: ctx.device });
   }
 
-  @Delete()
-  @HttpCode(200)
-  async removeAvatar(@CurrentUser() user: { sub: string }) {
-    await this.avatarService.removeCustomAvatar(user.sub);
-    return { ok: true };
+  @Get('me/avatar')
+  @UseGuards(JwtAuthGuard)
+  getAvatar(@CurrentUser() u: ReqUser) {
+    return this.avatarService.getAvatarInfo(u.sub);
   }
 
-  @Post('crop')
+  /** Remove the custom avatar (falls back to OAuth snapshot / default). */
+  @Delete('me/avatar')
+  @UseGuards(JwtAuthGuard)
   @HttpCode(200)
-  async cropAvatar(
-    @CurrentUser() user: { sub: string },
-    @Body() body: { x: number; y: number; width: number; height: number },
-    @Req() req: Request,
-  ) {
-    // Crop and re-upload logic
-    return { message: 'Crop endpoint - to be implemented' };
+  removeAvatar(@CurrentUser() u: ReqUser, @Req() req: Request) {
+    const ctx = ctxOf(req);
+    return this.avatarService.removeCustomAvatar(u.sub, { ip: ctx.ip, userAgent: ctx.device });
+  }
+
+  /**
+   * Public avatar serving. Keys are unguessable random ids; the URL carries
+   * no session, so browsers can <img> it without headers. Long cache +
+   * immutable: a new upload always gets a new key.
+   */
+  @Get('avatars/:filename')
+  @Throttle({ default: { limit: 300, ttl: 60_000 } })
+  async serveAvatar(@Param('filename') filename: string, @Res() res: Response) {
+    const hit = await this.avatarService.resolveFile(filename);
+    if (!hit) throw new NotFoundException('AVATAR_NOT_FOUND');
+    res.set({
+      'Content-Type': hit.contentType,
+      'Cache-Control': 'public, max-age=31536000, immutable',
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Security-Policy': "default-src 'none'",
+    });
+    createReadStream(hit.path).pipe(res);
   }
 }

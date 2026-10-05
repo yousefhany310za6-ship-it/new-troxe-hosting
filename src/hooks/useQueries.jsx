@@ -27,6 +27,41 @@ export function useUpdateProfile() {
   });
 }
 
+// ---- Avatar ---------------------------------------------------------------
+
+/** Upload a (client-cropped) avatar image as multipart form data. */
+export function useUploadAvatar() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (blob) => {
+      const { getAccessToken, apiBase } = await import('@/lib/api.js');
+      const form = new FormData();
+      form.append('avatar', blob, 'avatar.png');
+      const res = await fetch(`${apiBase()}/users/me/avatar`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {},
+        body: form,
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        const { ApiError } = await import('@/lib/api.js');
+        throw new ApiError(res.status, data?.code || 'ERROR', data?.message || `Upload failed (${res.status})`);
+      }
+      return data;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.user() }),
+  });
+}
+
+export function useRemoveAvatar() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiDelete('/users/me/avatar'),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.user() }),
+  });
+}
+
 export function useChangePassword() {
   return useMutation({ mutationFn: (data) => apiPost('/users/me/password', data) });
 }

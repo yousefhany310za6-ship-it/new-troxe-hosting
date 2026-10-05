@@ -5,9 +5,34 @@ import { HttpException } from '@nestjs/common';
  * The API contract is: `{ statusCode, code, message, requestId }`.
  */
 export class AppError extends HttpException {
+  /** Extra structured fields merged into the error response body. */
+  meta?: Record<string, unknown>;
+
   constructor(code: string, status = 400, message?: string) {
     super({ statusCode: status, code, message: message ?? code }, status);
   }
+
+  /** Attach structured details (e.g. nextChangeAt) to the error response. */
+  withMeta(meta: Record<string, unknown>): this {
+    this.meta = { ...this.meta, ...meta };
+    return this;
+  }
+}
+
+/**
+ * Find a Postgres error code on an exception or anywhere down its `cause`
+ * chain (drizzle ≥0.44 wraps driver errors). Cycle-safe.
+ */
+export function pgCodeOf(exception: unknown): string | undefined {
+  let cur: unknown = exception;
+  const seen = new Set<unknown>();
+  while (cur && (typeof cur === 'object' || typeof cur === 'function') && !seen.has(cur)) {
+    seen.add(cur);
+    const code = (cur as { code?: unknown }).code;
+    if (typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code)) return code;
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return undefined;
 }
 
 export const Err = {

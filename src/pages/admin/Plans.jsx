@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/useToast.jsx';
 import { useAdminCreatePlan, useAdminPlanDelete, useAdminPlans, useAdminPlanUpdate } from '@/hooks/useAdminQueries.jsx';
+import { ConfirmModal } from '@/components/ui/confirm-modal.jsx';
 
 const inputClass =
     'w-full rounded-xl border border-hairline bg-white/10 px-4 py-2 text-[0.85rem] text-foreground placeholder-ink-muted transition focus:border-primary focus:outline-none';
@@ -15,6 +16,7 @@ export default function AdminPlans() {
     const createPlan = useAdminCreatePlan();
     const [editing, setEditing] = useState(null); // plan object or 'new'
     const [form, setForm] = useState(blank);
+    const [deleteOpen, setDeleteOpen] = useState(false);
     const updatePlan = useAdminPlanUpdate(editing?.id);
     const deletePlan = useAdminPlanDelete(editing?.id);
 
@@ -44,10 +46,14 @@ export default function AdminPlans() {
     };
 
     const remove = async () => {
+        await deletePlan.mutateAsync();
+        toast.success('Plan deleted.');
+        setEditing(null);
+    };
+
+    const askRemove = () => {
         if (editing?.id === 'free') { toast.error('The free plan cannot be deleted.'); return; }
-        if (!window.confirm(`DELETE plan "${editing.id}"? Plans with users cannot be deleted.`)) return;
-        try { await deletePlan.mutateAsync(); toast.success('Plan deleted.'); setEditing(null); }
-        catch (err) { toast.error(err.message); }
+        setDeleteOpen(true);
     };
 
     const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
@@ -115,7 +121,7 @@ export default function AdminPlans() {
                                 Cancel
                             </button>
                             {editing !== 'new' && (
-                                <button type="button" onClick={remove} className="ml-auto rounded-full border border-red-500/40 px-5 py-2 text-[0.83rem] font-bold text-red-400 transition hover:bg-red-500 hover:text-white">
+                                <button type="button" onClick={askRemove} className="ml-auto rounded-full border border-red-500/40 px-5 py-2 text-[0.83rem] font-bold text-red-400 transition hover:bg-red-500 hover:text-white">
                                     Delete
                                 </button>
                             )}
@@ -123,6 +129,18 @@ export default function AdminPlans() {
                     </form>
                 </div>
             )}
+            <ConfirmModal
+                open={deleteOpen}
+                onClose={() => setDeleteOpen(false)}
+                title="Delete plan"
+                description="Plans with users on them cannot be deleted — the API will refuse while any account references it."
+                confirmLabel="Delete plan"
+                onConfirm={remove}
+            >
+                <p className="text-[0.85rem] text-ink-secondary">
+                    Plan: <span className="font-mono font-bold text-ink">{editing?.id}</span>
+                </p>
+            </ConfirmModal>
         </div>
     );
 }

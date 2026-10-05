@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, or } from 'drizzle-orm';
 import { config } from '../../../config/env';
 import { Err } from '../../../common/errors';
 import { ReqCtx } from '../../../common/request-context';
@@ -241,6 +241,9 @@ export class OAuthService {
             email,
             passwordHash: null,
             avatarUrl: profile.avatarUrl,
+            // provider avatar starts as 'oauth' — a later custom upload flips
+            // it and is then never overwritten by subsequent logins
+            avatarSource: profile.avatarUrl ? 'oauth' : 'default',
             // a verified provider email IS a verified email — no code needed
             emailVerified: profile.emailVerified,
             emailVerifiedAt: profile.emailVerified ? new Date() : null,
@@ -284,7 +287,11 @@ export class OAuthService {
     }
   }
 
-  /** Provider snapshots refresh; the user's own avatar is only filled when empty. */
+  /**
+   * Provider snapshots refresh; the user's own avatar follows the provider
+   * ONLY while avatar_source is 'default' or 'oauth' — a 'custom' (user
+   * uploaded) avatar is never clobbered by a provider login.
+   */
   private async refreshSnapshots(
     provider: OAuthProvider,
     profile: ProviderProfile,
@@ -296,8 +303,12 @@ export class OAuthService {
       .set({ email: profile.email, emailVerified: profile.emailVerified, avatarUrl: profile.avatarUrl })
       .where(and(eq(oauthAccounts.provider, provider), eq(oauthAccounts.providerUserId, profile.providerUserId)))
       .catch(() => undefined);
-    if (!currentAvatar && profile.avatarUrl) {
-      await this.db.update(users).set({ avatarUrl: profile.avatarUrl }).where(eq(users.id, userId)).catch(() => undefined);
+    if (profile.avatarUrl) {
+      await this.db
+        .update(users)
+        .set({ avatarUrl: profile.avatarUrl, avatarSource: 'oauth' })
+        .where(and(eq(users.id, userId), or(eq(users.avatarSource, 'default'), eq(users.avatarSource, 'oauth'))))
+        .catch(() => undefined);
     }
     // the provider re-confirmed this exact address: adopt the verification
     // (only when the addresses match — never across different emails)
@@ -418,12 +429,18 @@ export class OAuthService {
       }
       throw e;
     }
-    // a freshly linked provider may fill an empty avatar, never replace one
+    // a freshly linked provider may fill an empty/default avatar, never
+    // replace a custom one
     if (tok.av) {
       await this.db
         .update(users)
-        .set({ avatarUrl: tok.av })
-        .where(and(eq(users.id, userId), isNull(users.avatarUrl)))
+        .set({ avatarUrl: tok.av, avatarSource: 'oauth' })
+        .where(
+          and(
+            eq(users.id, userId),
+            or(eq(users.avatarSource, 'default'), eq(users.avatarSource, 'oauth')),
+          ),
+        )
         .catch(() => undefined);
     }
     await this.audit.record({

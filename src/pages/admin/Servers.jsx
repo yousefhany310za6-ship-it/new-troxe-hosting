@@ -5,14 +5,15 @@ import { Play, Plus, RotateCcw, Square, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/useToast.jsx';
 import { useAdminDeleteServer, useAdminLifecycle, useAdminServers } from '@/hooks/useAdminQueries.jsx';
+import { ConfirmModal } from '@/components/ui/confirm-modal.jsx';
+import { Select } from '@/components/ui/select.jsx';
+import { Skeleton } from '@/components/ui/field.jsx';
 import { STATUS_STYLE } from '../dashboard/Overview.jsx';
 
-const inputClass =
-    'rounded-xl border border-hairline bg-white/10 px-4 py-2 text-[0.85rem] text-foreground placeholder-ink-muted transition focus:border-primary focus:outline-none';
 const actionBtn =
     'inline-flex items-center gap-1.5 rounded-md border border-hairline bg-veil px-3 py-1.5 text-[0.8rem] font-semibold text-ink-secondary transition hover:border-hairline-hover hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40';
 
-const STATUSES = ['', 'online', 'offline', 'restarting', 'provisioning', 'error', 'deleting'];
+const STATUSES = ['online', 'offline', 'restarting', 'provisioning', 'error', 'deleting'];
 
 export default function AdminServers() {
     const toast = useToast();
@@ -20,6 +21,7 @@ export default function AdminServers() {
     const [search, setSearch] = useState('');
     const [q, setQ] = useState('');
     const [status, setStatus] = useState('');
+    const [deleteTarget, setDeleteTarget] = useState(null);
     const { data, isLoading, error, refetch } = useAdminServers({ page, limit: 20, search: q || undefined, status: status || undefined });
     const lifecycle = useAdminLifecycle();
     const del = useAdminDeleteServer();
@@ -31,11 +33,10 @@ export default function AdminServers() {
         catch (e) { toast.error(e.message); }
     };
 
-    const remove = async (id, name) => {
-        if (!window.confirm(`DELETE server "${name}" and ALL its data? This cannot be undone.`)) return;
-        if (window.prompt('Type DELETE to confirm:') !== 'DELETE') { toast.error('Confirmation failed. Deletion cancelled.'); return; }
-        try { await del.mutateAsync(id); toast.success('Server deleted.'); refetch(); }
-        catch (e) { toast.error(e.message); }
+    const remove = async () => {
+        await del.mutateAsync(deleteTarget.id);
+        toast.success('Server deleted.');
+        refetch();
     };
 
     return (
@@ -51,14 +52,22 @@ export default function AdminServers() {
             </div>
 
             <form onSubmit={submitSearch} className="flex flex-wrap items-center gap-2">
-                <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name or runtime…" className={cn(inputClass, 'w-64')} />
-                <select value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }} className={inputClass}>
-                    {STATUSES.map((s) => <option key={s} value={s}>{s || 'All statuses'}</option>)}
-                </select>
+                <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name or runtime…" className="input-field w-64" />
+                <Select
+                    ariaLabel="Filter by status"
+                    value={status}
+                    onChange={(v) => { setStatus(v); setPage(1); }}
+                    options={[{ value: '', label: 'All statuses' }, ...STATUSES.map((s) => ({ value: s, label: s }))]}
+                    className="w-44"
+                />
                 <button type="submit" className="rounded-full bg-white px-5 py-2 text-sm font-bold text-black transition hover:bg-gray-200">Search</button>
             </form>
 
-            {isLoading && <p className="text-ink-muted">Loading…</p>}
+            {isLoading && (
+                <div className="flex flex-col gap-3">
+                    {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-[72px] rounded-xl" />)}
+                </div>
+            )}
             {error && <p className="text-red-400">Failed to load: {error.message}</p>}
 
             {data && (
@@ -78,7 +87,7 @@ export default function AdminServers() {
                                         <button type="button" onClick={() => act(s.id, 'start', 'Start')} className={actionBtn}><Play className="size-3.5" /></button>
                                         <button type="button" onClick={() => act(s.id, 'restart', 'Restart')} className={actionBtn}><RotateCcw className="size-3.5" /></button>
                                         <button type="button" onClick={() => act(s.id, 'stop', 'Stop')} className={actionBtn}><Square className="size-3.5" /></button>
-                                        <button type="button" onClick={() => remove(s.id, s.name)} aria-label="Delete server" className={cn(actionBtn, 'hover:!border-red-500/50 hover:!text-red-400')}>
+                                        <button type="button" onClick={() => setDeleteTarget(s)} aria-label="Delete server" className={cn(actionBtn, 'hover:!border-red-500/50 hover:!text-red-400')}>
                                             <Trash2 className="size-3.5" />
                                         </button>
                                     </div>
@@ -95,6 +104,21 @@ export default function AdminServers() {
                     </div>
                 </>
             )}
+
+            <ConfirmModal
+                open={!!deleteTarget}
+                onClose={() => setDeleteTarget(null)}
+                title="Delete server"
+                description="This permanently deletes the server, its files and ALL its backups. This action is irreversible."
+                confirmLabel="Delete server"
+                confirmPhrase="DELETE"
+                onConfirm={remove}
+            >
+                <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2.5 text-[0.82rem] text-red-300">
+                    Server: <span className="font-mono font-bold">{deleteTarget?.name}</span>
+                    {deleteTarget?.owner?.email && <> · owned by <span className="font-mono">{deleteTarget.owner.email}</span></>}
+                </p>
+            </ConfirmModal>
         </div>
     );
 }

@@ -6,11 +6,12 @@ import { and, desc, eq, gt, isNull, sql } from 'drizzle-orm';
 import { config } from '../../config/env';
 import { randomToken, safeEqual, sha256 } from '../../common/crypto';
 import { hashPassword, verifyPassword } from '../../common/password';
-import { Err } from '../../common/errors';
+import { Err, pgCodeOf } from '../../common/errors';
 import { ReqCtx } from '../../common/request-context';
 import { DB, Db } from '../../db/db.module';
 import { authSessions, sessions, users, type User } from '../../db/schema';
 import { AuditService } from '../audit/audit.module';
+import { GeoIpService } from '../../common/geoip/geoip.service';
 import { LoginNotifyService, type LoginMethod } from '../email/login-notify.service';
 import { EmailService } from '../email/email.service';
 import { EmailVerificationService } from './email-verification.service';
@@ -51,6 +52,7 @@ export class AuthService {
     private loginNotify: LoginNotifyService,
     private email: EmailService,
     private verification: EmailVerificationService,
+    private geo: GeoIpService,
   ) {
     this.dummyHash = bcrypt.hash(randomToken(32), config.BCRYPT_ROUNDS);
   }
@@ -86,18 +88,31 @@ export class AuthService {
 
   async signup(dto: SignupDto, ctx: ReqCtx) {
     const email = dto.email.toLowerCase().trim();
+    const name = dto.name.trim();
     const existing = await this.db.select({ id: users.id }).from(users).where(eq(users.email, email)).limit(1);
     if (existing.length) {
       await this.audit.record({ actorEmail: email, action: 'auth.signup.duplicate', ip: ctx.ip, userAgent: ctx.device });
       throw Err.conflict('EMAIL_TAKEN', 'An account with this email already exists');
     }
+    const nameTaken = await this.db.select({ id: users.id }).from(users).where(sql`lower(${users.name}) = ${name.toLowerCase()}`).limit(1);
+    if (nameTaken.length) {
+      await this.audit.record({ actorEmail: email, action: 'auth.signup.duplicate_name', ip: ctx.ip, userAgent: ctx.device });
+      throw Err.conflict('NAME_TAKEN', 'This username is already taken');
+    }
 
     const [user] = await this.db
       .insert(users)
-      .values({ name: dto.name.trim(), email, passwordHash: await this.hashPassword(dto.password) })
+      .values({ name, email, passwordHash: await this.hashPassword(dto.password) })
       .returning({ id: users.id, name: users.name, email: users.email, role: users.role, passwordHash: users.passwordHash, tokenVersion: users.tokenVersion })
-      .catch((e: { code?: string }) => {
-        if (e?.code === '23505') throw Err.conflict('EMAIL_TAKEN', 'An account with this email already exists');
+      .catch((e: unknown) => {
+        // unique indexes: email + lower(name). The name race (two signups with
+        // the same username) lands here too.
+        if (pgCodeOf(e) === '23505') {
+          const msg = JSON.stringify(e).includes('users_name_lower_unique')
+            ? Err.conflict('NAME_TAKEN', 'This username is already taken')
+            : Err.conflict('EMAIL_TAKEN', 'An account with this email already exists');
+          throw msg;
+        }
         throw e;
       });
 
@@ -425,14 +440,17 @@ export class AuthService {
   }
 
   private async recordLogin(userId: string, ctx: ReqCtx, status: 'success' | 'failed', method?: LoginMethod) {
+    // GeoIP is offline (geoip-lite) and never throws — a lookup failure must
+    // never break authentication. Private/loopback IPs stay NULL on purpose.
+    const geo = this.geo.lookup(ctx.ip);
     await this.db.insert(sessions).values({
       userId,
       ip: ctx.ip,
       device: ctx.device,
       status,
       method: method ?? null,
-      location: null,
-      countryCode: null,
+      location: this.geo.formatLocation(geo),
+      countryCode: geo?.countryCode ?? null,
     } as never);
   }
 
@@ -458,6 +476,21 @@ export class AuthService {
       .where(eq(sessions.userId, userId))
       .orderBy(desc(sessions.createdAt))
       .limit(20);
+
+    // Rows recorded before GeoIP existed have NULL location — resolve lazily
+    // and persist so the next read is a plain SELECT.
+    for (const s of rows) {
+      if (s.location || !s.ip) continue;
+      const geo = this.geo.lookup(s.ip);
+      if (!geo) continue;
+      s.location = this.geo.formatLocation(geo);
+      s.countryCode = geo.countryCode;
+      this.db
+        .update(sessions)
+        .set({ location: s.location, countryCode: s.countryCode })
+        .where(eq(sessions.id, s.id))
+        .catch(() => undefined);
+    }
 
     const fmt = (s: (typeof rows)[number]) => ({
       id: s.id,

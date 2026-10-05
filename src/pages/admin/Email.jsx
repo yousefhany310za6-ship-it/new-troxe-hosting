@@ -12,6 +12,8 @@ import {
   useAdminEmailStatus,
 } from '@/hooks/useAdminQueries.jsx';
 import { cn } from '@/lib/utils';
+import { ConfirmModal } from '@/components/ui/confirm-modal.jsx';
+import { Select } from '@/components/ui/select.jsx';
 
 const inputClass =
   'w-full rounded-xl border border-hairline bg-white/10 px-4 py-2.5 text-[0.9rem] text-foreground placeholder-ink-muted transition focus:border-primary focus:outline-none';
@@ -88,6 +90,8 @@ function CampaignDetail({ id, onBack }) {
   const [page, setPage] = useState(0);
   const { data: recipients } = useAdminCampaignRecipients(id, { status: rStatus || undefined, limit: 50, offset: page * 50 });
   const [msg, setMsg] = useState({ text: '', ok: true });
+  const [sendOpen, setSendOpen] = useState(false);
+  const [cancelOpen, setCancelOpen] = useState(false);
 
   if (isLoading || !camp) return <p className="text-ink-muted">Loading campaign…</p>;
   const editable = camp.status === 'draft';
@@ -104,13 +108,12 @@ function CampaignDetail({ id, onBack }) {
     }
   };
   const doSend = async () => {
-    if (!window.confirm(`Send "${camp.name}" to the filtered audience? This snapshots recipients and starts delivery.`)) return;
-    try {
-      const out = await send.mutateAsync(cleanFilters(filters));
-      setMsg({ text: `Sending started — ${out.recipients} recipient(s) snapshotted.`, ok: true });
-    } catch (e) {
-      setMsg({ text: e.message, ok: false });
-    }
+    const out = await send.mutateAsync(cleanFilters(filters));
+    setMsg({ text: `Sending started — ${out.recipients} recipient(s) snapshotted.`, ok: true });
+  };
+  const doCancel = async () => {
+    await cancel.mutateAsync();
+    setMsg({ text: 'Campaign cancelled.', ok: true });
   };
 
   return (
@@ -153,19 +156,32 @@ function CampaignDetail({ id, onBack }) {
         <div className="grid grid-cols-2 gap-3 max-md:grid-cols-1">
           <label className="flex flex-col gap-1 text-[0.82rem] font-semibold">
             Audience
-            <select value={filters.audience} onChange={(e) => setFilters({ ...filters, audience: e.target.value })} className={inputClass} disabled={!editable && camp.status !== 'draft'}>
-              <option value="all">All opted-in users</option>
-              <option value="verified">Verified emails only</option>
-              <option value="unverified">Unverified emails only</option>
-            </select>
+            <Select
+              ariaLabel="Audience"
+              value={filters.audience}
+              onChange={(v) => setFilters({ ...filters, audience: v })}
+              disabled={!editable && camp.status !== 'draft'}
+              options={[
+                { value: 'all', label: 'All opted-in users' },
+                { value: 'verified', label: 'Verified emails only' },
+                { value: 'unverified', label: 'Unverified emails only' },
+              ]}
+              className="w-full"
+            />
           </label>
           <label className="flex flex-col gap-1 text-[0.82rem] font-semibold">
             Role
-            <select value={filters.role} onChange={(e) => setFilters({ ...filters, role: e.target.value })} className={inputClass}>
-              <option value="">Any role</option>
-              <option value="user">user</option>
-              <option value="admin">admin</option>
-            </select>
+            <Select
+              ariaLabel="Role"
+              value={filters.role}
+              onChange={(v) => setFilters({ ...filters, role: v })}
+              options={[
+                { value: '', label: 'Any role' },
+                { value: 'user', label: 'user' },
+                { value: 'admin', label: 'admin' },
+              ]}
+              className="w-full"
+            />
           </label>
           <label className="flex flex-col gap-1 text-[0.82rem] font-semibold">
             Plan ID
@@ -186,22 +202,14 @@ function CampaignDetail({ id, onBack }) {
             Preview recipient count
           </button>
           {editable && (
-            <button type="button" onClick={doSend} disabled={send.isPending} className={btnPrimary}>
+            <button type="button" onClick={() => setSendOpen(true)} disabled={send.isPending} className={btnPrimary}>
               Snapshot &amp; send
             </button>
           )}
           {(camp.status === 'draft' || camp.status === 'sending') && (
             <button
               type="button"
-              onClick={async () => {
-                if (!window.confirm('Cancel this campaign? Pending recipients will be skipped.')) return;
-                try {
-                  await cancel.mutateAsync();
-                  setMsg({ text: 'Campaign cancelled.', ok: true });
-                } catch (e) {
-                  setMsg({ text: e.message, ok: false });
-                }
-              }}
+              onClick={() => setCancelOpen(true)}
               disabled={cancel.isPending}
               className={btnGhost}
             >
@@ -260,6 +268,29 @@ function CampaignDetail({ id, onBack }) {
           </button>
         </div>
       </Card>
+
+      <ConfirmModal
+        open={sendOpen}
+        onClose={() => setSendOpen(false)}
+        title="Send campaign"
+        description="This snapshots the filtered recipients and starts delivery. Only marketing-opted-in users are included; unsubscribed users are skipped automatically."
+        confirmLabel="Snapshot & send"
+        danger={false}
+        onConfirm={doSend}
+      >
+        <p className="text-[0.85rem] text-ink-secondary">
+          Campaign: <span className="font-bold text-ink">{camp.name}</span>
+        </p>
+      </ConfirmModal>
+
+      <ConfirmModal
+        open={cancelOpen}
+        onClose={() => setCancelOpen(false)}
+        title="Cancel campaign"
+        description="Pending recipients will be skipped. Emails already sent cannot be recalled."
+        confirmLabel="Cancel campaign"
+        onConfirm={doCancel}
+      />
     </div>
   );
 }
