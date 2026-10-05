@@ -23,6 +23,15 @@ export function AuthProvider({ children }) {
     let alive = true;
     (async () => {
       try {
+        // Check for impersonation token first
+        const impersonationToken = localStorage.getItem('impersonation_token');
+        if (impersonationToken) {
+          // Use impersonation token to authenticate
+          localStorage.removeItem('impersonation_token');
+          setAccessToken(impersonationToken);
+          await loadUser();
+          return;
+        }
         await loadUser();
       } catch {
         if (alive) { setUser(null); setStatus('guest'); }

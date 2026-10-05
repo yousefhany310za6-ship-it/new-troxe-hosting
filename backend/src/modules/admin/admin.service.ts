@@ -1,4 +1,5 @@
 import { Injectable, Inject, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
 import { and, desc, eq, gt, ilike, isNull, or, sql, count, type SQL } from 'drizzle-orm';
 import { DB, Db } from '../../db/db.module';
 import { users, servers, plans, backups, auditLogs, sessions, authSessions } from '../../db/schema';
@@ -45,6 +46,7 @@ export class AdminService {
     @Inject(DB) private db: Db,
     private serversSvc: ServersService,
     private audit: AuditService,
+    private jwt: JwtService,
   ) {}
 
   // ============ USERS ============
@@ -245,19 +247,12 @@ export class AdminService {
     if (!user) throw new NotFoundException('USER_NOT_FOUND');
     if (user.role === 'admin') throw new ForbiddenException('CANNOT_IMPERSONATE_ADMIN');
 
-    // Generate a short-lived impersonation token (5 min)
-    const impersonationToken = crypto.randomBytes(32).toString('base64url');
+    // Generate a short-lived impersonation JWT access token (5 min)
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
-
-    // Store in a way that auth.service can validate — for now, use a special auth_session
-    await this.db.insert(authSessions).values({
-      familyId: crypto.randomUUID(),
-      userId: user.id,
-      refreshTokenHash: crypto.createHash('sha256').update(impersonationToken).digest('hex'),
-      expiresAt,
-      ip: 'admin-impersonation',
-      device: `Impersonated by ${actorId}`,
-    });
+    const impersonationToken = this.jwt.sign(
+      { sub: user.id, email: user.email, role: user.role, typ: 'access', v: user.tokenVersion, imp: actorId },
+      { secret: config.JWT_ACCESS_SECRET, expiresIn: '5m', algorithm: 'HS256' },
+    );
 
     await this.audit.record({
       actorId,

@@ -14,7 +14,7 @@ import { RUNTIMES, runtimeImage, type Runtime, applyTemplate, labelFor, resolveE
 import { NodesService } from '../nodes/nodes.service';
 import { CreateServerDto, UpdateServerDto } from './dto';
 import { backupDirFor, backupOwnerDir } from './backup-paths';
-import { RealtimeGateway } from '@auth/realtime.gateway';
+import { RealtimeGateway } from '../auth/realtime.gateway';
 
 const CONTROL_CHARS = /[\u0000-\u0008\u000B-\u001F\u007F]/g;
 

@@ -66,6 +66,14 @@ export function useAdminDeleteUser(id) {
   });
 }
 
+export function useAdminImpersonateUser(id) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiPost(`/admin/users/${id}/impersonate`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'users'] }),
+  });
+}
+
 // ---- servers ----
 export function useAdminServers(params) {
   return useQuery({ queryKey: adminKeys.servers(params), queryFn: () => apiGet(`/admin/servers${qs(params)}`), keepPreviousData: true });

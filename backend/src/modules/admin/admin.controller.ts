@@ -227,4 +227,15 @@ export class AdminController {
   getSystemStats() {
     return this.admin.getSystemStats();
   }
+
+  @Post('users/:id/impersonate')
+  @HttpCode(200)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  async impersonateUser(
+    @Param('id', UUID) id: string,
+    @CurrentUser() u: ReqUser,
+  ) {
+    const result = await this.admin.impersonateUser(id, u.sub);
+    return { token: result.token, expiresAt: result.expiresAt, user: result.user };
+  }
 }
