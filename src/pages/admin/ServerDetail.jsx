@@ -17,6 +17,7 @@ import {
 
 import { cn } from '@/lib/utils';
 import { apiDelete, apiPatch, apiPost } from '@/lib/api.js';
+import { StatusBadge, serverTone } from './components.jsx';
 import { useToast } from '@/hooks/useToast.jsx';
 import {
   adminKeys,
@@ -32,7 +33,6 @@ import {
 } from '@/hooks/useAdminQueries.jsx';
 import { ConfirmModal } from '@/components/ui/confirm-modal.jsx';
 import { AvatarBadge } from '@/components/AvatarBadge.jsx';
-import { STATUS_STYLE } from '../dashboard/Overview.jsx';
 import ServerOverview from '../dashboard/ServerOverview.jsx';
 import ExecTerminal, { ConsoleOffline } from '../dashboard/ExecTerminal.jsx';
 import ResourceMonitor from '../dashboard/ResourceMonitor.jsx';
@@ -176,14 +176,14 @@ export default function AdminServerDetail() {
                 <ArrowLeft className="size-4" /> All servers
             </Link>
 
-            <div className="relative overflow-hidden rounded-xl border border-hairline bg-card p-6">
+            <div className="relative overflow-hidden rounded-xl border border-hairline bg-card p-5 sm:p-6">
                 <div className="relative flex flex-wrap items-center gap-3">
-                    <span className={cn('size-3 rounded-full', STATUS_STYLE[status] ?? STATUS_STYLE.offline)} />
-                    <h1 className="font-mono text-[1.4rem] font-extrabold">{server.name}</h1>
+                    <h1 className="font-mono text-[1.3rem] font-extrabold">{server.name}</h1>
+                    <StatusBadge tone={serverTone(status)}>{status}</StatusBadge>
                     <span className="rounded-full border border-hairline bg-veil px-2.5 py-0.5 text-[0.75rem] font-semibold text-ink-secondary">
                         {server.runtimeLabel ?? server.runtime}
                     </span>
-                    <span className="font-mono text-[0.75rem] text-ink-muted capitalize">{status}</span>
+                    <span className="font-mono text-[0.72rem] text-ink-muted" title={server.id}>ID {server.id.slice(0, 8)}…</span>
                     {server.owner && (
                         <Link to={`/admin/users/${server.owner.id}`} className="inline-flex items-center gap-2 font-mono text-[0.75rem] text-ink-secondary hover:text-foreground hover:underline">
                             <AvatarBadge url={null} name={server.owner.name} size="size-5" text="text-[0.6rem]" />

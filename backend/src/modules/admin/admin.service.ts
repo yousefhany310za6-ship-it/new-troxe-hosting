@@ -127,7 +127,7 @@ export class AdminService {
 
     const whereClause = conditions.length ? and(...conditions) : undefined;
 
-    const [rows, totalResult] = await Promise.all([
+    const [rows, totalResult, statusCounts, unverifiedCount] = await Promise.all([
       this.db
         .select({
           id: users.id,
@@ -143,6 +143,11 @@ export class AdminService {
           serverCount: sql<number>`(
             select count(*)::int from ${servers} where ${servers.ownerId} = ${users.id}
           )`,
+          emailVerified: users.emailVerified,
+          lastLoginAt: sql<Date | null>`(
+            select max(${sessions.createdAt}) from ${sessions}
+            where ${sessions.userId} = ${users.id} and ${sessions.status} = 'success'
+          )`,
         })
         .from(users)
         .where(whereClause as SQL)
@@ -150,12 +155,22 @@ export class AdminService {
         .limit(limit)
         .offset(offset),
       this.db.select({ count: count() }).from(users).where(whereClause as SQL),
+      this.db
+        .select({ status: users.status, count: count() })
+        .from(users)
+        .groupBy(users.status),
+      this.db
+        .select({ count: count() })
+        .from(users)
+        .where(eq(users.emailVerified, false)),
     ]);
 
     const data = await Promise.all(
       rows.map(async (r) => ({ ...r, country: await this.lastKnownCountry(r.id) })),
     );
 
+    const counts: Record<string, number> = { active: 0, suspended: 0, deleted: 0 };
+    for (const r of statusCounts) counts[r.status] = Number(r.count);
     return {
       data,
       pagination: {
@@ -164,6 +179,7 @@ export class AdminService {
         total: totalResult[0]?.count ?? 0,
         pages: Math.ceil((totalResult[0]?.count ?? 0) / limit),
       },
+      counts: { ...counts, unverified: Number(unverifiedCount[0]?.count ?? 0) },
     };
   }
 
@@ -536,7 +552,7 @@ export class AdminService {
         ) as SQL,
       );
     }
-    if (status) conditions.push(eq(servers.status, status as 'provisioning' | 'online' | 'offline' | 'restarting' | 'deleting' | 'error'));
+    if (status) conditions.push(eq(servers.status, status as 'provisioning' | 'online' | 'offline' | 'restarting' | 'suspended' | 'deleting' | 'error'));
     if (ownerId) conditions.push(eq(servers.ownerId, ownerId));
 
     const whereClause = conditions.length ? and(...conditions) : undefined;
@@ -869,16 +885,22 @@ export class AdminService {
   async getSystemStats() {
     const [
       totalUsers,
+      suspendedUsers,
       totalServers,
       onlineServers,
+      offlineServers,
+      suspendedServers,
       errorServers,
       totalBackups,
       backupStorageBytes,
       pgStats,
     ] = await Promise.all([
       this.db.select({ count: count() }).from(users),
+      this.db.select({ count: count() }).from(users).where(eq(users.status, 'suspended')),
       this.db.select({ count: count() }).from(servers),
       this.db.select({ count: count() }).from(servers).where(eq(servers.status, 'online')),
+      this.db.select({ count: count() }).from(servers).where(eq(servers.status, 'offline')),
+      this.db.select({ count: count() }).from(servers).where(eq(servers.status, 'suspended')),
       this.db.select({ count: count() }).from(servers).where(eq(servers.status, 'error')),
       this.db.select({ count: count() }).from(backups).where(eq(backups.status, 'ready')),
       this.db.select({ total: sql<string>`coalesce(sum(size_bytes),0)` }).from(backups).where(eq(backups.status, 'ready')),
@@ -886,10 +908,12 @@ export class AdminService {
     ]);
 
     return {
-      users: { total: totalUsers[0]?.count ?? 0 },
+      users: { total: totalUsers[0]?.count ?? 0, suspended: suspendedUsers[0]?.count ?? 0 },
       servers: {
         total: totalServers[0]?.count ?? 0,
         online: onlineServers[0]?.count ?? 0,
+        offline: offlineServers[0]?.count ?? 0,
+        suspended: suspendedServers[0]?.count ?? 0,
         error: errorServers[0]?.count ?? 0,
       },
       backups: { total: totalBackups[0]?.count ?? 0, storageBytes: Number(backupStorageBytes[0]?.total ?? 0) },

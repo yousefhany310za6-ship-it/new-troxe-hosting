@@ -74,27 +74,32 @@ export function useAdminSetPassword(id) {
   });
 }
 
-export function useAdminSuspendUser(id) {
+function invalidateUser(qc, id) {
+  if (id) qc.invalidateQueries({ queryKey: adminKeys.user(id) });
+  qc.invalidateQueries({ queryKey: ['admin', 'users'] });
+}
+
+export function useAdminSuspendUser() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (reason) => apiPost(`/admin/users/${id}/suspend`, { reason }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: adminKeys.user(id) }); qc.invalidateQueries({ queryKey: ['admin', 'users'] }); },
+    mutationFn: ({ id, reason }) => apiPost(`/admin/users/${id}/suspend`, { reason }),
+    onSuccess: (_d, v) => invalidateUser(qc, v?.id),
   });
 }
 
-export function useAdminUnsuspendUser(id) {
+export function useAdminUnsuspendUser() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () => apiPost(`/admin/users/${id}/unsuspend`),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: adminKeys.user(id) }); qc.invalidateQueries({ queryKey: ['admin', 'users'] }); },
+    mutationFn: (id) => apiPost(`/admin/users/${id}/unsuspend`),
+    onSuccess: (_d, id) => invalidateUser(qc, typeof id === 'string' ? id : undefined),
   });
 }
 
-export function useAdminRestoreUser(id) {
+export function useAdminRestoreUser() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () => apiPost(`/admin/users/${id}/restore`),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: adminKeys.user(id) }); qc.invalidateQueries({ queryKey: ['admin', 'users'] }); },
+    mutationFn: (id) => apiPost(`/admin/users/${id}/restore`),
+    onSuccess: (_d, id) => invalidateUser(qc, typeof id === 'string' ? id : undefined),
   });
 }
 
