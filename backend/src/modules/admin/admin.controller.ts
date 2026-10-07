@@ -155,23 +155,6 @@ export class AdminController {
     return this.admin.adminUpdateServer(id, dto, u.sub, u.email);
   }
 
-  @Post('servers/:id/:action')
-  @HttpCode(200)
-  adminLifecycle(
-    @Param('id', UUID) id: string,
-    @Param('action') action: (typeof LIFECYCLE_ACTIONS)[number],
-    @CurrentUser() u: ReqUser,
-  ) {
-    if (!LIFECYCLE_ACTIONS.includes(action)) throw Err.invalid('ACTION_UNSUPPORTED', 'Unknown lifecycle action');
-    return this.admin.adminLifecycle(id, action, u.sub, u.email);
-  }
-
-  @Delete('servers/:id')
-  @HttpCode(200)
-  deleteServer(@Param('id', UUID) id: string, @CurrentUser() u: ReqUser) {
-    return this.admin.adminDeleteServer(id, u.sub, u.email);
-  }
-
   @Post('servers/:id/access')
   @HttpCode(200)
   openServer(@Param('id', UUID) id: string, @CurrentUser() u: ReqUser, @Req() req: Request) {
@@ -189,6 +172,28 @@ export class AdminController {
   unsuspendServer(@Param('id', UUID) id: string, @CurrentUser() u: ReqUser, @Req() req: Request) {
     return this.admin.unsuspendServer(id, u.sub, ctxOf(req).ip);
   }
+
+  @Post('servers/:id/:action')
+  @HttpCode(200)
+  adminLifecycle(
+    @Param('id', UUID) id: string,
+    @Param('action') action: (typeof LIFECYCLE_ACTIONS)[number],
+    @CurrentUser() u: ReqUser,
+  ) {
+    if (!LIFECYCLE_ACTIONS.includes(action)) throw Err.invalid('ACTION_UNSUPPORTED', 'Unknown lifecycle action');
+    return this.admin.adminLifecycle(id, action, u.sub, u.email);
+  }
+
+  @Delete('servers/:id')
+  @HttpCode(200)
+  deleteServer(@Param('id', UUID) id: string, @CurrentUser() u: ReqUser) {
+    return this.admin.adminDeleteServer(id, u.sub, u.email);
+  }
+
+
+
+
+
 
   @Get('servers/:id/stats')
   serverStats(@Param('id', UUID) id: string) {
