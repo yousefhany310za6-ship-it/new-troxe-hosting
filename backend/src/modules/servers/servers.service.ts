@@ -655,6 +655,7 @@ export class ServersService {
 
   async stats(ownerId: string, id: string) {
     const row = await this.requireOwned(ownerId, id);
+    this.assertOperable(row);
     const stats = row.containerId ? await this.docker.stats(row.containerId, row.nodeId) : null;
     // uptime of the current run (only meaningful while it is running)
     const state = row.containerId ? await this.docker.inspect(row.containerId, row.nodeId).catch(() => null) : null;
