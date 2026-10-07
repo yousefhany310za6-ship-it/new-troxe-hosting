@@ -191,6 +191,15 @@ export default function ServerFiles({ server }) {
     const [draft, setDraft] = useState('');
     const [sheet, setSheet] = useState(null);
     const [selected, setSelected] = useState([]);
+    // Selection mode: checkboxes stay hidden until the user long-presses a row
+    // (or picks "Select" from its menu). Tapping rows then toggles selection.
+    const [selectMode, setSelectMode] = useState(false);
+    const selectOn = selectMode || selected.length > 0;
+    const enterSelect = (name) => {
+        setSelectMode(true);
+        setSelected((prev) => (prev.includes(name) ? prev : [...prev, name]));
+    };
+    const exitSelect = () => { setSelectMode(false); setSelected([]); };
     const [query, setQuery] = useState('');
     const [sortBy, setSortBy] = useState('name');
     const [sortDir, setSortDir] = useState('asc');
@@ -224,7 +233,7 @@ export default function ServerFiles({ server }) {
         if (!editing) loadedRef.current = null;
     }, [fileData, editing]);
 
-    useEffect(() => { setSelected([]); }, [dirPath]);
+    useEffect(() => { setSelected([]); setSelectMode(false); }, [dirPath]);
 
     const dirty = !!editing && !!fileData && draft !== (fileData.content ?? '');
     useEffect(() => {
@@ -248,6 +257,31 @@ export default function ServerFiles({ server }) {
 
     const toggleSelect = (name) =>
         setSelected((s) => (s.includes(name) ? s.filter((n) => n !== name) : [...s, name]));
+
+    // Long-press (touch & mouse) enters selection mode. A right-click does the same.
+    // The click that ends a long-press is suppressed (timestamp-based, so both
+    // the row and its inner button ignore it instead of toggling twice).
+    const pressRef = useRef({ timer: null, suppressUntil: 0 });
+    const clearPress = () => {
+        if (pressRef.current.timer) { clearTimeout(pressRef.current.timer); pressRef.current.timer = null; }
+    };
+    const pressHandlers = (name) => ({
+        onPointerDown: () => {
+            clearPress();
+            pressRef.current.timer = setTimeout(() => {
+                pressRef.current.timer = null;
+                pressRef.current.suppressUntil = Date.now() + 500;
+                enterSelect(name);
+                try { navigator.vibrate?.(25); } catch { /* ignore */ }
+            }, 550);
+        },
+        onPointerUp: clearPress,
+        onPointerLeave: clearPress,
+        onPointerCancel: clearPress,
+        onPointerMove: clearPress,
+        onContextMenu: (e) => { e.preventDefault(); clearPress(); enterSelect(name); },
+    });
+    const wasLongPress = () => Date.now() < pressRef.current.suppressUntil;
 
     const relOf = (name) => join([...dir, name]);
     const sheetVal = (sheet?.value ?? '').trim();
@@ -399,7 +433,7 @@ export default function ServerFiles({ server }) {
 
     // ---- row actions ------------------------------------------------------------
     const rowMenuItems = (entry, isDir, isArch) => {
-        const items = [];
+        const items = [['select', 'Select', Check, false]];
         if (isDir) items.push(['open', 'Open', Folder, false]);
         else if (openable(entry)) items.push(['open', 'Open', Pencil, false]);
         if (isArch) items.push(['extract', 'Extract here', Archive, false]);
@@ -412,7 +446,8 @@ export default function ServerFiles({ server }) {
     };
 
     const onMenu = (key, entry) => {
-        if (key === 'open') openEntry(entry);
+        if (key === 'select') enterSelect(entry.name);
+        else if (key === 'open') openEntry(entry);
         else if (key === 'download') onDownload(entry);
         else if (key === 'rename') setSheet({ type: 'rename', entry, value: entry.name });
         else if (key === 'move') setSheet({ type: 'move', entry, value: relOf(entry.name) });
@@ -460,14 +495,14 @@ export default function ServerFiles({ server }) {
                         await rename.mutateAsync({ from: relOf(n), to: join([v.replace(/^\/+/, ''), n]) });
                     }
                     toast.success(`Moved ${sheet.names.length} item(s).`);
-                    setSelected([]);
+                    exitSelect();
                     refetch();
                     break;
                 }
                 case 'delete-many': {
                     for (const n of sheet.names) await remove.mutateAsync(relOf(n));
                     toast.success(`Deleted ${sheet.names.length} item(s).`);
-                    setSelected([]);
+                    exitSelect();
                     refetch();
                     break;
                 }
@@ -482,7 +517,7 @@ export default function ServerFiles({ server }) {
                     if (!/\.tar\.gz$/.test(v) && !/\.tgz$/.test(v)) { toast.error('Name must end in .tar.gz or .tgz.'); return; }
                     await archive.mutateAsync({ sources: sheet.names.map((n) => relOf(n)), dest: relOf(v) });
                     toast.success(`Archived to ${v}.`);
-                    setSelected([]);
+                    exitSelect();
                     refetch();
                     break;
                 }
@@ -859,11 +894,16 @@ export default function ServerFiles({ server }) {
                                 return (
                                     <div
                                         key={entry.name}
-                                        onClick={isDir ? () => openEntry(entry) : undefined}
+                                        {...pressHandlers(entry.name)}
+                                        onClick={() => {
+                                            if (wasLongPress()) return;
+                                            if (selectOn) { toggleSelect(entry.name); return; }
+                                            if (isDir) openEntry(entry);
+                                        }}
                                         className={cn(
-                                            'group relative flex flex-col gap-2 rounded-xl border p-3 transition',
+                                            'group relative flex flex-col gap-2 rounded-xl border p-3 transition select-none',
                                             checked ? 'border-blue-400/50 bg-blue-500/10' : 'border-hairline/70 bg-white/[0.03] hover:border-hairline-hover hover:bg-white/[0.06]',
-                                            isDir && 'cursor-pointer',
+                                            (isDir || selectOn) && 'cursor-pointer',
                                         )}
                                     >
                                         <div className="flex items-start justify-between gap-2">
@@ -873,7 +913,10 @@ export default function ServerFiles({ server }) {
                                                 onChange={() => toggleSelect(entry.name)}
                                                 onClick={(e) => e.stopPropagation()}
                                                 aria-label={`Select ${entry.name}`}
-                                                className="size-4 shrink-0 cursor-pointer accent-white"
+                                                className={cn(
+                                                    'size-4 shrink-0 cursor-pointer accent-white transition-opacity',
+                                                    selectOn || checked ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+                                                )}
                                             />
                                             <span onClick={(e) => e.stopPropagation()}>
                                                 <RowMenu
@@ -884,7 +927,7 @@ export default function ServerFiles({ server }) {
                                                 />
                                             </span>
                                         </div>
-                                        <button type="button" onClick={() => openEntry(entry)} className="flex min-w-0 flex-1 flex-col items-center gap-2 text-center">
+                                        <button type="button" onClick={(e) => { e.stopPropagation(); if (wasLongPress()) return; if (selectOn) { toggleSelect(entry.name); return; } openEntry(entry); }} className="flex min-w-0 flex-1 flex-col items-center gap-2 text-center">
                                             <span className="flex size-14 items-center justify-center rounded-xl bg-gradient-to-br from-white/10 to-white/[0.02]">
                                                 {isDir ? <Folder size={26} className="text-sky-300/90" /> : icon ? <img src={icon} alt="" aria-hidden="true" className="size-7" draggable={false} /> : <FileText size={22} className="text-ink-muted" />}
                                             </span>
@@ -905,11 +948,16 @@ export default function ServerFiles({ server }) {
                                 return (
                                     <div
                                         key={entry.name}
-                                        onClick={isDir ? () => openEntry(entry) : undefined}
+                                        {...pressHandlers(entry.name)}
+                                        onClick={() => {
+                                            if (wasLongPress()) return;
+                                            if (selectOn) { toggleSelect(entry.name); return; }
+                                            if (isDir) openEntry(entry);
+                                        }}
                                         className={cn(
-                                            'group flex items-center gap-3 rounded-xl border px-3 py-2.5 transition',
+                                            'group flex items-center gap-3 rounded-xl border px-3 py-2.5 transition select-none',
                                             checked ? 'border-blue-400/50 bg-blue-500/10' : 'border-hairline/70 bg-white/[0.03] hover:border-hairline-hover hover:bg-white/[0.06]',
-                                            isDir && 'cursor-pointer',
+                                            (isDir || selectOn) && 'cursor-pointer',
                                         )}
                                     >
                                         <input
@@ -918,9 +966,12 @@ export default function ServerFiles({ server }) {
                                             onChange={() => toggleSelect(entry.name)}
                                             onClick={(e) => e.stopPropagation()}
                                             aria-label={`Select ${entry.name}`}
-                                            className="size-5 shrink-0 cursor-pointer accent-white"
+                                            className={cn(
+                                                'size-5 shrink-0 cursor-pointer accent-white transition-opacity',
+                                                selectOn || checked ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+                                            )}
                                         />
-                                        <button type="button" onClick={() => openEntry(entry)} onDoubleClick={() => openEntry(entry)} title={entry.type === 'dir' ? 'Open folder' : 'Open file'} className="flex min-w-0 flex-1 items-center gap-3 text-left">
+                                        <button type="button" onClick={(e) => { e.stopPropagation(); if (wasLongPress()) return; if (selectOn) { toggleSelect(entry.name); return; } openEntry(entry); }} onDoubleClick={() => openEntry(entry)} title={entry.type === 'dir' ? 'Open folder' : 'Open file'} className="flex min-w-0 flex-1 items-center gap-3 text-left">
                                             <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-white/10 to-white/[0.02]">
                                                 {isDir ? <Folder size={20} className="text-sky-300/90" /> : icon ? <img src={icon} alt="" aria-hidden="true" className="size-5" draggable={false} /> : <FileText size={18} className="text-ink-muted" />}
                                             </span>
@@ -952,15 +1003,15 @@ export default function ServerFiles({ server }) {
             {/* ============================ footer / bulk bar ============================ */}
             {!isLoading && !error && hasEntries && (
                 <div className="flex flex-wrap items-center gap-2 border-t border-hairline px-4 py-2.5">
-                    <input
-                        type="checkbox"
-                        checked={allChecked}
-                        onChange={() => setSelected(allChecked ? [] : entries.map((e) => e.name))}
-                        aria-label="Select all in this folder"
-                        className="size-5 shrink-0 cursor-pointer accent-white"
-                    />
-                    {selected.length > 0 ? (
+                    {selectOn ? (
                         <>
+                            <input
+                                type="checkbox"
+                                checked={allChecked}
+                                onChange={() => setSelected(allChecked ? [] : entries.map((e) => e.name))}
+                                aria-label="Select all in this folder"
+                                className="size-5 shrink-0 cursor-pointer accent-white"
+                            />
                             <span className="font-mono text-[0.75rem] text-ink-secondary">{selected.length} selected</span>
                             <button type="button" onClick={() => setSheet({ type: 'archive-many', names: [...selected], value: `${selected.length === 1 ? selected[0] : (dir[dir.length - 1] ?? server.name)}.tar.gz` })} disabled={busy} className={btnSecondary}>
                                 <Archive size={15} /> Archive
@@ -971,7 +1022,7 @@ export default function ServerFiles({ server }) {
                             <button type="button" onClick={() => setSheet({ type: 'delete-many', names: [...selected], value: '' })} disabled={busy} className={btnSecondary}>
                                 <Trash2 size={15} /> Delete
                             </button>
-                            <button type="button" onClick={() => setSelected([])} className="font-mono text-[0.75rem] text-ink-secondary hover:text-foreground">Clear</button>
+                            <button type="button" onClick={exitSelect} className="font-mono text-[0.75rem] text-ink-secondary hover:text-foreground">Cancel</button>
                         </>
                     ) : (
                         <span className="font-mono text-[0.72rem] text-ink-muted">
