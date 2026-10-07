@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import {
   ArrowDown,
@@ -13,15 +13,7 @@ import {
 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
-import { apiGet } from '@/lib/api.js';
-import { useSocket } from '@/hooks/useWebSocket.jsx';
-
-// ---- sampling -------------------------------------------------------------------
-
-// Live path: the API pushes one sample per second over the /ws socket.
-// Fallback (socket down): poll the REST endpoint (15 req/min, route limit is 60/min).
-const POLL_MS = 4000;
-const MAX_SAMPLES = 120; // 2 minutes of history at 1 sample/s
+import { useLiveStats } from '@/hooks/useLiveStats.js';
 
 const COLORS = {
   cpu: '#38bdf8',
@@ -244,82 +236,7 @@ function InfoRow({ label, value, mono, children }) {
  */
 export default function ResourceMonitor({ server, status, usage }) {
   const online = status === 'online';
-  const [samples, setSamples] = useState([]);
-  const prev = useRef(null);
-  const { socketRef, connected } = useSocket('/ws');
-
-  /** Turn one raw stats frame into a chart sample (rates from consecutive frames). */
-  const pushSample = useCallback(
-    (s, tsMs) => {
-      const limitCores = Math.max(0.05, (s?.limits?.cpuMilli ?? server.cpuMilli ?? 1000) / 1000);
-      const cpu = Math.min(100, ((Number(s.cpuPercent) || 0) / 100 / limitCores) * 100);
-      const memLimit = Number(s.memLimitBytes) || (server.ramMb ?? 0) * 1048576;
-      const rx = Number(s.netRxBytes) || 0;
-      const tx = Number(s.netTxBytes) || 0;
-      let rxRate = 0;
-      let txRate = 0;
-      const p = prev.current;
-      if (p) {
-        const dt = (tsMs - p.t) / 1000;
-        // counters restart with the container: a negative delta is a reset, not traffic
-        if (dt > 0.2) {
-          rxRate = Math.max(0, (rx - p.rx) / dt);
-          txRate = Math.max(0, (tx - p.tx) / dt);
-        }
-      }
-      prev.current = { t: tsMs, rx, tx };
-      setSamples((arr) =>
-        [...arr, { cpu, mem: Number(s.memBytes) || 0, memLimit, rx, tx, rxRate, txRate }].slice(-MAX_SAMPLES),
-      );
-    },
-    [server.cpuMilli, server.ramMb],
-  );
-
-  // a restart / stop starts the charts from scratch (same as the console output)
-  useEffect(() => {
-    setSamples([]);
-    prev.current = null;
-  }, [server?.id, server?.containerId, online]);
-
-  // LIVE: subscribe to the server's stats channel (≈1 sample/s, pushed by the API)
-  useEffect(() => {
-    const sock = socketRef.current;
-    if (!connected || !sock || !online || !server?.id) return undefined;
-    const channel = `server:stats:${server.id}`;
-    const onStats = (msg) => {
-      if (!msg || (msg.serverId && msg.serverId !== server.id)) return;
-      pushSample(msg, Number(msg.ts) || Date.now());
-    };
-    sock.on('server:stats', onStats);
-    sock.emit('subscribe', { channels: [channel] });
-    return () => {
-      sock.off('server:stats', onStats);
-      sock.emit('unsubscribe', { channels: [channel] });
-    };
-  }, [connected, online, server?.id, pushSample, socketRef]);
-
-  // FALLBACK: poll while the socket is down, so the cards never freeze
-  useEffect(() => {
-    if (connected || !online || !server?.id || !server?.containerId) return undefined;
-    let alive = true;
-    let timer = null;
-    const tick = async () => {
-      if (!document.hidden) {
-        try {
-          const s = await apiGet(`/servers/${server.id}/stats`);
-          if (alive) pushSample(s, Date.now());
-        } catch {
-          /* transient: keep the previous samples */
-        }
-      }
-      if (alive) timer = setTimeout(tick, POLL_MS);
-    };
-    tick();
-    return () => {
-      alive = false;
-      if (timer) clearTimeout(timer);
-    };
-  }, [connected, online, server?.id, server?.containerId, pushSample]);
+  const { samples, mode } = useLiveStats(server, online);
 
   const last = samples[samples.length - 1];
   const cpuSeries = useMemo(() => samples.map((s) => s.cpu), [samples]);
@@ -349,7 +266,6 @@ export default function ResourceMonitor({ server, status, usage }) {
   const rxNow = last?.rxRate ?? 0;
   const txNow = last?.txRate ?? 0;
 
-  const mode = !online ? 'idle' : connected ? 'live' : 'poll';
   const MODES = {
     live: { dot: 'animate-beat bg-emerald-500', text: 'text-emerald-300', ring: 'border-emerald-500/25 bg-emerald-500/10', label: 'Live · updates every second' },
     poll: { dot: 'animate-beat bg-amber-500', text: 'text-amber-300', ring: 'border-amber-500/25 bg-amber-500/10', label: 'Reconnecting · refreshing every 4s' },

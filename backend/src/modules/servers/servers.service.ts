@@ -577,8 +577,12 @@ export class ServersService {
   async stats(ownerId: string, id: string) {
     const row = await this.requireOwned(ownerId, id);
     const stats = row.containerId ? await this.docker.stats(row.containerId, row.nodeId) : null;
+    // uptime of the current run (only meaningful while it is running)
+    const state = row.containerId ? await this.docker.inspect(row.containerId, row.nodeId).catch(() => null) : null;
+    const since = state?.running ? startedAtToSince(state.startedAt) : undefined;
     return {
       ...stats,
+      startedAt: since ? new Date(since * 1000).toISOString() : null,
       cpuPercent: stats?.cpuPercent ?? 0,
       memBytes: stats?.memBytes ?? 0,
       memLimitBytes: stats?.memLimitBytes ?? row.ramMb * 1024 * 1024,
@@ -592,6 +596,29 @@ export class ServersService {
     // current run only: a restart keeps the container (and its old log history)
     const state = await this.docker.inspect(row.containerId, row.nodeId).catch(() => null);
     return { logs: await this.docker.logs(row.containerId, tail, row.nodeId, startedAtToSince(state?.startedAt)) };
+  }
+
+  /** Recent lifecycle events of a server (newest first), safe to show its owner. */
+  async events(ownerId: string, id: string, limit = 20) {
+    await this.requireOwned(ownerId, id);
+    const rows = await this.db
+      .select()
+      .from(serverEvents)
+      .where(eq(serverEvents.serverId, id))
+      .orderBy(desc(serverEvents.createdAt))
+      .limit(Math.min(Math.max(limit || 20, 1), 50));
+    // detail is internal JSON: expose only a small allowlist of short primitives
+    const SAFE = new Set(['error', 'plan', 'runtime', 'region', 'status', 'clean', 'start']);
+    return rows.map((r) => {
+      const detail: Record<string, string | number | boolean> = {};
+      const raw = (r.detail ?? {}) as Record<string, unknown>;
+      for (const [k, v] of Object.entries(raw)) {
+        if (!SAFE.has(k)) continue;
+        if (typeof v === 'string') detail[k] = v.slice(0, 300);
+        else if (typeof v === 'number' || typeof v === 'boolean') detail[k] = v;
+      }
+      return { id: r.id, type: r.type, detail, createdAt: r.createdAt };
+    });
   }
 
   async usage(ownerId: string, id: string) {

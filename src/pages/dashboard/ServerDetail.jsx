@@ -26,6 +26,7 @@ import { Select } from '@/components/ui/select.jsx';
 import ServerFiles from './ServerFiles.jsx';
 import ExecTerminal, { ConsoleOffline } from './ExecTerminal.jsx';
 import ResourceMonitor from './ResourceMonitor.jsx';
+import ServerOverview from './ServerOverview.jsx';
 
 const TABS = [
     { id: 'overview', label: 'Overview', Icon: LayoutDashboard },
@@ -309,51 +310,15 @@ export default function ServerDetail() {
             )}
 
             {tab === 'overview' && (
-                <>
-                    {(status === 'error' || server.lastError) && server.lastError && (
-                        <div className="rounded-xl border border-red-500/30 bg-card p-5">
-                            <p className="text-[0.8rem] text-red-400">Last error</p>
-                            <p className="mt-1 font-mono text-[0.88rem] font-bold text-red-300">{server.lastError}</p>
-                        </div>
-                    )}
-                    <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
-                    {[
-                        ['Status', status],
-                        ['Runtime', server.runtimeLabel ?? server.runtime],
-                        ['Node', server.nodeId ?? 'local'],
-                        ['Plan', server.planId],
-                        ['Region', server.region],
-                        ['CPU limit', `${server.cpuMilli / 1000} vCPU`],
-                        ['RAM limit', `${server.ramMb} MB`],
-                        ['Storage limit', `${server.storageGb} GB`],
-                        ['Startup', server.startup || '—'],
-                        ['Storage used', usage ? fmtBytes(usage.usedBytes, usage.limitBytes) : '—'],
-                        ['Auto-restart', server.autoRestart ? 'On' : 'Off'],
-                        ['Auto-backup', server.autoBackup ? 'On' : 'Off'],
-                    ].map(([label, value]) => (
-                        <div key={label} className="rounded-xl border border-hairline bg-card p-5">
-                            <p className="text-[0.8rem] text-ink-muted">{label}</p>
-                            <p className="mt-1 font-mono text-[0.95rem] font-bold capitalize">{value}</p>
-                        </div>
-                    ))}
-                    {stats && (
-                        <>
-                            <div className="rounded-xl border border-hairline bg-card p-5">
-                                <p className="text-[0.8rem] text-ink-muted">CPU usage</p>
-                                <p className="mt-1 font-mono text-[1.2rem] font-bold">{Math.min(100, Math.round(stats.cpuPercent ?? 0))}%</p>
-                            </div>
-                            <div className="rounded-xl border border-hairline bg-card p-5">
-                                <p className="text-[0.8rem] text-ink-muted">RAM usage</p>
-                                <p className="mt-1 font-mono text-[1.2rem] font-bold">
-                                    {stats.memBytes && stats.memLimitBytes
-                                        ? Math.min(100, Math.round((stats.memBytes / stats.memLimitBytes) * 100))
-                                        : 0}%
-                                </p>
-                            </div>
-                        </>
-                    )}
-                    </div>
-                </>
+                <ServerOverview
+                    server={server}
+                    status={status}
+                    stats={stats}
+                    usage={usage}
+                    backups={backups}
+                    onTab={(t) => { setTab(t); setMsg({ text: '', ok: true }); }}
+                    onCreateBackup={createBackup}
+                />
             )}
 
             {tab === 'console' && (
