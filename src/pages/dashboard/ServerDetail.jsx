@@ -25,6 +25,7 @@ import { ConfirmModal } from '@/components/ui/confirm-modal.jsx';
 import { Select } from '@/components/ui/select.jsx';
 import ServerFiles from './ServerFiles.jsx';
 import ExecTerminal, { ConsoleOffline } from './ExecTerminal.jsx';
+import ResourceMonitor from './ResourceMonitor.jsx';
 
 const TABS = [
     { id: 'overview', label: 'Overview', Icon: LayoutDashboard },
@@ -356,11 +357,14 @@ export default function ServerDetail() {
             )}
 
             {tab === 'console' && (
-                online ? (
-                    <ExecTerminal key={server.id} server={server} />
-                ) : (
-                    <ConsoleOffline server={server} status={status} logs={logs} onStart={start} />
-                )
+                <>
+                    {online ? (
+                        <ExecTerminal key={server.id} server={server} />
+                    ) : (
+                        <ConsoleOffline server={server} status={status} logs={logs} onStart={start} />
+                    )}
+                    <ResourceMonitor server={server} status={status} usage={usage} />
+                </>
             )}
 
             {tab === 'files' && <ServerFiles server={server} />}
