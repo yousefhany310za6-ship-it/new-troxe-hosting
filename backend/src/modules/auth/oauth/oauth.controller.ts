@@ -111,6 +111,11 @@ export class OAuthController {
     } catch (e) {
       clear();
       const code = e instanceof AppError ? ((e.getResponse() as { code?: string })?.code ?? 'OAUTH_FAILED') : 'OAUTH_FAILED';
+      // suspended accounts get the dedicated screen, not a generic error
+      if (code === 'ACCOUNT_SUSPENDED') {
+        res.redirect(this.frontend('suspended', {}));
+        return;
+      }
       res.redirect(this.frontend('error', { code }));
     }
   }

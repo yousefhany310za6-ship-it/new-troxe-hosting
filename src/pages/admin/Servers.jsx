@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Play, Plus, RotateCcw, Square, Trash2 } from 'lucide-react';
+import { Ban, ExternalLink, Play, Plus, RotateCcw, Square, Trash2, Undo2 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/useToast.jsx';
-import { useAdminDeleteServer, useAdminLifecycle, useAdminServers } from '@/hooks/useAdminQueries.jsx';
+import { useAdminDeleteServer, useAdminLifecycle, useAdminServers, useAdminSuspendServer, useAdminUnsuspendServer } from '@/hooks/useAdminQueries.jsx';
 import { ConfirmModal } from '@/components/ui/confirm-modal.jsx';
 import { Select } from '@/components/ui/select.jsx';
 import { Skeleton } from '@/components/ui/field.jsx';
@@ -13,7 +13,7 @@ import { STATUS_STYLE } from '../dashboard/Overview.jsx';
 const actionBtn =
     'inline-flex items-center gap-1.5 rounded-md border border-hairline bg-veil px-3 py-1.5 text-[0.8rem] font-semibold text-ink-secondary transition hover:border-hairline-hover hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40';
 
-const STATUSES = ['online', 'offline', 'restarting', 'provisioning', 'error', 'deleting'];
+const STATUSES = ['online', 'offline', 'restarting', 'provisioning', 'error', 'suspended', 'deleting'];
 
 export default function AdminServers() {
     const toast = useToast();
@@ -25,6 +25,8 @@ export default function AdminServers() {
     const { data, isLoading, error, refetch } = useAdminServers({ page, limit: 20, search: q || undefined, status: status || undefined });
     const lifecycle = useAdminLifecycle();
     const del = useAdminDeleteServer();
+    const suspend = useAdminSuspendServer();
+    const unsuspend = useAdminUnsuspendServer();
 
     const submitSearch = (e) => { e.preventDefault(); setPage(1); setQ(search.trim()); };
 
@@ -37,6 +39,16 @@ export default function AdminServers() {
         await del.mutateAsync(deleteTarget.id);
         toast.success('Server deleted.');
         refetch();
+    };
+
+    const doSuspend = async (s) => {
+        try { await suspend.mutateAsync({ id: s.id }); toast.success(`Server suspended.`); refetch(); }
+        catch (e) { toast.error(e.message); }
+    };
+
+    const doUnsuspend = async (s) => {
+        try { await unsuspend.mutateAsync(s.id); toast.success('Server unsuspended.'); refetch(); }
+        catch (e) { toast.error(e.message); }
     };
 
     return (
@@ -79,14 +91,18 @@ export default function AdminServers() {
                                     <span className={cn('size-2.5 shrink-0 rounded-full', STATUS_STYLE[s.status])} />
                                     <span className="font-mono text-[0.95rem] font-bold">{s.name}</span>
                                     <span className="rounded-full border border-hairline bg-veil px-2 py-0.5 text-[0.72rem] text-ink-secondary">{s.runtime}</span>
-                                    <span className="font-mono text-[0.75rem] capitalize text-ink-muted">{s.status}</span>
+                                    <span className={cn('rounded-full border px-2 py-0.5 font-mono text-[0.7rem] font-semibold capitalize', s.status === 'suspended' ? 'border-red-500/40 bg-red-500/10 text-red-300' : 'border-hairline bg-veil text-ink-muted')}>{s.status}</span>
                                     <Link to={s.owner ? `/admin/users/${s.owner.id}` : '#'} className="font-mono text-[0.75rem] text-ink-secondary hover:text-foreground hover:underline">
                                         {s.owner ? s.owner.email : s.ownerId}
                                     </Link>
                                     <div className="ml-auto flex items-center gap-2">
+                                        <Link to={`/admin/servers/${s.id}`} aria-label={`Open ${s.name}`} title="Open server" className={actionBtn}><ExternalLink className="size-3.5" /></Link>
                                         <button type="button" onClick={() => act(s.id, 'start', 'Start')} className={actionBtn}><Play className="size-3.5" /></button>
                                         <button type="button" onClick={() => act(s.id, 'restart', 'Restart')} className={actionBtn}><RotateCcw className="size-3.5" /></button>
                                         <button type="button" onClick={() => act(s.id, 'stop', 'Stop')} className={actionBtn}><Square className="size-3.5" /></button>
+                                        {s.status === 'suspended'
+                                            ? <button type="button" onClick={() => doUnsuspend(s)} aria-label="Unsuspend server" title="Unsuspend" className={cn(actionBtn, 'border-emerald-500/40 text-emerald-300')}><Undo2 className="size-3.5" /></button>
+                                            : <button type="button" onClick={() => doSuspend(s)} aria-label="Suspend server" title="Suspend" className={cn(actionBtn, 'border-amber-500/40 text-amber-300')}><Ban className="size-3.5" /></button>}
                                         <button type="button" onClick={() => setDeleteTarget(s)} aria-label="Delete server" className={cn(actionBtn, 'hover:!border-red-500/50 hover:!text-red-400')}>
                                             <Trash2 className="size-3.5" />
                                         </button>

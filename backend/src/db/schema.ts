@@ -3,6 +3,12 @@ import { sql } from 'drizzle-orm';
 
 // ---- Enums ------------------------------------------------------------------
 export const userRole = pgEnum('user_role', ['user', 'admin']);
+
+export const userStatus = pgEnum('user_status', [
+  'active',      // normal
+  'suspended',   // admin suspension: login + sessions + APIs blocked
+  'deleted',     // admin soft-delete: login blocked, data retained for audit/restore
+]);
 export const sessionStatus = pgEnum('session_status', ['success', 'failed']);
 export const serverStatus = pgEnum('server_status', [
   'provisioning', // resources are being created
@@ -11,6 +17,7 @@ export const serverStatus = pgEnum('server_status', [
   'restarting',   // transitional
   'deleting',     // teardown in progress
   'error',        // provisioning/runtime failure (see lastError)
+  'suspended',    // admin suspension: kept intact, all user operations blocked
 ]);
 export const serverRuntime = pgEnum('server_runtime', ['Node.js', 'Python', 'Bun', 'PHP']);
 export const backupType = pgEnum('backup_type', ['auto', 'manual']);
@@ -31,6 +38,8 @@ export const users = pgTable('users', {
   passwordHash: text('password_hash'),
   avatarUrl: text('avatar_url'),
   role: userRole('role').default('user').notNull(),
+  status: userStatus('status').default('active').notNull(),
+  deletedAt: timestamp('deleted_at'),
   /** Server-side plan assignment — the client can NEVER choose its plan.
    *  Upgrades happen only through billing/admin flows (future phase). */
   planId: varchar('plan_id', { length: 32 }).default('free').notNull().references(() => plans.id),

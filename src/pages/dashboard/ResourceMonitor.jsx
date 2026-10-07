@@ -234,9 +234,9 @@ function InfoRow({ label, value, mono, children }) {
  * Samples reset whenever the server leaves the online state, so a restart
  * starts clean — same as the console output next to it.
  */
-export default function ResourceMonitor({ server, status, usage }) {
+export default function ResourceMonitor({ server, status, usage, liveOpts }) {
   const online = status === 'online';
-  const { samples, mode } = useLiveStats(server, online);
+  const { samples, mode } = useLiveStats(server, online, liveOpts);
 
   const last = samples[samples.length - 1];
   const cpuSeries = useMemo(() => samples.map((s) => s.cpu), [samples]);

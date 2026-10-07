@@ -95,6 +95,7 @@ const STATUS = {
   offline: { label: 'Offline', glow: '113,113,122', dot: 'bg-zinc-500', text: 'text-ink-secondary', ring: 'border-hairline bg-veil' },
   restarting: { label: 'Restarting', glow: '245,158,11', dot: 'bg-amber-500', text: 'text-amber-300', ring: 'border-amber-500/30 bg-amber-500/10' },
   provisioning: { label: 'Provisioning', glow: '59,130,246', dot: 'bg-blue-500', text: 'text-blue-300', ring: 'border-blue-500/30 bg-blue-500/10' },
+  suspended: { label: 'Suspended', glow: '239,68,68', dot: 'bg-red-500', text: 'text-red-300', ring: 'border-red-500/30 bg-red-500/10' },
   error: { label: 'Error', glow: '239,68,68', dot: 'bg-red-500', text: 'text-red-300', ring: 'border-red-500/30 bg-red-500/10' },
 };
 
@@ -272,7 +273,7 @@ function LimitRow({ label, used, limit, pct, color, icon: Icon }) {
  * Server overview: status hero with uptime, live metric tiles, recent
  * activity, quick actions, backups summary, limits and configuration.
  */
-export default function ServerOverview({ server, status, stats, usage, backups, quota, onTab, onCreateBackup }) {
+export default function ServerOverview({ server, status, stats, usage, backups, quota, onTab, onCreateBackup, adminMode = false }) {
   const online = status === 'online';
   const st = STATUS[status] ?? STATUS.offline;
   const { samples, mode } = useLiveStats(server, online);
@@ -333,7 +334,9 @@ export default function ServerOverview({ server, status, stats, usage, backups, 
     : status === 'restarting'
       ? 'Restarting — this takes a few seconds'
       : status === 'provisioning'
-        ? 'Setting up your server…'
+      ? 'Setting up your server…'
+      : status === 'suspended'
+        ? 'Suspended by the administration — see below'
         : status === 'error'
           ? 'Something went wrong — see the details below'
           : 'Stopped — start it from the controls above';
@@ -501,7 +504,7 @@ export default function ServerOverview({ server, status, stats, usage, backups, 
                 ['console', 'Console', Terminal, COLORS.cpu],
                 ['files', 'Files', Folder, COLORS.disk],
                 ['backups', 'Backups', Database, COLORS.mem],
-                ['settings', 'Settings', SettingsIcon, '#94a3b8'],
+                ...(!adminMode ? [['settings', 'Settings', SettingsIcon, '#94a3b8']] : []),
               ].map(([id, label, Icon, color]) => (
                 <button
                   key={id}
@@ -577,6 +580,7 @@ export default function ServerOverview({ server, status, stats, usage, backups, 
             <LimitRow icon={MemoryStick} color={COLORS.mem} label="Memory" used={online ? fmtBytes(memUsed) : '0 B'} limit={fmtBytes(memLimit)} pct={online ? memPct : 0} />
             <LimitRow icon={HardDrive} color={COLORS.disk} label="Storage" used={fmtBytes(diskUsed)} limit={fmtBytes(diskLimit)} pct={diskPct} />
           </div>
+          {!adminMode && (
           <Link
             to="/pricing"
             className="group mt-5 flex items-center gap-3 rounded-xl border border-hairline bg-white/[0.02] px-4 py-3 transition hover:border-hairline-hover hover:bg-white/[0.05]"
@@ -592,6 +596,7 @@ export default function ServerOverview({ server, status, stats, usage, backups, 
             </span>
             <ChevronRight className="size-4 text-ink-muted transition group-hover:translate-x-0.5 group-hover:text-foreground" />
           </Link>
+          )}
         </Panel>
 
         <Panel title="Configuration" icon={SettingsIcon}>

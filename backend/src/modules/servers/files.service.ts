@@ -56,8 +56,8 @@ export class FilesService {
 
   // ---- public API --------------------------------------------------------
 
-  async list(ownerId: string, serverId: string, rel: string | undefined) {
-    const { volume, nodeId } = await this.volumeOf(ownerId, serverId);
+  async list(ownerId: string, serverId: string, rel: string | undefined, opts?: { admin?: boolean }) {
+    const { volume, nodeId } = await this.volumeOf(ownerId, serverId, opts);
     const dir = this.sanitizeDir(rel ?? '');
     const script = [
       `d=${this.q(`/data/${dir}`)}`,
@@ -95,8 +95,8 @@ export class FilesService {
     return { path: dir, entries };
   }
 
-  async read(ownerId: string, serverId: string, rel: string | undefined) {
-    const { volume, nodeId } = await this.volumeOf(ownerId, serverId);
+  async read(ownerId: string, serverId: string, rel: string | undefined, opts?: { admin?: boolean }) {
+    const { volume, nodeId } = await this.volumeOf(ownerId, serverId, opts);
     const file = this.sanitizeFile(rel ?? '');
     const script = [
       `f=${this.q(`/data/${file}`)}`,
@@ -114,7 +114,7 @@ export class FilesService {
     return { path: file, size: buf.length, content: buf.toString('utf8') };
   }
 
-  async write(ownerId: string, serverId: string, rel: string, content?: string, contentBase64?: string) {
+  async write(ownerId: string, serverId: string, rel: string, content?: string, contentBase64?: string, opts?: { admin?: boolean }) {
     if ((content === undefined) === (contentBase64 === undefined))
       throw Err.invalid('FILE_BODY', 'Provide exactly one of content / contentBase64');
     // text edits are capped lower; base64 uploads may be real binaries
@@ -124,7 +124,7 @@ export class FilesService {
       throw new AppError('FILE_TOO_LARGE', 413, `File exceeds ${cap} bytes`);
     const release = await this.serversSvc.acquire(serverId);
     try {
-      const { volume, nodeId } = await this.volumeOf(ownerId, serverId);
+      const { volume, nodeId } = await this.volumeOf(ownerId, serverId, opts);
       const file = this.sanitizeFile(rel);
       const b64 = buf.toString('base64');
       // one giant argv would hit ARG_MAX — stream in 4-char-aligned chunks
@@ -169,6 +169,7 @@ export class FilesService {
     rel: string | undefined,
     size: number,
     source: NodeJS.ReadableStream,
+    opts?: { admin?: boolean },
   ) {
     // FIRST thing: a client abort during the (slow) helper prep below must never
     // surface as an unhandled 'error' event on the request stream.
@@ -179,7 +180,7 @@ export class FilesService {
       throw new AppError('FILE_TOO_LARGE', 413, `File exceeds the ${FilesService.STREAM_UPLOAD_MAX / 1024 ** 3} GB upload limit`);
     const release = await this.serversSvc.acquire(serverId);
     try {
-      const { volume, nodeId } = await this.volumeOf(ownerId, serverId);
+      const { volume, nodeId } = await this.volumeOf(ownerId, serverId, opts);
       const file = this.sanitizeFile(rel ?? '');
       const script = [
         `f=${this.q(`/data/${file}`)}`,
@@ -220,10 +221,10 @@ export class FilesService {
     }
   }
 
-  async mkdir(ownerId: string, serverId: string, rel: string) {
+  async mkdir(ownerId: string, serverId: string, rel: string, opts?: { admin?: boolean }) {
     const release = await this.serversSvc.acquire(serverId);
     try {
-      const { volume, nodeId } = await this.volumeOf(ownerId, serverId);
+      const { volume, nodeId } = await this.volumeOf(ownerId, serverId, opts);
       const dir = this.sanitizeFile(rel);
       const script = [
         `p=${this.q(`/data/${dir}`)}`,
@@ -241,10 +242,10 @@ export class FilesService {
     }
   }
 
-  async remove(ownerId: string, serverId: string, rel: string | undefined) {
+  async remove(ownerId: string, serverId: string, rel: string | undefined, opts?: { admin?: boolean }) {
     const release = await this.serversSvc.acquire(serverId);
     try {
-      const { volume, nodeId } = await this.volumeOf(ownerId, serverId);
+      const { volume, nodeId } = await this.volumeOf(ownerId, serverId, opts);
       const target = this.sanitizeFile(rel ?? '');
       const script = [
         `f=${this.q(`/data/${target}`)}`,
@@ -260,10 +261,10 @@ export class FilesService {
     }
   }
 
-  async rename(ownerId: string, serverId: string, from: string, to: string) {
+  async rename(ownerId: string, serverId: string, from: string, to: string, opts?: { admin?: boolean }) {
     const release = await this.serversSvc.acquire(serverId);
     try {
-      const { volume, nodeId } = await this.volumeOf(ownerId, serverId);
+      const { volume, nodeId } = await this.volumeOf(ownerId, serverId, opts);
       const src = this.sanitizeFile(from);
       const dst = this.sanitizeFile(to);
       if (src === dst) throw Err.invalid('FILE_SAME', 'Source and destination are identical');
@@ -287,7 +288,7 @@ export class FilesService {
     }
   }
 
-  async download(ownerId: string, serverId: string, rel: string | undefined): Promise<{ filename: string; data: Buffer }> {    const { volume, nodeId } = await this.volumeOf(ownerId, serverId);
+  async download(ownerId: string, serverId: string, rel: string | undefined, opts?: { admin?: boolean }): Promise<{ filename: string; data: Buffer }> {    const { volume, nodeId } = await this.volumeOf(ownerId, serverId, opts);
     const target = this.sanitizeFile(rel ?? '');
     const base = target.split('/').pop()!;
     const script = [
@@ -312,10 +313,10 @@ export class FilesService {
    * destination must share one parent dir (keeps `tar -C` exact, no
    * surprises). Symlinks are stored as links, never followed.
    */
-  async archive(ownerId: string, serverId: string, sources: string[], dest: string) {
+  async archive(ownerId: string, serverId: string, sources: string[], dest: string, opts?: { admin?: boolean }) {
     const release = await this.serversSvc.acquire(serverId);
     try {
-      const { volume, nodeId } = await this.volumeOf(ownerId, serverId);
+      const { volume, nodeId } = await this.volumeOf(ownerId, serverId, opts);
       const srcs = sources.map((s) => this.sanitizeFile(s));
       const dst = this.sanitizeFile(dest);
       if (!/\.tar\.gz$/.test(dst) && !/\.tgz$/.test(dst))
@@ -351,10 +352,10 @@ export class FilesService {
    * Extract a .zip / .tar.gz / .tgz / .tar into the volume. Every entry is
    * listed and validated FIRST (no absolute paths, no `..`) — tarbomb-proof.
    */
-  async extract(ownerId: string, serverId: string, file: string, dest: string | undefined) {
+  async extract(ownerId: string, serverId: string, file: string, dest: string | undefined, opts?: { admin?: boolean }) {
     const release = await this.serversSvc.acquire(serverId);
     try {
-      const { volume, nodeId } = await this.volumeOf(ownerId, serverId);
+      const { volume, nodeId } = await this.volumeOf(ownerId, serverId, opts);
       const arc = this.sanitizeFile(file);
       const kind = /\.zip$/.test(arc) ? 'zip' : /(\.tar\.gz|\.tgz)$/.test(arc) ? 'targz' : /\.tar$/.test(arc) ? 'tar' : null;
       if (!kind) throw Err.invalid('FILE_FORMAT', 'Only .zip, .tar.gz, .tgz and .tar can be extracted');
@@ -420,8 +421,13 @@ export class FilesService {
 
   // ---- internals ----------------------------------------------------------
 
-  private async volumeOf(ownerId: string, serverId: string): Promise<{ volume: string; nodeId: string }> {
+  private async volumeOf(
+    ownerId: string,
+    serverId: string,
+    opts?: { admin?: boolean },
+  ): Promise<{ volume: string; nodeId: string }> {
     const row = await this.serversSvc.requireOwned(ownerId, serverId);
+    this.serversSvc.assertOperable(row, opts);
     if (!(await this.docker.availableOn(row.nodeId))) throw new AppError('DOCKER_UNAVAILABLE', 503, 'Container runtime is not available');
     if (!row.volumeName) throw Err.conflict('SERVER_NOT_PROVISIONED', 'Server has no volume yet');
     return { volume: row.volumeName, nodeId: row.nodeId };

@@ -13,6 +13,7 @@ import RequireAuth, { GuestOnly } from './components/guards.jsx';
 const SignIn = lazy(() => import('./pages/SignIn.jsx'));
 const SignUp = lazy(() => import('./pages/SignUp.jsx'));
 const OAuthCallback = lazy(() => import('./pages/OAuthCallback.jsx'));
+const Suspended = lazy(() => import('./pages/Suspended.jsx'));
 const VerifyEmail = lazy(() => import('./pages/EmailFlows.jsx').then((m) => ({ default: m.VerifyEmail })));
 const ForgotPassword = lazy(() => import('./pages/EmailFlows.jsx').then((m) => ({ default: m.ForgotPassword })));
 const ResetPassword = lazy(() => import('./pages/EmailFlows.jsx').then((m) => ({ default: m.ResetPassword })));
@@ -43,6 +44,7 @@ const AdminOverview = lazy(() => import('./pages/admin/Overview.jsx'));
 const AdminUsers = lazy(() => import('./pages/admin/Users.jsx'));
 const AdminUserDetail = lazy(() => import('./pages/admin/UserDetail.jsx'));
 const AdminServers = lazy(() => import('./pages/admin/Servers.jsx'));
+const AdminServerDetail = lazy(() => import('./pages/admin/ServerDetail.jsx'));
 const AdminNodes = lazy(() => import('./pages/admin/Nodes.jsx'));
 const AdminPlans = lazy(() => import('./pages/admin/Plans.jsx'));
 const AdminAudit = lazy(() => import('./pages/admin/Audit.jsx'));
@@ -65,6 +67,7 @@ export default function App() {
                     <Route path="/signup" element={<GuestOnly><SignUp /></GuestOnly>} />
                     {/* OAuth landing: the backend 302s here after the provider round-trip */}
                     <Route path="/oauth/callback" element={<OAuthCallback />} />
+                    <Route path="/suspended" element={<Suspended />} />
                     <Route path="/forgot-password" element={<GuestOnly><ForgotPassword /></GuestOnly>} />
                     <Route path="/reset-password" element={<GuestOnly><ResetPassword /></GuestOnly>} />
                     <Route path="/about" element={<About />} />
@@ -91,6 +94,7 @@ export default function App() {
                                 <Route path="users" element={<AdminUsers />} />
                                 <Route path="users/:id" element={<AdminUserDetail />} />
                                 <Route path="servers" element={<AdminServers />} />
+                                <Route path="servers/:id" element={<AdminServerDetail />} />
                                 <Route path="servers/new" element={<CreateServer adminMode />} />
                                 <Route path="nodes" element={<AdminNodes />} />
                                 <Route path="plans" element={<AdminPlans />} />

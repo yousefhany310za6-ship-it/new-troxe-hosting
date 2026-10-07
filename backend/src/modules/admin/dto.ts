@@ -11,6 +11,7 @@ export class AdminUserListQuery {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) limit?: number = 20;
   @IsOptional() @IsString() @MaxLength(100) search?: string;
   @IsOptional() @IsIn(['user', 'admin']) role?: 'user' | 'admin';
+  @IsOptional() @IsIn(['active', 'suspended', 'deleted']) status?: 'active' | 'suspended' | 'deleted';
   @IsOptional() @IsIn(['createdAt', 'name', 'email', 'planId']) sortBy?: 'createdAt' | 'name' | 'email' | 'planId';
   @IsOptional() @IsIn(['asc', 'desc']) sortOrder?: 'asc' | 'desc';
 }
@@ -44,6 +45,19 @@ export class UpdateRoleDto {
 export class UpdateUserPlanDto {
   @IsString() @MinLength(1) @MaxLength(32)
   planId!: string;
+}
+
+/** Same strength rules as signup — the mechanism (bcrypt+sha256) is shared. */
+export class AdminSetPasswordDto {
+  @MinLength(8, { message: 'PASSWORD_TOO_SHORT' })
+  @MaxLength(128, { message: 'PASSWORD_TOO_LONG' })
+  @Matches(/^(?=.*[A-Za-z])(?=.*\d).+$/, { message: 'PASSWORD_TOO_SIMPLE' })
+  password!: string;
+}
+
+export class AdminSuspendDto {
+  @IsOptional() @IsString() @MaxLength(300)
+  reason?: string;
 }
 
 /** Aligned with the real `plans` table (priceCents/storageGb, not priceMonthly/maxStorageGb). */

@@ -25,6 +25,10 @@ export default function OAuthCallback() {
     (async () => {
       const status = params.get('status');
       const next = sanitizeNextPath(params.get('next'));
+      if (status === 'suspended') {
+        if (alive) navigate('/suspended', { replace: true });
+        return;
+      }
       if (status !== 'ok') {
         const code = params.get('code') || 'OAUTH_FAILED';
         if (alive) {

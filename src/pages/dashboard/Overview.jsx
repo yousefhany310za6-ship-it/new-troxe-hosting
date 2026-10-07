@@ -34,6 +34,7 @@ export const STATUS_STYLE = {
     restarting: 'bg-amber-500',
     error: 'bg-red-500',
     provisioning: 'bg-blue-500',
+    suspended: 'bg-red-500',
 };
 
 const STATUS_PILL = {

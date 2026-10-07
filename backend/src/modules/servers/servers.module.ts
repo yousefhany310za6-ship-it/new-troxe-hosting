@@ -28,6 +28,6 @@ import { StatsStreamService } from './stats-stream.service';
     ReconcilerService,
     StatsStreamService,
   ],
-  exports: [ServersService, BackupsService, DockerService, ProvisionerService, ReconcilerService],
+  exports: [ServersService, BackupsService, DockerService, ProvisionerService, ReconcilerService, ExecGateway],
 })
 export class ServersModule {}

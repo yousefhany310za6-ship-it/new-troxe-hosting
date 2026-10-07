@@ -101,6 +101,7 @@ export class BackupsService {
 
   async create(ownerId: string, serverId: string, opts: { name?: string; type?: 'manual' | 'auto' }, ctx?: ReqCtx) {
     const server = await this.serversSvc.requireOwned(ownerId, serverId);
+    this.serversSvc.assertOperable(server);
     const slots = await this.backupSlots(server);
 
     if (!(await this.docker.availableOn(server.nodeId)))
@@ -220,7 +221,8 @@ export class BackupsService {
   }
 
   async remove(ownerId: string, serverId: string, backupId: string, ctx?: ReqCtx) {
-    await this.serversSvc.requireOwned(ownerId, serverId);
+    const server = await this.serversSvc.requireOwned(ownerId, serverId);
+    this.serversSvc.assertOperable(server);
     const [row] = await this.db
       .select()
       .from(backups)
@@ -255,6 +257,7 @@ export class BackupsService {
    */
   async restore(ownerId: string, serverId: string, backupId: string, ctx?: ReqCtx) {
     const server = await this.serversSvc.requireOwned(ownerId, serverId);
+    this.serversSvc.assertOperable(server);
     const [row] = await this.db
       .select()
       .from(backups)
@@ -447,13 +450,21 @@ export class BackupsService {
    */
   async createAutoIfDue(): Promise<void> {
     const rows = await this.db
-      .select({ id: servers.id, ownerId: servers.ownerId, createdAt: servers.createdAt, retain: servers.autoBackupRetain })
+      .select({
+        id: servers.id,
+        ownerId: servers.ownerId,
+        status: servers.status,
+        createdAt: servers.createdAt,
+        retain: servers.autoBackupRetain,
+      })
       .from(servers)
       .where(eq(servers.autoBackup, true))
       .orderBy(servers.createdAt)
       .limit(200);
 
     for (const s of rows) {
+      // suspended servers are frozen: no automatic backups while suspended
+      if (s.status === 'suspended') continue;
       try {
         // retention first (independent of creation): excess autos are pruned
         // even when the new one is quota-blocked — and pruning frees the

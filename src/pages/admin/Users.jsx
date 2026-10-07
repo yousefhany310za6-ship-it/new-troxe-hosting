@@ -13,8 +13,9 @@ export default function AdminUsers() {
     const [search, setSearch] = useState('');
     const [q, setQ] = useState('');
     const [role, setRole] = useState('');
+    const [status, setStatus] = useState('');
 
-    const { data, isLoading, error } = useAdminUsers({ page, limit: 20, search: q || undefined, role: role || undefined });
+    const { data, isLoading, error } = useAdminUsers({ page, limit: 20, search: q || undefined, role: role || undefined, status: status || undefined });
 
     const submitSearch = (e) => { e.preventDefault(); setPage(1); setQ(search.trim()); };
 
@@ -27,6 +28,18 @@ export default function AdminUsers() {
 
             <form onSubmit={submitSearch} className="flex flex-wrap items-center gap-2">
                 <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name or email…" className="input-field w-64" />
+                <Select
+                    ariaLabel="Filter by status"
+                    value={status}
+                    onChange={(v) => { setStatus(v); setPage(1); }}
+                    options={[
+                        { value: '', label: 'All statuses' },
+                        { value: 'active', label: 'active' },
+                        { value: 'suspended', label: 'suspended' },
+                        { value: 'deleted', label: 'deleted' },
+                    ]}
+                    className="w-40"
+                />
                 <Select
                     ariaLabel="Filter by role"
                     value={role}
@@ -64,11 +77,17 @@ export default function AdminUsers() {
                                         <span className="truncate">{u.name}</span>
                                     </span>
                                     <span className="truncate font-mono text-[0.82rem] text-ink-secondary">{u.email}</span>
-                                    <span>
+                                    <span className="flex items-center gap-1.5">
                                         <span className={cn(
                                             'rounded-full px-2 py-0.5 text-[0.7rem] font-bold',
                                             u.role === 'admin' ? 'bg-red-500/15 text-red-400' : 'bg-white/10 text-ink-secondary'
                                         )}>{u.role}</span>
+                                        {(u.status && u.status !== 'active') && (
+                                            <span className={cn(
+                                                'rounded-full px-2 py-0.5 text-[0.7rem] font-bold',
+                                                u.status === 'suspended' ? 'bg-amber-500/15 text-amber-300' : 'bg-zinc-500/20 text-zinc-400'
+                                            )}>{u.status}</span>
+                                        )}
                                     </span>
                                     <span className="font-mono text-[0.8rem] text-ink-secondary">{u.planId}</span>
                                     <span className="font-mono text-[0.8rem] text-ink-secondary">{u.serverCount}</span>

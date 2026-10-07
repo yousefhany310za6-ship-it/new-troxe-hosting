@@ -1,4 +1,4 @@
-import { Logger } from '@nestjs/common';
+import { Inject, Logger } from '@nestjs/common';
 import {
   ConnectedSocket,
   MessageBody,
@@ -11,6 +11,10 @@ import {
 import { Server, Socket } from 'socket.io';
 import { config } from '../../config/env';
 import { WsTicketService } from '../auth/ws-ticket.service';
+import { AdminGrantService } from '../auth/admin-grant.service';
+import { eq } from 'drizzle-orm';
+import { DB, Db } from '../../db/db.module';
+import { users } from '../../db/schema';
 import { AuditService } from '../audit/audit.module';
 import { ServersService } from './servers.service';
 import { DockerService, startedAtToSince, type ShellHandle } from './provisioning/docker.service';
@@ -83,9 +87,11 @@ export class ExecGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   constructor(
     private tickets: WsTicketService,
+    private grants: AdminGrantService,
     private servers: ServersService,
     private docker: DockerService,
     private audit: AuditService,
+    @Inject(DB) private db: Db,
   ) {}
 
   async handleConnection(client: Socket) {
@@ -100,9 +106,32 @@ export class ExecGateway implements OnGatewayConnection, OnGatewayDisconnect {
       const serverId = auth.serverId;
       const readOnly = true; // Always read-only mode
 
-      const row = await this.servers.requireOwned(userId, serverId).catch(() => null);
+      // Suspended / deleted accounts get no shells — not even with a fresh ticket.
+      // Admins arrive with an access grant instead (never the user's session).
+      const [actor] = await this.db
+        .select({ id: users.id, role: users.role, status: users.status })
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1);
+      if (!actor || actor.status !== 'active') return fail('EXEC_DENIED');
+
+      let row = await this.servers.requireOwned(userId, serverId).catch(() => null);
+      let viaGrant = false;
+      const grantToken = (auth as { grant?: string }).grant;
+      if (!row && grantToken && actor.role === 'admin') {
+        try {
+          const grant = this.grants.verify(grantToken);
+          if (grant.adminId === userId && grant.serverId === serverId) {
+            row = await this.servers.requireAny(serverId).catch(() => null);
+            viaGrant = !!row;
+          }
+        } catch {
+          /* invalid grant — falls through to NO_ACCESS */
+        }
+      }
       if (!row) return fail('EXEC_NO_ACCESS');
       if (!row.containerId) return fail('EXEC_NO_CONTAINER');
+      if (row.status === 'suspended') return fail('EXEC_SUSPENDED');
       const state = await this.docker.inspect(row.containerId, row.nodeId).catch(() => null);
       if (!state?.running) return fail('EXEC_OFFLINE');
 
@@ -205,6 +234,24 @@ export class ExecGateway implements OnGatewayConnection, OnGatewayDisconnect {
     } catch (e) {
       this.log.debug(`exec connect failed: ${(e as Error).message}`);
       fail('EXEC_DENIED');
+    }
+  }
+
+  /**
+   * Force-close every console session of a user (account suspension /
+   * deletion). Called by the admin service — suspended users keep no live
+   * shells even if their socket outlives the HTTP session kill.
+   */
+  closeUserSessions(userId: string): void {
+    for (const [sid, sess] of this.bySocket) {
+      if (sess.userId !== userId) continue;
+      const allSockets = this.server.sockets as unknown as Map<string, Socket>;
+      const client = allSockets.get(sid);
+      if (client) this.close(client, 'suspended');
+      else {
+        sess.closed = true;
+        this.bySocket.delete(sid);
+      }
     }
   }
 

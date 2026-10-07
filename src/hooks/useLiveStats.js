@@ -19,7 +19,7 @@ export const MAX_SAMPLES = 120; // 2 minutes of history at 1 sample/s
  * Samples reset whenever the server leaves the online state, so a restart
  * starts clean — same as the console output.
  */
-export function useLiveStats(server, online) {
+export function useLiveStats(server, online, opts = {}) {
   const [samples, setSamples] = useState([]);
   const prev = useRef(null);
   const { socketRef, connected } = useSocket('/ws');
@@ -67,14 +67,19 @@ export function useLiveStats(server, online) {
       pushSample(msg, Number(msg.ts) || Date.now());
     };
     sock.on('server:stats', onStats);
-    sock.emit('subscribe', { channels: [channel] });
+    sock.emit('subscribe', { channels: [channel], ...(opts.grant ? { grant: opts.grant } : {}) });
     return () => {
       sock.off('server:stats', onStats);
       sock.emit('unsubscribe', { channels: [channel] });
     };
-  }, [connected, online, server?.id, pushSample, socketRef]);
+  }, [connected, online, server?.id, pushSample, socketRef, opts.grant]);
 
-  // FALLBACK: poll while the socket is down, so the numbers never freeze
+  // FALLBACK: poll while the socket is down, so the numbers never freeze.
+  // An explicit fetcher lets the admin view reuse this hook against the
+  // admin mirror endpoints (same shape, no owner session needed). Stored in
+  // a ref so passing an inline lambda doesn't restart the poll loop.
+  const fetcherRef = useRef(null);
+  fetcherRef.current = opts.fetcher ?? ((id) => apiGet(`/servers/${id}/stats`));
   useEffect(() => {
     if (connected || !online || !server?.id || !server?.containerId) return undefined;
     let alive = true;
@@ -82,7 +87,7 @@ export function useLiveStats(server, online) {
     const tick = async () => {
       if (!document.hidden) {
         try {
-          const s = await apiGet(`/servers/${server.id}/stats`);
+          const s = await fetcherRef.current(server.id);
           if (alive) pushSample(s, Date.now());
         } catch {
           /* transient: keep the previous samples */

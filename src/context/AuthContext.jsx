@@ -67,6 +67,19 @@ export function AuthProvider({ children }) {
     setStatus('guest');
   }, [qc]);
 
+  // A 403 ACCOUNT_SUSPENDED from any API call means this device's account
+  // was just suspended: drop the local session and land on /suspended.
+  // (The page itself makes no authenticated calls, so this cannot loop.)
+  useEffect(() => {
+    const onSuspended = () => {
+      void signOut().finally(() => {
+        if (window.location.pathname !== '/suspended') window.location.assign('/suspended');
+      });
+    };
+    window.addEventListener('account:suspended', onSuspended);
+    return () => window.removeEventListener('account:suspended', onSuspended);
+  }, [signOut]);
+
   const value = useMemo(() => ({
     user,
     setUser,

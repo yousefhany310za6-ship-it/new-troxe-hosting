@@ -95,6 +95,81 @@ export class ServersService {
     return this.toPublic(row);
   }
 
+  /**
+   * Suspension gate: every user-facing operation that touches a server must
+   * pass through here. Suspended servers are fully inert for their owners
+   * (lifecycle, files, backups, console, stats) while the row, volume and
+   * configuration are preserved. Admin paths pass `{ admin: true }` — the
+   * bypass is explicit at each call site, never a hidden role check.
+   */
+  assertOperable(row: Pick<Server, 'status'>, opts?: { admin?: boolean }): void {
+    if (row.status === 'suspended' && !opts?.admin) {
+      throw new AppError(
+        'SERVER_SUSPENDED',
+        403,
+        'This server has been suspended by the administration. Contact support if you believe this was a mistake.',
+      );
+    }
+  }
+
+  /**
+   * Suspend a server (admin only — enforced by the caller holding AdminGuard).
+   * Stops a running container but keeps container/volume/config untouched.
+   * Unsuspend always lands on `offline`: the owner starts it explicitly.
+   */
+  async suspend(ownerId: string, id: string, opts: { adminId: string; reason?: string; ip?: string }) {
+    const row = await this.requireOwned(ownerId, id);
+    if (row.status === 'suspended') return this.toPublic(row);
+    const release = await this.acquire(id);
+    try {
+      const state = row.containerId
+        ? await this.docker.inspect(row.containerId, row.nodeId).catch(() => null)
+        : null;
+      if (state?.running) await this.docker.stop(row.containerId!, 15, row.nodeId).catch(() => undefined);
+      await this.db.update(servers).set({ status: 'suspended' }).where(eq(servers.id, id));
+      await this.event(id, opts.adminId, 'suspend', { reason: opts.reason ?? null, wasStatus: row.status });
+      await this.audit.record({
+        actorId: opts.adminId,
+        action: 'admin.server.suspend',
+        targetType: 'server',
+        targetId: id,
+        ip: opts.ip,
+        meta: { reason: opts.reason ?? null, wasStatus: row.status },
+      });
+      this.realtime.broadcastServerStatus(id, 'suspended');
+    } finally {
+      release();
+    }
+    return this.toPublic(await this.requireOwned(ownerId, id));
+  }
+
+  async unsuspend(ownerId: string, id: string, opts: { adminId: string; ip?: string }) {
+    const row = await this.requireOwned(ownerId, id);
+    if (row.status !== 'suspended') return this.toPublic(row);
+    await this.db.update(servers).set({ status: 'offline' }).where(eq(servers.id, id));
+    await this.event(id, opts.adminId, 'unsuspend', { wasStatus: row.status });
+    await this.audit.record({
+      actorId: opts.adminId,
+      action: 'admin.server.unsuspend',
+      targetType: 'server',
+      targetId: id,
+      ip: opts.ip,
+    });
+    this.realtime.broadcastServerStatus(id, 'offline');
+    return this.toPublic(await this.requireOwned(ownerId, id));
+  }
+
+  /**
+   * Ownership-free row fetch for admin-internal paths (WS grant connects).
+   * Never exposed to HTTP directly — callers must have verified an admin
+   * grant or AdminGuard first.
+   */
+  async requireAny(id: string): Promise<Server> {
+    const [row] = await this.db.select().from(servers).where(eq(servers.id, id)).limit(1);
+    if (!row) throw Err.notFound('SERVER_NOT_FOUND');
+    return row;
+  }
+
   async requireOwned(ownerId: string, id: string): Promise<Server> {
     // Admin bypass: 'admin' ownerId skips ownership check
     const where = ownerId === 'admin'
@@ -318,6 +393,7 @@ export class ServersService {
   ) {
     const row = await this.requireOwned(ownerId, id);
     const isAdmin = opts?.isAdmin ?? ownerId === 'admin';
+    this.assertOperable(row, { admin: isAdmin });
     const actorId = opts?.actorId ?? ownerId;
     const release = await this.acquire(id);
     try {
@@ -453,6 +529,7 @@ export class ServersService {
 
   async lifecycle(ownerId: string, id: string, action: 'start' | 'stop' | 'restart' | 'reinstall', ctx: ReqCtx) {
     let row = await this.requireOwned(ownerId, id);
+    this.assertOperable(row);
     const actor = { actorId: ownerId, targetType: 'server', targetId: id, ip: ctx.ip, userAgent: ctx.device };
     const release = await this.acquire(id);
     try {
@@ -594,6 +671,7 @@ export class ServersService {
 
   async logs(ownerId: string, id: string, tail = 200) {
     const row = await this.requireOwned(ownerId, id);
+    this.assertOperable(row);
     if (!row.containerId) return { logs: '' };
     // current run only: a restart keeps the container (and its old log history)
     const state = await this.docker.inspect(row.containerId, row.nodeId).catch(() => null);
@@ -682,6 +760,7 @@ export class ServersService {
 
   async usage(ownerId: string, id: string) {
     const row = await this.requireOwned(ownerId, id);
+    this.assertOperable(row);
     const bytes = await this.provisioner.volumeUsage(row.volumeName ?? '', runtimeImage(row.runtime).image, row.nodeId);
     return {
       usedBytes: bytes ?? 0,

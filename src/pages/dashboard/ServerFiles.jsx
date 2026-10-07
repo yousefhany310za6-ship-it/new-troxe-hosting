@@ -222,12 +222,13 @@ function RowMenu({ items, onSelect, disabled, align = 'right', trigger, label = 
     );
 }
 
-export default function ServerFiles({ server }) {
+export default function ServerFiles({ server, apiBase = '/servers', readOnly = false }) {
+    const base = apiBase;
     const [dir, setDir] = useState([]);
     const dirPath = join(dir);
-    const { data, isLoading, error, refetch, isFetching } = useServerFiles(server.id, dirPath);
+    const { data, isLoading, error, refetch, isFetching } = useServerFiles(server.id, dirPath, base);
     const [editing, setEditing] = useState(null);
-    const { data: fileData, isLoading: fileLoading, error: fileError } = useFileContent(server.id, editing);
+    const { data: fileData, isLoading: fileLoading, error: fileError } = useFileContent(server.id, editing, true, base);
     const [draft, setDraft] = useState('');
     const [sheet, setSheet] = useState(null);
     const [selected, setSelected] = useState([]);
@@ -236,6 +237,7 @@ export default function ServerFiles({ server }) {
     const [selectMode, setSelectMode] = useState(false);
     const selectOn = selectMode || selected.length > 0;
     const enterSelect = (name) => {
+        if (readOnly) return;
         setSelectMode(true);
         setSelected((prev) => (prev.includes(name) ? prev : [...prev, name]));
     };
@@ -259,12 +261,12 @@ export default function ServerFiles({ server }) {
     const toast = useToast();
     const dragDepth = useRef(0);
 
-    const writeFile = useWriteFile(server.id);
-    const mkdir = useMkdir(server.id);
-    const remove = useDeleteFile(server.id);
-    const rename = useRenameFile(server.id);
-    const archive = useArchiveFiles(server.id);
-    const extract = useExtractFiles(server.id);
+    const writeFile = useWriteFile(server.id, base);
+    const mkdir = useMkdir(server.id, base);
+    const remove = useDeleteFile(server.id, base);
+    const rename = useRenameFile(server.id, base);
+    const archive = useArchiveFiles(server.id, base);
+    const extract = useExtractFiles(server.id, base);
 
     // Only sync the draft when a *different* file finishes loading: background
     // refetches must never wipe unsaved edits.
@@ -430,7 +432,7 @@ export default function ServerFiles({ server }) {
                 const ctrl = new AbortController();
                 patchItem(next.id, { status: 'uploading', ratio: 0, error: null, abort: () => ctrl.abort() });
                 try {
-                    await uploadServerFile(server.id, relOf(next.name), next.file, {
+                    await uploadServerFile(server.id, relOf(next.name), next.file, { base,
                         signal: ctrl.signal,
                         onProgress: (r) => patchItem(next.id, { ratio: r }),
                     });
@@ -492,7 +494,7 @@ export default function ServerFiles({ server }) {
         const ctrl = new AbortController();
         setDownload({ name: name.split('/').pop(), ratio: 0, abort: () => ctrl.abort() });
         try {
-            await downloadServerFile(server.id, name, {
+            await downloadServerFile(server.id, name, { base,
                 signal: ctrl.signal,
                 onProgress: (r) => setDownload((d) => (d ? { ...d, ratio: r } : d)),
             });
@@ -506,6 +508,12 @@ export default function ServerFiles({ server }) {
 
     // ---- row actions ------------------------------------------------------------
     const rowMenuItems = (entry, isDir, isArch) => {
+        if (readOnly) {
+            const items = [];
+            if (!isDir && previewable(entry)) items.push(['preview', 'Preview', Eye, false]);
+            items.push(['download', isDir ? 'Download (.tar.gz)' : 'Download', FileText, false]);
+            return items;
+        }
         const items = [['select', 'Select', Check, false]];
         if (!isDir && previewable(entry)) items.push(['preview', 'Preview', Eye, false]);
         if (isDir) items.push(['open', 'Open', Folder, false]);
@@ -661,6 +669,7 @@ export default function ServerFiles({ server }) {
     // ---- drag & drop -------------------------------------------------------------
     const onDrop = (e) => {
         e.preventDefault();
+        if (readOnly) return;
         dragDepth.current = 0;
         setDragActive(false);
         const files = Array.from(e.dataTransfer?.files || []).filter((f) => f.size > 0);
@@ -700,7 +709,8 @@ export default function ServerFiles({ server }) {
                         <button type="button" onClick={() => setFullscreen((f) => !f)} title={fullscreen ? 'Exit fullscreen (Esc)' : 'Fullscreen'} aria-label="Toggle fullscreen" className={btnIcon}>
                             {fullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
                         </button>
-                        <button type="button" onClick={saveEdit} disabled={fileLoading || !!fileError || writeFile.isPending || !dirty} className={btnPrimary}>
+                        {readOnly && <span className="mr-1 hidden rounded-full border border-hairline bg-veil px-2.5 py-1 text-[0.68rem] font-semibold text-ink-secondary sm:inline-block">Read-only</span>}
+                        <button type="button" onClick={saveEdit} disabled={readOnly || fileLoading || !!fileError || writeFile.isPending || !dirty} title={readOnly ? 'Admin view is read-only' : 'Save'} className={btnPrimary}>
                             {writeFile.isPending ? 'Saving…' : 'Save'}
                         </button>
                     </div>
@@ -797,13 +807,20 @@ export default function ServerFiles({ server }) {
                         ))}
                     </nav>
                     <div className="flex shrink-0 items-center gap-1.5">
-                        <input ref={uploadRef} type="file" multiple className="hidden" onChange={onPick} />
+                        {!readOnly && <input ref={uploadRef} type="file" multiple className="hidden" onChange={onPick} />}
+                        {!readOnly && (
                         <button type="button" onClick={() => uploadRef.current?.click()} disabled={busy || queue.some((q) => q.status === 'uploading')} className={btnPrimary}>
                             <Upload size={16} /> <span className="hidden sm:inline">Upload</span>
                         </button>
+                        )}
+                        {!readOnly && (
                         <button type="button" onClick={() => setSheet({ type: 'new-dir', value: '' })} disabled={busy} className={btnSecondary}>
                             <FolderPlus size={16} /> <span className="hidden sm:inline">New folder</span>
                         </button>
+                        )}
+                        {readOnly && (
+                        <span className="rounded-full border border-hairline bg-veil px-2.5 py-1 text-[0.68rem] font-semibold text-ink-secondary">Read-only</span>
+                        )}
                         <RowMenu
                             label="More file actions"
                             disabled={busy}
@@ -950,6 +967,7 @@ export default function ServerFiles({ server }) {
                         <Folder size={34} className="text-ink-muted" />
                         <p className="text-[0.95rem] font-semibold">No files here</p>
                         <p className="max-w-xs text-[0.84rem] text-ink-secondary">Upload files or create a new folder to get started.</p>
+                        {!readOnly && (
                         <div className="mt-1 flex flex-wrap items-center justify-center gap-2">
                             <button type="button" onClick={() => uploadRef.current?.click()} className={btnPrimary}>
                                 <Upload size={15} /> Upload files
@@ -958,6 +976,7 @@ export default function ServerFiles({ server }) {
                                 <FolderPlus size={15} /> New folder
                             </button>
                         </div>
+                        )}
                     </div>
                 )}
 
@@ -1106,7 +1125,7 @@ export default function ServerFiles({ server }) {
             </div>
 
             {/* ============================ footer / bulk bar ============================ */}
-            {!isLoading && !error && hasEntries && (
+            {!readOnly && !isLoading && !error && hasEntries && (
                 <div className="flex flex-wrap items-center gap-2 border-t border-hairline px-4 py-2.5">
                     {selectOn ? (
                         <>
@@ -1209,7 +1228,7 @@ export default function ServerFiles({ server }) {
             )}
 
             {/* ============================ drop overlay ============================ */}
-            {dragActive && (
+            {!readOnly && dragActive && (
                 <div className="pointer-events-none absolute inset-0 z-30 flex flex-col items-center justify-center gap-2 bg-black/70 backdrop-blur-sm">
                     <Upload size={30} className="text-white" />
                     <p className="text-[0.95rem] font-bold">Drop to upload</p>

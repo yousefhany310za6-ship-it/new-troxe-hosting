@@ -6,7 +6,7 @@ import { and, desc, eq, gt, isNull, sql } from 'drizzle-orm';
 import { config } from '../../config/env';
 import { randomToken, safeEqual, sha256 } from '../../common/crypto';
 import { hashPassword, verifyPassword } from '../../common/password';
-import { Err, pgCodeOf } from '../../common/errors';
+import { AppError, Err, pgCodeOf } from '../../common/errors';
 import { ReqCtx } from '../../common/request-context';
 import { DB, Db } from '../../db/db.module';
 import { authSessions, sessions, users, type User } from '../../db/schema';
@@ -146,6 +146,13 @@ export class AuthService {
     const email = dto.email.toLowerCase().trim();
     const [user] = await this.db.select().from(users).where(eq(users.email, email)).limit(1);
 
+    // suspended / deleted accounts never get a session: suspended is told
+    // plainly (dedicated UI), deleted looks like a wrong password (no oracle)
+    if (user?.status === 'suspended') {
+      await this.audit.record({ actorId: user.id, actorEmail: email, action: 'auth.login.suspended', ip: ctx.ip, userAgent: ctx.device });
+      throw new AppError('ACCOUNT_SUSPENDED', 403, 'Your account has been suspended by the administration. If you believe this is a mistake, please contact support.');
+    }
+
     // account lockout is checked first: locked accounts stop paying for bcrypt
     if (user?.lockedUntil && user.lockedUntil.getTime() > Date.now()) {
       const seconds = Math.ceil((user.lockedUntil.getTime() - Date.now()) / 1000);
@@ -219,6 +226,13 @@ export class AuthService {
   async openSession(userId: string, ctx: ReqCtx, provider: 'google' | 'discord') {
     const [user] = await this.db.select().from(users).where(eq(users.id, userId)).limit(1);
     if (!user) throw Err.unauthorized('USER_GONE');
+    // suspension survives OAuth too: no session, no new-account bypass — the
+    // callback caller maps ACCOUNT_SUSPENDED to the suspended screen
+    if (user.status === 'suspended') {
+      await this.audit.record({ actorId: user.id, actorEmail: user.email, action: `auth.oauth.${provider}.suspended`, targetType: 'user', targetId: user.id, ip: ctx.ip, userAgent: ctx.device });
+      throw new AppError('ACCOUNT_SUSPENDED', 403, 'Your account has been suspended by the administration. If you believe this is a mistake, please contact support.');
+    }
+    if (user.status === 'deleted') throw Err.unauthorized('USER_GONE');
 
     // a locked account stays locked no matter which door is used
     if (user.lockedUntil && user.lockedUntil.getTime() > Date.now()) {
@@ -284,6 +298,8 @@ export class AuthService {
 
       const [user] = await tx.select().from(users).where(eq(users.id, row.userId)).limit(1);
       if (!user) return { kind: 'gone' } as const;
+      // suspended/deleted mid-session: kill the family instead of rotating
+      if (user.status !== 'active') return { kind: 'suspended', familyId: row.familyId, userId: row.userId } as const;
 
       // rotate: same row/family, brand new secret; the superseded hash stays
       // valid for 60s so a retried request re-issues instead of wiping.
@@ -316,6 +332,11 @@ export class AuthService {
 
     if (decision.kind === 'invalid') throw Err.unauthorized('INVALID_REFRESH');
     if (decision.kind === 'gone') throw Err.unauthorized('USER_GONE');
+    if (decision.kind === 'suspended') {
+      await this.db.delete(authSessions).where(eq(authSessions.familyId, decision.familyId));
+      await this.audit.record({ actorId: decision.userId, action: 'auth.refresh.suspended', targetType: 'user', targetId: decision.userId, ip: ctx.ip, userAgent: ctx.device });
+      throw new AppError('ACCOUNT_SUSPENDED', 403, 'Your account has been suspended by the administration. If you believe this is a mistake, please contact support.');
+    }
     if (decision.kind === 'expired') {
       await this.db.delete(authSessions).where(eq(authSessions.familyId, decision.familyId));
       throw Err.unauthorized('REFRESH_EXPIRED');

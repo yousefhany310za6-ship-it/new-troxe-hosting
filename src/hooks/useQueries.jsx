@@ -241,17 +241,17 @@ export function useRuntimeCatalog() {
 }
 
 // Files
-const fkey = (id, path) => ['servers', id, 'files', path || ''];export function useServerFiles(id, path) {
+const fkey = (id, path) => ['servers', id, 'files', path || ''];export function useServerFiles(id, path, base = '/servers') {
   return useQuery({
     queryKey: fkey(id, path),
-    queryFn: () => apiGet(`/servers/${id}/files?path=${encodeURIComponent(path || '')}`),
+    queryFn: () => apiGet(`${base}/${id}/files?path=${encodeURIComponent(path || '')}`),
     enabled: !!id,
   });
 }
-export function useFileContent(id, path, enabled) {
+export function useFileContent(id, path, enabled, base = '/servers') {
   return useQuery({
     queryKey: [...fkey(id, path), 'content'],
-    queryFn: () => apiGet(`/servers/${id}/files/content?path=${encodeURIComponent(path)}`),
+    queryFn: () => apiGet(`${base}/${id}/files/content?path=${encodeURIComponent(path)}`),
     enabled: !!id && !!path && enabled !== false,
   });
 }
@@ -262,28 +262,28 @@ function useFilesMutation(id, fn) {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['servers', id, 'files'] }),
   });
 }
-export function useWriteFile(id) {
+export function useWriteFile(id, base = '/servers') {
   return useFilesMutation(id, ({ path, content, contentBase64 }) =>
-    apiPut(`/servers/${id}/files/content`, { path, content, contentBase64 }));
+    apiPut(`${base}/${id}/files/content`, { path, content, contentBase64 }));
 }
-export function useMkdir(id) {
-  return useFilesMutation(id, (path) => apiPost(`/servers/${id}/files/mkdir`, { path }));
+export function useMkdir(id, base = '/servers') {
+  return useFilesMutation(id, (path) => apiPost(`${base}/${id}/files/mkdir`, { path }));
 }
-export function useDeleteFile(id) {
-  return useFilesMutation(id, (path) => apiDelete(`/servers/${id}/files?path=${encodeURIComponent(path)}`));
+export function useDeleteFile(id, base = '/servers') {
+  return useFilesMutation(id, (path) => apiDelete(`${base}/${id}/files?path=${encodeURIComponent(path)}`));
 }
-export function useRenameFile(id) {
-  return useFilesMutation(id, ({ from, to }) => apiPost(`/servers/${id}/files/rename`, { from, to }));
+export function useRenameFile(id, base = '/servers') {
+  return useFilesMutation(id, ({ from, to }) => apiPost(`${base}/${id}/files/rename`, { from, to }));
 }
-export function useArchiveFiles(id) {
-  return useFilesMutation(id, ({ sources, dest }) => apiPost(`/servers/${id}/files/archive`, { sources, dest }));
+export function useArchiveFiles(id, base = '/servers') {
+  return useFilesMutation(id, ({ sources, dest }) => apiPost(`${base}/${id}/files/archive`, { sources, dest }));
 }
-export function useExtractFiles(id) {
-  return useFilesMutation(id, ({ file, dest }) => apiPost(`/servers/${id}/files/extract`, { file, dest }));
+export function useExtractFiles(id, base = '/servers') {
+  return useFilesMutation(id, ({ file, dest }) => apiPost(`${base}/${id}/files/extract`, { file, dest }));
 }
-export async function downloadServerFile(id, path, { onProgress, signal } = {}) {
+export async function downloadServerFile(id, path, { onProgress, signal, base = '/servers' } = {}) {
   const { blob, filename } = await apiDownload(
-    `/servers/${id}/files/download?path=${encodeURIComponent(path)}`,
+    `${base}/${id}/files/download?path=${encodeURIComponent(path)}`,
     { onProgress, signal },
   );
   const url = URL.createObjectURL(blob);
@@ -296,8 +296,8 @@ export async function downloadServerFile(id, path, { onProgress, signal } = {}) 
   setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 // Streams the raw file (up to 1 GB) to the API — no base64, no memory copy.
-export function uploadServerFile(id, path, file, { onProgress, signal } = {}) {
-  return apiUploadRaw(`/servers/${id}/files/upload?path=${encodeURIComponent(path)}`, file, { onProgress, signal });
+export function uploadServerFile(id, path, file, { onProgress, signal, base = '/servers' } = {}) {
+  return apiUploadRaw(`${base}/${id}/files/upload?path=${encodeURIComponent(path)}`, file, { onProgress, signal });
 }
 export function blobToBase64(blob) {
   return new Promise((resolve, reject) => {

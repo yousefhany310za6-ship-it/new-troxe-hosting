@@ -3,6 +3,7 @@ import { Link, useParams, useNavigate } from 'react-router-dom';
 import {
     Activity,
     ArrowLeft,
+    Ban,
     Check,
     Database,
     FileText,
@@ -303,6 +304,7 @@ export default function ServerDetail() {
                         {server.runtimeLabel ?? server.runtime}
                     </span>
                     <span className="font-mono text-[0.75rem] text-ink-muted capitalize">{status}</span>
+                    {status !== 'suspended' && (
                     <div className="ml-auto flex items-center gap-2">
                         <button type="button" disabled={status !== 'offline'} onClick={start} className={actionBtn}>
                             <Play className="size-3.5" /> Start
@@ -314,9 +316,38 @@ export default function ServerDetail() {
                             <Square className="size-3.5" /> Stop
                         </button>
                     </div>
+                    )}
                 </div>
             </div>
 
+            {status === 'suspended' ? (
+                <section className="relative overflow-hidden rounded-2xl border border-red-500/30 bg-card p-8 text-center sm:p-12">
+                    <div
+                        aria-hidden="true"
+                        className="pointer-events-none absolute inset-0"
+                        style={{ backgroundImage: 'radial-gradient(600px circle at 50% 0%, rgba(239,68,68,0.12), transparent 65%)' }}
+                    />
+                    <div className="relative flex flex-col items-center">
+                        <span className="flex size-16 items-center justify-center rounded-2xl border border-red-500/30 bg-red-500/10 text-red-300">
+                            <Ban className="size-8" />
+                        </span>
+                        <h2 className="mt-4 text-[1.4rem] font-extrabold">Server Suspended</h2>
+                        <p className="mt-2 max-w-md text-[0.9rem] leading-relaxed text-ink-secondary">
+                            This server has been suspended by the administration and is currently unavailable.
+                        </p>
+                        <p className="mt-1 max-w-md text-[0.85rem] text-ink-secondary">
+                            Please contact support if you believe this was a mistake.
+                        </p>
+                        <Link
+                            to="/contact"
+                            className="mt-6 inline-flex items-center gap-2 rounded-full bg-white px-5 py-2.5 text-[0.85rem] font-bold text-black transition hover:bg-gray-200"
+                        >
+                            Contact Support
+                        </Link>
+                    </div>
+                </section>
+            ) : (
+            <>
             <div className="flex gap-1 overflow-x-auto border-b border-hairline">
                 {TABS.map(({ id: tabId, label, Icon }) => (
                     <button
@@ -483,6 +514,8 @@ export default function ServerDetail() {
                         </div>
                     </div>
                 </div>
+            )}
+            </>
             )}
 
             {/* ---------- destructive-action modals ---------- */}

@@ -62,10 +62,19 @@ export async function refreshAccess() {
   return refreshing;
 }
 
+function notifySuspended(code) {
+  // A suspended account must land on the suspension screen even mid-session:
+  // AuthContext signs the session out and redirects there.
+  if (code === 'ACCOUNT_SUSPENDED' && typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('account:suspended'));
+  }
+}
+
 async function toError(res) {
   let body = null;
   try { body = await res.json(); } catch { /* empty body (204) */ }
   const msg = Array.isArray(body?.message) ? body.message.join(', ') : body?.message;
+  notifySuspended(body?.code);
   return new ApiError(res.status, body?.code || 'ERROR', msg || `Request failed (${res.status})`);
 }
 
@@ -200,6 +209,7 @@ function xhrUpload(path, contentType, payload, { onProgress, signal } = {}) {
         try {
           const b = JSON.parse(xhr.responseText);
           const msg = Array.isArray(b?.message) ? b.message.join(', ') : b?.message;
+          notifySuspended(b?.code);
           reject(new ApiError(xhr.status, b?.code || 'ERROR', msg || `Request failed (${xhr.status})`));
         } catch {
           reject(new ApiError(xhr.status, 'ERROR', `Request failed (${xhr.status})`));

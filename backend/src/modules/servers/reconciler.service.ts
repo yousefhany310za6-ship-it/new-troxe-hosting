@@ -138,6 +138,9 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
     const workers = Array.from({ length: Math.min(8, Math.max(queue.length, 1)) }, async () => {
       while (queue.length) {
         const row = queue.shift()!;
+        // suspended servers are frozen by administration: never converge,
+        // repair, restart or otherwise touch them here.
+        if (row.status === 'suspended') continue;
       try {
         if (!row.containerId) {
           if (row.status === 'provisioning' && now - row.createdAt.getTime() > STUCK_PROVISIONING_MS) {

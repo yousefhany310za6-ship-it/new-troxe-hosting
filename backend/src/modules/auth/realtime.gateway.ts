@@ -12,11 +12,14 @@ import { Inject, UseGuards } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
 import { config } from '../../config/env';
 import { WsAuthGuard } from './ws-auth.guard';
+import { AdminGrantService } from './admin-grant.service';
 import { DB, Db } from '../../db/db.module';
-import { servers } from '../../db/schema';
+import { servers, users } from '../../db/schema';
 
 interface AuthenticatedSocket extends Socket {
   userId?: string;
+  role?: string;
+  grant?: string;
   subscriptions: Set<string>;
 }
 
@@ -52,6 +55,7 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
 
   constructor(
     authGuard: WsAuthGuard,
+    private grants: AdminGrantService,
     @Inject(DB) private db: Db,
   ) {
     this.authGuard = authGuard;
@@ -65,12 +69,33 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
         (client.handshake.auth as { ticket?: string } | undefined)?.ticket ??
         (client.handshake.query.ticket as string | undefined);
       const { userId } = this.authGuard.validate(ticket);
+      // suspended / deleted accounts get no sockets at all
+      const [actor] = await this.db
+        .select({ id: users.id, role: users.role, status: users.status })
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1);
+      if (!actor || actor.status !== 'active') throw new Error('account not active');
       client.userId = userId;
+      client.role = actor.role;
       client.subscriptions = new Set();
+      client.grant = (client.handshake.auth as { grant?: string } | undefined)?.grant;
       client.emit('connected', { userId });
     } catch (e) {
       client.emit('error', { code: 'AUTH_FAILED', message: (e as Error).message });
       client.disconnect(true);
+    }
+  }
+
+  /**
+   * Disconnect every /ws socket of a user (account suspension / deletion).
+   * Room membership dies with the socket, so stats/log streams stop too.
+   */
+  closeUserSockets(userId: string): void {
+    const allSockets = this.server?.sockets as unknown as Map<string, AuthenticatedSocket> | undefined;
+    if (!allSockets) return;
+    for (const [, sock] of allSockets) {
+      if (sock.userId === userId) sock.disconnect(true);
     }
   }
 
@@ -89,7 +114,7 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
     const allowed: string[] = [];
     for (const ch of data.channels) {
       if (typeof ch !== 'string' || ch.length > 200) continue;
-      if (await this.isAllowedChannel(client.userId, ch)) {
+      if (await this.isAllowedChannel(client, ch)) {
         client.join(ch);
         client.subscriptions.add(ch);
         allowed.push(ch);
@@ -158,7 +183,9 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
    * themselves are blind room emits). Server channels require a live
    * ownership row — never trust the channel name alone.
    */
-  private async isAllowedChannel(userId: string, channel: string): Promise<boolean> {
+  private async isAllowedChannel(client: AuthenticatedSocket, channel: string): Promise<boolean> {
+    const userId = client.userId;
+    if (!userId) return false;
     // user:audit:{userId} — only own userId
     if (channel.startsWith(CHANNEL_PREFIX.userAudit)) {
       return channel === `${CHANNEL_PREFIX.userAudit}${userId}`;
@@ -167,12 +194,29 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
       if (!channel.startsWith(prefix)) continue;
       const id = channel.slice(prefix.length);
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return false;
+      // admin access grant: single-server management view for admins —
+      // verified here (signature + admin + server match), audited at issuance
+      if (client.grant && client.role === 'admin') {
+        try {
+          const grant = this.grants.verify(client.grant);
+          if (grant.adminId === userId && grant.serverId === id) {
+            const [row] = await this.db.select({ id: servers.id }).from(servers).where(eq(servers.id, id)).limit(1);
+            return !!row;
+          }
+        } catch {
+          /* invalid grant — fall through to owner check */
+        }
+      }
       const [row] = await this.db
-        .select({ id: servers.id })
+        .select({ id: servers.id, status: servers.status })
         .from(servers)
         .where(and(eq(servers.id, id), eq(servers.ownerId, userId)))
         .limit(1);
-      return !!row;
+      if (!row) return false;
+      // suspended servers stream nothing to their owners (only the status
+      // channel stays open so the UI learns about the suspension itself)
+      if (row.status === 'suspended' && prefix !== CHANNEL_PREFIX.serverStatus) return false;
+      return true;
     }
     return false;
   }

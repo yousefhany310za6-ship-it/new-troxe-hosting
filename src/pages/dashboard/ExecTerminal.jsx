@@ -486,7 +486,7 @@ export function ConsoleOffline({ server, status, logs, onStart }) {
  * transport drops are retried with backoff, everything else stops with a
  * message and a Retry button. A fresh ticket is minted per attempt.
  */
-export default function ExecTerminal({ server }) {
+export default function ExecTerminal({ server, apiBase = '/servers', grant }) {
   const wrapRef = useRef(null);
   const viewRef = useRef(null);
   const stateRef = useRef(null);
@@ -605,6 +605,7 @@ export default function ExecTerminal({ server }) {
           EXEC_OFFLINE: 'Server is offline — start it first.',
           EXEC_NO_CONTAINER: 'Server has no container yet.',
           EXEC_NO_ACCESS: 'Access denied.',
+          EXEC_SUSPENDED: 'This server is suspended — console access is blocked.',
           EXEC_LIMIT: 'Too many open consoles — close one first.',
         };
         fail(hints[code] ?? 'Console unavailable.');
@@ -627,7 +628,7 @@ export default function ExecTerminal({ server }) {
       const g = st.gen + 1;
       st.gen = g;
       setPh(st.attempts > 0 ? 'retrying' : 'connecting');
-      const socket = await connect({ serverId: server.id });
+      const socket = await connect({ serverId: server.id, ...(grant ? { grant } : {}) });
       if (!st.alive || st.ended || g !== st.gen) return;
       if (!socket) {
         // ticket fetch / auth failure (e.g. expired session): do not spin

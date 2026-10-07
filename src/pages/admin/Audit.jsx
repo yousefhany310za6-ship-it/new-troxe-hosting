@@ -23,7 +23,7 @@ export default function AdminAudit() {
             </div>
 
             <form onSubmit={submit} className="flex flex-wrap items-center gap-2">
-                <input value={action} onChange={(e) => setAction(e.target.value)} placeholder="Filter by action (e.g. admin.server)…" className="input-field w-72" />
+                <input value={action} onChange={(e) => { setAction(e.target.value); setPage(1); }} placeholder="Filter by action (e.g. admin.server)…" className="input-field w-72" />
                 <Select
                     ariaLabel="Filter by target type"
                     value={targetType}
@@ -45,6 +45,29 @@ export default function AdminAudit() {
                     {Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-11 rounded-lg" />)}
                 </div>
             )}
+            <div className="flex flex-wrap items-center gap-1.5">
+                {[
+                    ['admin.server', 'Server admin'],
+                    ['admin.user', 'User admin'],
+                    ['server.', 'Server activity'],
+                    ['auth.', 'Auth'],
+                ].map(([prefix, label]) => (
+                    <button
+                        key={prefix}
+                        type="button"
+                        onClick={() => { setAction(prefix); setQ(prefix); setPage(1); }}
+                        className={'rounded-full border px-3 py-1 text-[0.74rem] font-semibold transition ' + (q === prefix ? 'border-white bg-white text-black' : 'border-hairline text-ink-secondary hover:text-foreground')}
+                    >
+                        {label}
+                    </button>
+                ))}
+                {q && (
+                    <button type="button" onClick={() => { setAction(''); setQ(''); setPage(1); }} className="font-mono text-[0.74rem] text-ink-secondary hover:text-foreground">
+                        Clear
+                    </button>
+                )}
+            </div>
+
             {error && <p className="text-red-400">Failed to load: {error.message}</p>}
 
             {data && (

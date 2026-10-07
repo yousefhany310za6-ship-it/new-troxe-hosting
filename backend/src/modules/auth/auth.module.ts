@@ -6,6 +6,7 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './jwt.guard';
 import { WsTicketService } from './ws-ticket.service';
+import { AdminGrantService } from './admin-grant.service';
 import { WsAuthGuard } from './ws-auth.guard';
 import { AdminGuard } from './admin.guard';
 import { RealtimeGateway } from './realtime.gateway';
@@ -23,6 +24,7 @@ import { EmailModule } from '../email/email.module';
     AuthService,
     JwtAuthGuard,
     WsTicketService,
+    AdminGrantService,
     WsAuthGuard,
     AdminGuard,
     RealtimeGateway,
@@ -30,6 +32,6 @@ import { EmailModule } from '../email/email.module';
     EmailVerificationService,
     PasswordResetService,
   ],
-  exports: [AuthService, JwtAuthGuard, WsTicketService, AdminGuard, RealtimeGateway, OAuthService],
+  exports: [AuthService, JwtAuthGuard, WsTicketService, AdminGrantService, AdminGuard, RealtimeGateway, OAuthService],
 })
 export class AuthModule {}

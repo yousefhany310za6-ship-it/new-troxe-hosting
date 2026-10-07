@@ -1,9 +1,17 @@
 import { Injectable, Inject, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { and, desc, eq, gt, ilike, isNull, or, sql, count, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gt, ilike, inArray, isNull, or, sql, count, type SQL } from 'drizzle-orm';
 import { DB, Db } from '../../db/db.module';
 import { users, servers, plans, backups, auditLogs, sessions, authSessions } from '../../db/schema';
 import { ServersService } from '../servers/servers.service';
+import { runtimeImage } from '../servers/provisioning/images';
+import { FilesService } from '../servers/files.service';
+import { BackupsService } from '../servers/backups.service';
+import { ProvisionerService } from '../servers/provisioning/provisioner.service';
+import { ExecGateway } from '../servers/exec.gateway';
+import { RealtimeGateway } from '../auth/realtime.gateway';
+import { hashPassword } from '../../common/password';
+import { AdminGrantService } from '../auth/admin-grant.service';
 import { AuditService } from '../audit/audit.module';
 import { GeoIpService } from '../../common/geoip/geoip.service';
 import { config } from '../../config/env';
@@ -16,6 +24,7 @@ export interface AdminUserListParams {
   limit?: number;
   search?: string;
   role?: 'user' | 'admin';
+  status?: 'active' | 'suspended' | 'deleted';
   sortBy?: 'createdAt' | 'name' | 'email' | 'planId';
   sortOrder?: 'asc' | 'desc';
 }
@@ -46,6 +55,12 @@ export class AdminService {
   constructor(
     @Inject(DB) private db: Db,
     private serversSvc: ServersService,
+    private filesSvc: FilesService,
+    private backupsSvc: BackupsService,
+    private provisioner: ProvisionerService,
+    private execGateway: ExecGateway,
+    private realtime: RealtimeGateway,
+    private grants: AdminGrantService,
     private audit: AuditService,
     private jwt: JwtService,
     private geo: GeoIpService,
@@ -87,6 +102,7 @@ export class AdminService {
       limit = 20,
       search,
       role,
+      status,
       sortBy = 'createdAt',
       sortOrder = 'desc',
     } = params;
@@ -105,6 +121,9 @@ export class AdminService {
     if (role) {
       conditions.push(eq(users.role, role));
     }
+    if (status) {
+      conditions.push(eq(users.status, status));
+    }
 
     const whereClause = conditions.length ? and(...conditions) : undefined;
 
@@ -117,6 +136,7 @@ export class AdminService {
           role: users.role,
           planId: users.planId,
           avatarUrl: users.avatarUrl,
+          status: users.status,
           failedLogins: users.failedLogins,
           lockedUntil: users.lockedUntil,
           createdAt: users.createdAt,
@@ -165,6 +185,8 @@ export class AdminService {
         createdAt: users.createdAt,
         passwordChangedAt: users.passwordChangedAt,
         tokenVersion: users.tokenVersion,
+        status: users.status,
+        deletedAt: users.deletedAt,
       })
       .from(users)
       .where(eq(users.id, userId))
@@ -201,12 +223,47 @@ export class AdminService {
       return { ...s, location, countryCode: geo.countryCode };
     });
 
+    const ownedServers = await this.db
+      .select({ id: servers.id, volumeName: servers.volumeName, runtime: servers.runtime, nodeId: servers.nodeId })
+      .from(servers)
+      .where(eq(servers.ownerId, userId));
+    const ownedIds = ownedServers.map((r) => r.id);
+    let backupCount = 0;
+    let backupBytes = 0;
+    if (ownedIds.length) {
+      const b = await this.db
+        .select({ id: backups.id, sizeBytes: backups.sizeBytes })
+        .from(backups)
+        .where(inArray(backups.serverId, ownedIds));
+      backupCount = b.length;
+      backupBytes = b.reduce((a, r) => a + (r.sizeBytes ?? 0), 0);
+    }
+    // best-effort live volume sizes (a stuck daemon must not break the page)
+    let volumeBytes: number | null = 0;
+    for (const r of ownedServers) {
+      if (!r.volumeName) continue;
+      try {
+        const bytes = await this.provisioner.volumeUsage(r.volumeName, runtimeImage(r.runtime as never).image, r.nodeId);
+        if (bytes == null) {
+          volumeBytes = null;
+          break;
+        }
+        (volumeBytes as number) += bytes;
+      } catch {
+        volumeBytes = null;
+        break;
+      }
+    }
+
     return {
       ...user,
       serverCount: serverCount[0]?.count ?? 0,
       activeSessions: activeSessions[0]?.count ?? 0,
       country,
       recentLogins: logins,
+      backupCount,
+      backupBytes,
+      volumeBytes,
     };
   }
 
@@ -271,24 +328,161 @@ export class AdminService {
     return { ok: true };
   }
 
-  async deleteUser(userId: string, actorId: string, actorEmail?: string) {
+  /**
+   * Soft-delete a user (admin): the account is closed (status `deleted`,
+   * sessions revoked, servers stopped) but every row is retained for audit
+   * and possible restore. Nothing is cascade-deleted — unlike self-service
+   * deletion, which hard-purges by design. Never deletes the caller's self.
+   */
+  async deleteUser(userId: string, actorId: string, actorEmail?: string, ip?: string) {
     if (userId === actorId) throw new ForbiddenException('CANNOT_DELETE_SELF');
     const [user] = await this.db.select().from(users).where(eq(users.id, userId)).limit(1);
     if (!user) throw new NotFoundException('USER_NOT_FOUND');
+    if (user.status === 'deleted') return { ok: true };
 
-    // Delete all servers first (cascade will handle backups, etc.)
-    await this.serversSvc.purgeAllForUser(userId);
-
-    await this.db.delete(users).where(eq(users.id, userId));
+    await this.stopUserServers(userId);
+    await this.revokeUserSessions(userId);
+    await this.db
+      .update(users)
+      .set({ status: 'deleted', deletedAt: new Date() })
+      .where(eq(users.id, userId));
+    // drop live console sessions too: a deleted account keeps nothing running
+    this.execGateway.closeUserSessions(userId);
+    this.realtime.closeUserSockets(userId);
     await this.audit.record({
       actorId,
       actorEmail: actorEmail ?? null,
       action: 'admin.user.delete',
       targetType: 'user',
       targetId: userId,
+      ip,
+      meta: { email: user.email, soft: true },
+    });
+    return { ok: true };
+  }
+
+  /** Restore a soft-deleted user. Servers stay offline — the owner starts them. */
+  async restoreUser(userId: string, actorId: string, actorEmail?: string, ip?: string) {
+    const [user] = await this.db.select().from(users).where(eq(users.id, userId)).limit(1);
+    if (!user) throw new NotFoundException('USER_NOT_FOUND');
+    if (user.status !== 'deleted') throw Err.invalid('NOT_DELETED', 'Only deleted accounts can be restored');
+    await this.db
+      .update(users)
+      .set({ status: 'active', deletedAt: null })
+      .where(eq(users.id, userId));
+    await this.audit.record({
+      actorId,
+      actorEmail: actorEmail ?? null,
+      action: 'admin.user.restore',
+      targetType: 'user',
+      targetId: userId,
+      ip,
       meta: { email: user.email },
     });
     return { ok: true };
+  }
+
+  /**
+   * Suspend a user (admin): status flip + every session revoked (access JWTs
+   * die via tokenVersion, refresh families are deleted, live WS consoles are
+   * dropped) + running servers stopped. Login, OAuth, refresh and all
+   * protected APIs reject the account from this point on.
+   */
+  async suspendUser(userId: string, actorId: string, actorEmail?: string, reason?: string, ip?: string) {
+    if (userId === actorId) throw new ForbiddenException('CANNOT_SUSPEND_SELF');
+    const [user] = await this.db.select().from(users).where(eq(users.id, userId)).limit(1);
+    if (!user) throw new NotFoundException('USER_NOT_FOUND');
+    if (user.role === 'admin') throw new ForbiddenException('CANNOT_SUSPEND_ADMIN');
+    if (user.status === 'deleted') throw Err.invalid('ACCOUNT_DELETED', 'Account is deleted');
+    if (user.status === 'suspended') return { ok: true };
+
+    await this.stopUserServers(userId);
+    await this.revokeUserSessions(userId);
+    await this.db.update(users).set({ status: 'suspended' }).where(eq(users.id, userId));
+    this.execGateway.closeUserSessions(userId);
+    this.realtime.closeUserSockets(userId);
+    await this.audit.record({
+      actorId,
+      actorEmail: actorEmail ?? null,
+      action: 'admin.user.suspend',
+      targetType: 'user',
+      targetId: userId,
+      ip,
+      meta: { email: user.email, reason: reason?.slice(0, 300) ?? null },
+    });
+    return { ok: true };
+  }
+
+  async unsuspendUser(userId: string, actorId: string, actorEmail?: string, ip?: string) {
+    const [user] = await this.db.select().from(users).where(eq(users.id, userId)).limit(1);
+    if (!user) throw new NotFoundException('USER_NOT_FOUND');
+    if (user.status !== 'suspended') throw Err.invalid('NOT_SUSPENDED', 'Account is not suspended');
+    await this.db.update(users).set({ status: 'active' }).where(eq(users.id, userId));
+    await this.audit.record({
+      actorId,
+      actorEmail: actorEmail ?? null,
+      action: 'admin.user.unsuspend',
+      targetType: 'user',
+      targetId: userId,
+      ip,
+      meta: { email: user.email },
+    });
+    return { ok: true };
+  }
+
+  /**
+   * Admin password set: no current password needed (high-risk by nature —
+   * admin-only, throttled, audited without the password itself), same
+   * bcrypt+sha256 mechanism as signup, and every existing session is revoked
+   * so all of the user's devices sign out; they sign back in with the new one.
+   */
+  async setUserPassword(userId: string, password: string, actorId: string, actorEmail?: string, ip?: string) {
+    if (userId === actorId) throw new ForbiddenException('CANNOT_CHANGE_OWN_PASSWORD_HERE');
+    const [user] = await this.db.select().from(users).where(eq(users.id, userId)).limit(1);
+    if (!user) throw new NotFoundException('USER_NOT_FOUND');
+    if (user.status === 'deleted') throw Err.invalid('ACCOUNT_DELETED', 'Account is deleted');
+    await this.db
+      .update(users)
+      .set({ passwordHash: await hashPassword(password), passwordChangedAt: new Date() })
+      .where(eq(users.id, userId));
+    const revoked = await this.revokeUserSessions(userId);
+    await this.audit.record({
+      actorId,
+      actorEmail: actorEmail ?? null,
+      action: 'admin.user.password_change',
+      targetType: 'user',
+      targetId: userId,
+      ip,
+      meta: { email: user.email, sessionsRevoked: revoked },
+    });
+    return { ok: true, sessionsRevoked: revoked };
+  }
+
+  /** Kill every session of a user: bump tokenVersion (access JWTs die at once)
+   * and delete all refresh families. Returns the family count removed. */
+  private async revokeUserSessions(userId: string): Promise<number> {
+    await this.db
+      .update(users)
+      .set({ tokenVersion: sql`token_version + 1` })
+      .where(eq(users.id, userId));
+    const rows = await this.db.delete(authSessions).where(eq(authSessions.userId, userId)).returning({ id: authSessions.id });
+    return rows.length;
+  }
+
+  /** Best-effort stop of every running server of a user (data untouched). */
+  private async stopUserServers(userId: string): Promise<void> {
+    const rows = await this.db
+      .select({ id: servers.id, status: servers.status, containerId: servers.containerId })
+      .from(servers)
+      .where(eq(servers.ownerId, userId));
+    for (const r of rows) {
+      if (r.status !== 'online' && r.status !== 'restarting') continue;
+      try {
+        await this.serversSvc.lifecycle(userId, r.id, 'stop', { ip: 'admin', device: 'admin-panel' });
+      } catch {
+        /* one stuck server must not block the suspension */
+      }
+    }
   }
 
   async impersonateUser(userId: string, actorId: string) {
@@ -470,6 +664,120 @@ export class AdminService {
     });
     return result;
   }
+
+  /** Resolve a server with its real owner (throws 404 when missing). */
+  private async serverOwner(serverId: string): Promise<{ ownerId: string }> {
+    const server = await this.getServer(serverId);
+    if (!server.ownerId) throw new NotFoundException('SERVER_ORPHANED');
+    return { ownerId: server.ownerId };
+  }
+
+  /**
+   * Open Server (admin): issues a short-lived single-server grant for the
+   * /ws gateways and records the access. The grant authorizes a MANAGEMENT
+   * view of exactly this server — never the user's session, never login-as.
+   */
+  async openServer(serverId: string, actorId: string, actorEmail?: string, ip?: string) {
+    const { ownerId } = await this.serverOwner(serverId);
+    await this.audit.record({
+      actorId,
+      actorEmail: actorEmail ?? null,
+      action: 'admin.server.access',
+      targetType: 'server',
+      targetId: serverId,
+      ip,
+      meta: { ownerId },
+    });
+    return { grant: this.grants.mint(actorId, serverId) };
+  }
+
+  async suspendServer(serverId: string, actorId: string, reason?: string, ip?: string) {
+    const { ownerId } = await this.serverOwner(serverId);
+    // audited inside serversSvc.suspend as `admin.server.suspend`
+    return this.serversSvc.suspend(ownerId, serverId, { adminId: actorId, reason, ip });
+  }
+
+  async unsuspendServer(serverId: string, actorId: string, ip?: string) {
+    const { ownerId } = await this.serverOwner(serverId);
+    // audited inside serversSvc.unsuspend as `admin.server.unsuspend`
+    return this.serversSvc.unsuspend(ownerId, serverId, { adminId: actorId, ip });
+  }
+
+  // ---- read mirrors: admin view of a user's server (audited at open) --------
+  // Each resolves the REAL owner and delegates to the same service methods
+  // the owner UI uses, with the explicit `{ admin: true }` suspension bypass
+  // where the method supports it. No owner JWT is ever minted or reused.
+
+  private async readServer<T>(serverId: string, fn: (ownerId: string) => Promise<T>): Promise<T> {
+    const { ownerId } = await this.serverOwner(serverId);
+    return fn(ownerId);
+  }
+
+  adminServerStats(serverId: string) {
+    return this.readServer(serverId, (ownerId) => this.serversSvc.stats(ownerId, serverId).catch(() => null));
+  }
+
+  adminServerUsage(serverId: string) {
+    return this.readServer(serverId, (ownerId) => this.serversSvc.usage(ownerId, serverId).catch(() => null));
+  }
+
+  adminServerLogs(serverId: string, tail: number) {
+    return this.readServer(serverId, (ownerId) => this.serversSvc.logs(ownerId, serverId, tail));
+  }
+
+  adminServerEvents(serverId: string, limit: number) {
+    return this.readServer(serverId, (ownerId) => this.serversSvc.events(ownerId, serverId, limit));
+  }
+
+  adminServerActivity(serverId: string, page: number, limit: number) {
+    return this.readServer(serverId, (ownerId) => this.serversSvc.activity(ownerId, serverId, page, limit));
+  }
+
+  adminServerBackups(serverId: string) {
+    return this.readServer(serverId, (ownerId) => this.backupsSvc.list(ownerId, serverId));
+  }
+
+  adminServerBackupQuota(serverId: string) {
+    return this.readServer(serverId, (ownerId) => this.backupsSvc.quota(ownerId, serverId));
+  }
+
+  adminServerFiles(serverId: string, path?: string) {
+    return this.readServer(serverId, (ownerId) => this.filesSvc.list(ownerId, serverId, path, { admin: true }));
+  }
+
+  adminServerFileContent(serverId: string, path?: string) {
+    return this.readServer(serverId, (ownerId) => this.filesSvc.read(ownerId, serverId, path, { admin: true }));
+  }
+
+  adminServerFileDownload(serverId: string, path?: string) {
+    return this.readServer(serverId, (ownerId) => this.filesSvc.download(ownerId, serverId, path, { admin: true }));
+  }
+
+  async adminServerBackupCreate(serverId: string, actorId: string, actorEmail?: string, ip?: string) {
+    const { ownerId } = await this.serverOwner(serverId);
+    const result = await this.backupsSvc.create(ownerId, serverId, { type: 'manual' }, { ip: ip ?? 'admin', device: 'admin-panel' });
+    await this.audit.record({ actorId, actorEmail: actorEmail ?? null, action: 'admin.server.backup.create', targetType: 'server', targetId: serverId, ip });
+    return result;
+  }
+
+  async adminServerBackupDelete(serverId: string, backupId: string, actorId: string, actorEmail?: string, ip?: string) {
+    const { ownerId } = await this.serverOwner(serverId);
+    const result = await this.backupsSvc.remove(ownerId, serverId, backupId, { ip: ip ?? 'admin', device: 'admin-panel' });
+    await this.audit.record({ actorId, actorEmail: actorEmail ?? null, action: 'admin.server.backup.delete', targetType: 'server', targetId: serverId, ip, meta: { backupId } });
+    return result;
+  }
+
+  async adminServerBackupRestore(serverId: string, backupId: string, actorId: string, actorEmail?: string, ip?: string) {
+    const { ownerId } = await this.serverOwner(serverId);
+    const result = await this.backupsSvc.restore(ownerId, serverId, backupId, { ip: ip ?? 'admin', device: 'admin-panel' });
+    await this.audit.record({ actorId, actorEmail: actorEmail ?? null, action: 'admin.server.backup.restore', targetType: 'server', targetId: serverId, ip, meta: { backupId } });
+    return result;
+  }
+
+  // ---- file mirrors: admin file access is explicitly READ-ONLY for content
+  // listing/reading/downloading (management view, incl. suspended servers).
+  // Writes stay owner-only: an admin edit could silently corrupt user data,
+  // so there is deliberately no write mirror.
 
   async adminDeleteServer(serverId: string, actorId: string, actorEmail?: string) {
     const server = await this.getServer(serverId);

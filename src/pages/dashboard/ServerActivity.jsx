@@ -76,14 +76,14 @@ function describe(ev) {
  * Server activity trail: every recorded action on this server — who did it
  * (avatar + name), from which IP and country, and when.
  */
-export default function ServerActivity({ server }) {
+export default function ServerActivity({ server, apiBase = '/servers' }) {
   const [items, setItems] = useState(null);
 
   useEffect(() => {
     let alive = true;
     const load = async () => {
       try {
-        const res = await apiGet(`/servers/${server.id}/activity?limit=50`);
+        const res = await apiGet(`${apiBase}/${server.id}/activity?limit=50`);
         if (alive) setItems(Array.isArray(res?.data) ? res.data : []);
       } catch {
         if (alive) setItems((prev) => prev ?? []);

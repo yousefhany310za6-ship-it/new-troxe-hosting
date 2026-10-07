@@ -66,6 +66,38 @@ export function useAdminDeleteUser(id) {
   });
 }
 
+export function useAdminSetPassword(id) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (password) => apiPost(`/admin/users/${id}/password`, { password }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: adminKeys.user(id) }),
+  });
+}
+
+export function useAdminSuspendUser(id) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (reason) => apiPost(`/admin/users/${id}/suspend`, { reason }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: adminKeys.user(id) }); qc.invalidateQueries({ queryKey: ['admin', 'users'] }); },
+  });
+}
+
+export function useAdminUnsuspendUser(id) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiPost(`/admin/users/${id}/unsuspend`),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: adminKeys.user(id) }); qc.invalidateQueries({ queryKey: ['admin', 'users'] }); },
+  });
+}
+
+export function useAdminRestoreUser(id) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiPost(`/admin/users/${id}/restore`),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: adminKeys.user(id) }); qc.invalidateQueries({ queryKey: ['admin', 'users'] }); },
+  });
+}
+
 export function useAdminImpersonateUser(id) {
   const qc = useQueryClient();
   return useMutation({
@@ -113,6 +145,64 @@ export function useAdminDeleteServer() {
     mutationFn: (id) => apiDelete(`/admin/servers/${id}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'servers'] }),
   });
+}
+
+export function useAdminSuspendServer() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, reason }) => apiPost(`/admin/servers/${id}/suspend`, { reason }),
+    onSuccess: (_d, { id }) => { qc.invalidateQueries({ queryKey: adminKeys.server(id) }); qc.invalidateQueries({ queryKey: ['admin', 'servers'] }); },
+  });
+}
+
+export function useAdminUnsuspendServer() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id) => apiPost(`/admin/servers/${id}/unsuspend`),
+    onSuccess: (d, id) => { qc.invalidateQueries({ queryKey: adminKeys.server(typeof id === 'string' ? id : id.id) }); qc.invalidateQueries({ queryKey: ['admin', 'servers'] }); },
+  });
+}
+
+export function useAdminServerAccess(id) {
+  return useMutation({
+    mutationFn: () => apiPost(`/admin/servers/${id}/access`),
+  });
+}
+
+export function useAdminServerStats(id, enabled = true) {
+  return useQuery({ queryKey: [...adminKeys.server(id), 'stats'], queryFn: () => apiGet(`/admin/servers/${id}/stats`), enabled: !!id && enabled, refetchInterval: 8000 });
+}
+
+export function useAdminServerUsage(id, enabled = true) {
+  return useQuery({ queryKey: [...adminKeys.server(id), 'usage'], queryFn: () => apiGet(`/admin/servers/${id}/usage`), enabled: !!id && enabled, refetchInterval: 10000 });
+}
+
+export function useAdminServerLogs(id, enabled = true) {
+  return useQuery({ queryKey: [...adminKeys.server(id), 'logs'], queryFn: () => apiGet(`/admin/servers/${id}/logs?tail=200`), enabled: !!id && enabled, refetchInterval: 5000 });
+}
+
+export function useAdminServerBackups(id) {
+  return useQuery({ queryKey: [...adminKeys.server(id), 'backups'], queryFn: () => apiGet(`/admin/servers/${id}/backups`), enabled: !!id });
+}
+
+export function useAdminServerQuota(id) {
+  return useQuery({ queryKey: [...adminKeys.server(id), 'quota'], queryFn: () => apiGet(`/admin/servers/${id}/backups/quota`), enabled: !!id });
+}
+
+export function useAdminServerEvents(id) {
+  return useQuery({ queryKey: [...adminKeys.server(id), 'events'], queryFn: () => apiGet(`/admin/servers/${id}/events?limit=20`), enabled: !!id });
+}
+
+export function useAdminServerActivity(id) {
+  return useQuery({ queryKey: [...adminKeys.server(id), 'activity'], queryFn: () => apiGet(`/admin/servers/${id}/activity?limit=30`), enabled: !!id });
+}
+
+export function useAdminServerFiles(id, path) {
+  return useQuery({ queryKey: [...adminKeys.server(id), 'files', path || ''], queryFn: () => apiGet(`/admin/servers/${id}/files?path=${encodeURIComponent(path || '')}`), enabled: !!id });
+}
+
+export function useAdminServerFileContent(id, path) {
+  return useQuery({ queryKey: [...adminKeys.server(id), 'files', path || '', 'content'], queryFn: () => apiGet(`/admin/servers/${id}/files/content?path=${encodeURIComponent(path)}`), enabled: !!id && !!path });
 }
 
 // ---- nodes ----
