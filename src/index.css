@@ -324,3 +324,33 @@
         transform: translateY(0);
     }
 }
+
+
+/* ---- console window ---------------------------------------------------- */
+.troxe-log {
+    color: #d4d4d8;
+    scrollbar-width: thin;
+    scrollbar-color: #3f3f46 transparent;
+}
+.troxe-log::-webkit-scrollbar {
+    width: 8px;
+}
+.troxe-log::-webkit-scrollbar-thumb {
+    background: #3f3f46;
+    border-radius: 8px;
+}
+.troxe-log::-webkit-scrollbar-thumb:hover {
+    background: #52525b;
+}
+.troxe-log-line {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    unicode-bidi: plaintext;
+}
+.troxe-log-line:empty::after {
+    content: '\200b';
+}
+.troxe-log-line.lvl-error { color: #f87171; }
+.troxe-log-line.lvl-warn { color: #fbbf24; }
+.troxe-log-line.lvl-ok { color: #4ade80; }
+.troxe-log-line.lvl-sys { color: #7dd3fc; opacity: 0.85; }

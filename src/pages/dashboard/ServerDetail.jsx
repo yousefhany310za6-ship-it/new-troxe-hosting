@@ -24,7 +24,7 @@ import { RUNTIME_ICONS } from './Servers.jsx';
 import { ConfirmModal } from '@/components/ui/confirm-modal.jsx';
 import { Select } from '@/components/ui/select.jsx';
 import ServerFiles from './ServerFiles.jsx';
-import ExecTerminal from './ExecTerminal.jsx';
+import ExecTerminal, { ConsoleOffline } from './ExecTerminal.jsx';
 
 const TABS = [
     { id: 'overview', label: 'Overview', Icon: LayoutDashboard },
@@ -57,7 +57,6 @@ export default function ServerDetail() {
     const [restoreTarget, setRestoreTarget] = useState(null);
     const [deleteBackupTarget, setDeleteBackupTarget] = useState(null);
 
-    const logRef = useRef(null);
 
     const [name, setName] = useState('');
     const [startup, setStartup] = useState('');
@@ -102,8 +101,10 @@ export default function ServerDetail() {
         } catch { setBackups([]); }
     };
 
+    // Only used for the offline console view (the live console streams over
+    // its own socket). Works for stopped containers too: their output is kept.
     const fetchLogs = async () => {
-        if (!server?.containerId || status !== 'online') return;
+        if (!server?.containerId) return;
         try {
             const data = await apiGet(`/servers/${id}/logs?tail=200`);
             setLogs(data.logs ?? '');
@@ -124,7 +125,7 @@ export default function ServerDetail() {
             fetchStats();
             fetchUsage();
             fetchBackups();
-            if (tab === 'console' && status === 'online') fetchLogs();
+            if (tab === 'console' && status !== 'online') fetchLogs();
         }, 5000);
         return () => { alive = false; clearInterval(interval); };
     }, [server, tab, status]);
@@ -134,14 +135,8 @@ export default function ServerDetail() {
     }, [server]);
 
     useEffect(() => {
-        if (tab !== 'console' || status !== 'online') return;
-        const timer = setInterval(() => fetchLogs(), 3000);
-        return () => clearInterval(timer);
-    }, [tab, status, id]);
-
-    useEffect(() => {
-        if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-    }, [logs]);
+        if (tab === 'console' && status !== 'online') fetchLogs();
+    }, [tab, status, id, server?.containerId]);
 
     if (!server) {
         return (
@@ -359,31 +354,11 @@ export default function ServerDetail() {
             )}
 
             {tab === 'console' && (
-                <div className="overflow-hidden rounded-xl border border-hairline bg-card">
-                    <div className="flex items-center gap-2 border-b border-hairline px-5 py-3">
-                        <Terminal className="size-4 text-ink-muted" />
-                        <span className="font-mono text-[0.85rem] font-semibold">
-                            {online ? 'Interactive shell' : 'Live output'}
-                        </span>
-                        <span className={cn('ml-2 size-2 rounded-full', online ? 'animate-beat bg-emerald-500' : 'bg-zinc-600')} />
-                    </div>
-                    <div className="p-5">
-                        {online ? (
-                            <ExecTerminal key={server.id} server={server} />
-                        ) : (
-                            <>
-                                <div ref={logRef} className="flex h-[320px] flex-col gap-1.5 overflow-y-auto font-mono text-[0.8rem] leading-relaxed text-ink-secondary">
-                                    {logs
-                                        ? logs.split('\n').filter(Boolean).map((line, i) => (
-                                            <p key={i} className={cn(line.startsWith('$') && 'text-foreground')}>{line}</p>
-                                        ))
-                                        : <p className="text-ink-muted">{status === 'offline' ? 'Start the server to open an interactive shell.' : 'Waiting for the server to be ready…'}</p>
-                                    }
-                                </div>
-                            </>
-                        )}
-                    </div>
-                </div>
+                online ? (
+                    <ExecTerminal key={server.id} server={server} />
+                ) : (
+                    <ConsoleOffline server={server} status={status} logs={logs} onStart={start} />
+                )
             )}
 
             {tab === 'files' && <ServerFiles server={server} />}
