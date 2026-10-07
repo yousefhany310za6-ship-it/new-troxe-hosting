@@ -179,8 +179,8 @@ export default function ServerFiles({ server }) {
     const [dir, setDir] = useState([]);
     const dirPath = join(dir);
     const { data, isLoading, error, refetch, isFetching } = useServerFiles(server.id, dirPath);
-    const { data: fileData, isLoading: fileLoading, error: fileError } = useFileContent(server.id, editing);
     const [editing, setEditing] = useState(null);
+    const { data: fileData, isLoading: fileLoading, error: fileError } = useFileContent(server.id, editing);
     const [draft, setDraft] = useState('');
     const [sheet, setSheet] = useState(null);
     const [selected, setSelected] = useState([]);
@@ -538,7 +538,7 @@ export default function ServerFiles({ server }) {
                         ? <span className="shrink-0 rounded bg-amber-500/15 px-2 py-0.5 text-[0.68rem] font-bold uppercase tracking-wide text-amber-400">unsaved</span>
                         : <span className="hidden shrink-0 items-center gap-1 text-[0.7rem] text-ink-muted sm:inline-flex"><Check size={14} /> saved</span>}
                     <div className="ml-auto flex shrink-0 items-center gap-2">
-                        <button type="button" onClick={saveEdit} disabled={fileLoading || !!fileError || writeFile.isPending} className="btnPrimary">
+                        <button type="button" onClick={saveEdit} disabled={fileLoading || !!fileError || writeFile.isPending} className={btnPrimary}>
                             {writeFile.isPending ? 'Saving…' : 'Save'}
                         </button>
                     </div>
