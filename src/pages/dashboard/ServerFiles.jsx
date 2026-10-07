@@ -3,6 +3,9 @@ import {
     Archive,
     ArrowDownUp,
     ArrowLeft,
+    ChevronUp,
+    Eye,
+    Loader2,
     Maximize2,
     Minimize2,
     WrapText,
@@ -27,6 +30,7 @@ import {
 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
+import { apiDownload } from '@/lib/api.js';
 import { fileIcon } from '@/lib/fileIcons.js';
 import { useToast } from '@/hooks/useToast.jsx';
 import {
@@ -66,6 +70,42 @@ const UPLOAD_MAX = 1024 * 1024 * 1024; // 1 GB (streamed raw to the API)
 const ARCHIVE_RE = /\.(zip|tar\.gz|tgz|tar)$/i;
 const MEDIA_RE = /\.(png|jpe?g|gif|webp|ico|bmp|mp4|webm|mov|mp3|wav|ogg|pdf|woff2?|ttf|eot|exe|dll|so|bin|dat|db|sqlite|mpkg|dmg|iso)$/i;
 const DIR_FIRST = (a, b) => (a.type === 'dir' ? 0 : 1) - (b.type === 'dir' ? 0 : 1);
+
+const IMAGE_RE = /\.(png|jpe?g|gif|webp|ico|bmp|avif|apng)$/i;
+const VIDEO_RE = /\.(mp4|webm|mov)$/i;
+const AUDIO_RE = /\.(mp3|wav|ogg|m4a|flac)$/i;
+const PDF_RE = /\.pdf$/i;
+// single files can be previewed in-app (backend download cap is 8 MB)
+const PREVIEW_MAX = 8 * 1024 * 1024;
+
+/** 'image' | 'video' | 'audio' | 'pdf' | null */
+function previewKind(name) {
+    if (IMAGE_RE.test(name)) return 'image';
+    if (VIDEO_RE.test(name)) return 'video';
+    if (AUDIO_RE.test(name)) return 'audio';
+    if (PDF_RE.test(name)) return 'pdf';
+    return null;
+}
+const previewable = (entry) => entry?.type === 'file' && !!previewKind(entry.name) && (entry.size ?? 0) <= PREVIEW_MAX;
+
+const KIND_TILE = {
+    dir: 'text-sky-300 bg-sky-400/10',
+    image: 'text-emerald-300 bg-emerald-400/10',
+    video: 'text-violet-300 bg-violet-400/10',
+    audio: 'text-amber-300 bg-amber-400/10',
+    pdf: 'text-red-300 bg-red-400/10',
+    archive: 'text-yellow-300 bg-yellow-400/10',
+    code: 'text-blue-300 bg-blue-400/10',
+    text: 'text-ink-secondary bg-white/[0.06]',
+};
+function tileKind(entry) {
+    if (entry.type === 'dir') return 'dir';
+    const k = previewKind(entry.name);
+    if (k) return k;
+    if (ARCHIVE_RE.test(entry.name)) return 'archive';
+    if (/\.(js|jsx|ts|tsx|mjs|cjs|json|py|php|html?|css|md|ya?ml|xml|sql|java|c|cpp|h|rs|go|sh|toml|ini|env)$/i.test(entry.name)) return 'code';
+    return 'text';
+}
 
 const SORTS = [
     { value: 'name', label: 'Name' },
@@ -207,6 +247,10 @@ export default function ServerFiles({ server }) {
     const [dragActive, setDragActive] = useState(false);
     const [queue, setQueue] = useState([]);
     const [download, setDownload] = useState(null);
+    const [preview, setPreview] = useState(null); // { rel, name, kind, size }
+    const [previewUrl, setPreviewUrl] = useState(null);
+    const [previewLoading, setPreviewLoading] = useState(false);
+    const [previewError, setPreviewError] = useState('');
     const [wrap, setWrap] = useState(false);
     const [fullscreen, setFullscreen] = useState(false);
     const editorRef = useRef(null);
@@ -286,6 +330,33 @@ export default function ServerFiles({ server }) {
     const relOf = (name) => join([...dir, name]);
     const sheetVal = (sheet?.value ?? '').trim();
 
+    // ---- file preview (images / video / audio / pdf, via download blob) --------
+    useEffect(() => {
+        if (!preview) { setPreviewUrl(null); setPreviewError(''); return undefined; }
+        let alive = true;
+        const url = { current: null };
+        setPreviewLoading(true);
+        setPreviewError('');
+        apiDownload(`/servers/${server.id}/files/download?path=${encodeURIComponent(preview.rel)}`)
+            .then(({ blob }) => {
+                if (!alive) return;
+                url.current = URL.createObjectURL(blob);
+                setPreviewUrl(url.current);
+            })
+            .catch((e) => { if (alive) setPreviewError(e?.message || 'Preview failed'); })
+            .finally(() => { if (alive) setPreviewLoading(false); });
+        return () => {
+            alive = false;
+            if (url.current) URL.revokeObjectURL(url.current);
+        };
+    }, [preview, server.id]);
+    useEffect(() => {
+        if (!preview) return undefined;
+        const onKey = (e) => { if (e.key === 'Escape') setPreview(null); };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [preview]);
+
     // ---- filtering / sorting -------------------------------------------------
     const entries = useMemo(() => {
         const list = [...(data?.entries ?? [])];
@@ -317,8 +388,10 @@ export default function ServerFiles({ server }) {
 
     // ---- navigation / editor ---------------------------------------------------
     const openEntry = (entry) => {
+        if (selectOn && entry) { toggleSelect(entry.name); return; }
         const rel = relOf(entry.name);
         if (entry.type === 'dir') { setDir([...dir, entry.name]); setQuery(''); return; }
+        if (previewable(entry)) { setPreview({ rel, name: entry.name, kind: previewKind(entry.name), size: entry.size }); return; }
         if (!openable(entry)) { toast.info(notOpenableReason(entry)); return; }
         setEditing(rel);
         setDraft('');
@@ -434,6 +507,7 @@ export default function ServerFiles({ server }) {
     // ---- row actions ------------------------------------------------------------
     const rowMenuItems = (entry, isDir, isArch) => {
         const items = [['select', 'Select', Check, false]];
+        if (!isDir && previewable(entry)) items.push(['preview', 'Preview', Eye, false]);
         if (isDir) items.push(['open', 'Open', Folder, false]);
         else if (openable(entry)) items.push(['open', 'Open', Pencil, false]);
         if (isArch) items.push(['extract', 'Extract here', Archive, false]);
@@ -447,6 +521,7 @@ export default function ServerFiles({ server }) {
 
     const onMenu = (key, entry) => {
         if (key === 'select') enterSelect(entry.name);
+        else if (key === 'preview') { const rel = relOf(entry.name); setPreview({ rel, name: entry.name, kind: previewKind(entry.name), size: entry.size }); }
         else if (key === 'open') openEntry(entry);
         else if (key === 'download') onDownload(entry);
         else if (key === 'rename') setSheet({ type: 'rename', entry, value: entry.name });
@@ -697,6 +772,17 @@ export default function ServerFiles({ server }) {
                             <Home size={15} className="text-ink-secondary" />
                             <span className="hidden sm:inline">root</span>
                         </button>
+                        {dir.length > 0 && (
+                            <button
+                                type="button"
+                                onClick={() => { setDir(dir.slice(0, -1)); setQuery(''); }}
+                                aria-label="Go up one folder"
+                                title="Go up one folder"
+                                className="flex shrink-0 items-center rounded-md p-1.5 text-ink-secondary transition hover:bg-veil hover:text-foreground"
+                            >
+                                <ChevronUp size={15} />
+                            </button>
+                        )}
                         {dir.map((seg, i) => (
                             <span key={i} className="flex shrink-0 items-center gap-1">
                                 <ChevronRight size={14} className="text-ink-muted" />
@@ -885,12 +971,13 @@ export default function ServerFiles({ server }) {
 
                 {!isLoading && !error && entries.length > 0 && (
                     view === 'grid' ? (
-                        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+                        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4">
                             {entries.map((entry) => {
                                 const isDir = entry.type === 'dir';
                                 const isArch = entry.type === 'file' && ARCHIVE_RE.test(entry.name);
                                 const icon = !isDir ? fileIcon(entry.name, entry.type) : null;
                                 const checked = selected.includes(entry.name);
+                                const kind = tileKind(entry);
                                 return (
                                     <div
                                         key={entry.name}
@@ -900,13 +987,14 @@ export default function ServerFiles({ server }) {
                                             if (selectOn) { toggleSelect(entry.name); return; }
                                             if (isDir) openEntry(entry);
                                         }}
+                                        title={entry.name}
                                         className={cn(
-                                            'group relative flex flex-col gap-2 rounded-xl border p-3 transition select-none',
-                                            checked ? 'border-blue-400/50 bg-blue-500/10' : 'border-hairline/70 bg-white/[0.03] hover:border-hairline-hover hover:bg-white/[0.06]',
+                                            'group relative flex flex-col rounded-2xl border p-3.5 pt-2.5 transition select-none',
+                                            checked ? 'border-blue-400/50 bg-blue-500/10' : 'border-hairline/60 bg-white/[0.02] hover:border-hairline-hover hover:bg-white/[0.05]',
                                             (isDir || selectOn) && 'cursor-pointer',
                                         )}
                                     >
-                                        <div className="flex items-start justify-between gap-2">
+                                        <div className="flex items-center justify-between">
                                             <input
                                                 type="checkbox"
                                                 checked={checked}
@@ -914,11 +1002,11 @@ export default function ServerFiles({ server }) {
                                                 onClick={(e) => e.stopPropagation()}
                                                 aria-label={`Select ${entry.name}`}
                                                 className={cn(
-                                                    'size-4 shrink-0 cursor-pointer accent-white transition-opacity',
+                                                    'size-4 cursor-pointer accent-white transition-opacity',
                                                     selectOn || checked ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
                                                 )}
                                             />
-                                            <span onClick={(e) => e.stopPropagation()}>
+                                            <span onClick={(e) => e.stopPropagation()} className={cn(!(selectOn || checked) && 'opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity')}>
                                                 <RowMenu
                                                     label={`Actions for ${entry.name}`}
                                                     items={rowMenuItems(entry, isDir, isArch)}
@@ -927,24 +1015,26 @@ export default function ServerFiles({ server }) {
                                                 />
                                             </span>
                                         </div>
-                                        <button type="button" onClick={(e) => { e.stopPropagation(); if (wasLongPress()) return; if (selectOn) { toggleSelect(entry.name); return; } openEntry(entry); }} className="flex min-w-0 flex-1 flex-col items-center gap-2 text-center">
-                                            <span className="flex size-14 items-center justify-center rounded-xl bg-gradient-to-br from-white/10 to-white/[0.02]">
-                                                {isDir ? <Folder size={26} className="text-sky-300/90" /> : icon ? <img src={icon} alt="" aria-hidden="true" className="size-7" draggable={false} /> : <FileText size={22} className="text-ink-muted" />}
+                                        <button type="button" onClick={(e) => { e.stopPropagation(); if (wasLongPress()) return; if (selectOn) { toggleSelect(entry.name); return; } openEntry(entry); }} className="flex min-w-0 flex-1 flex-col items-center gap-2 pt-1 text-center">
+                                            <span className={cn('flex size-14 items-center justify-center rounded-2xl', KIND_TILE[kind])}>
+                                                {isDir ? <Folder size={26} /> : icon ? <img src={icon} alt="" aria-hidden="true" className="size-7" draggable={false} /> : <FileText size={22} />}
                                             </span>
                                             <span className="w-full truncate text-[0.82rem] font-semibold">{entry.name}</span>
-                                            <span className="font-mono text-[0.7rem] text-ink-muted">{isDir ? 'Folder' : fmtSize(entry.size)}</span>
+                                            <span className="font-mono text-[0.68rem] text-ink-muted">{isDir ? 'Folder' : fmtSize(entry.size)}</span>
                                         </button>
                                     </div>
                                 );
                             })}
                         </div>
-                    ) : (
-                        <div className="flex flex-col gap-1.5">
+                                        ) : (
+                        <div className="flex flex-col gap-1">
                             {entries.map((entry) => {
                                 const isDir = entry.type === 'dir';
                                 const isArch = entry.type === 'file' && ARCHIVE_RE.test(entry.name);
                                 const icon = !isDir ? fileIcon(entry.name, entry.type) : null;
                                 const checked = selected.includes(entry.name);
+                                const kind = tileKind(entry);
+                                const canPreview = !isDir && previewable(entry);
                                 return (
                                     <div
                                         key={entry.name}
@@ -955,8 +1045,8 @@ export default function ServerFiles({ server }) {
                                             if (isDir) openEntry(entry);
                                         }}
                                         className={cn(
-                                            'group flex items-center gap-3 rounded-xl border px-3 py-2.5 transition select-none',
-                                            checked ? 'border-blue-400/50 bg-blue-500/10' : 'border-hairline/70 bg-white/[0.03] hover:border-hairline-hover hover:bg-white/[0.06]',
+                                            'group flex items-center gap-3 rounded-xl border border-transparent px-2.5 py-2 transition select-none',
+                                            checked ? 'border-blue-400/50 bg-blue-500/10' : 'hover:border-hairline hover:bg-white/[0.04]',
                                             (isDir || selectOn) && 'cursor-pointer',
                                         )}
                                     >
@@ -967,24 +1057,39 @@ export default function ServerFiles({ server }) {
                                             onClick={(e) => e.stopPropagation()}
                                             aria-label={`Select ${entry.name}`}
                                             className={cn(
-                                                'size-5 shrink-0 cursor-pointer accent-white transition-opacity',
+                                                'size-[18px] shrink-0 cursor-pointer accent-white transition-opacity',
                                                 selectOn || checked ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
                                             )}
                                         />
-                                        <button type="button" onClick={(e) => { e.stopPropagation(); if (wasLongPress()) return; if (selectOn) { toggleSelect(entry.name); return; } openEntry(entry); }} onDoubleClick={() => openEntry(entry)} title={entry.type === 'dir' ? 'Open folder' : 'Open file'} className="flex min-w-0 flex-1 items-center gap-3 text-left">
-                                            <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-white/10 to-white/[0.02]">
-                                                {isDir ? <Folder size={20} className="text-sky-300/90" /> : icon ? <img src={icon} alt="" aria-hidden="true" className="size-5" draggable={false} /> : <FileText size={18} className="text-ink-muted" />}
+                                        <button
+                                            type="button"
+                                            onClick={(e) => { e.stopPropagation(); if (wasLongPress()) return; if (selectOn) { toggleSelect(entry.name); return; } openEntry(entry); }}
+                                            onDoubleClick={() => openEntry(entry)}
+                                            title={isDir ? 'Open folder' : canPreview ? 'Preview file' : 'Open file'}
+                                            className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                                        >
+                                            <span className={cn('flex size-9 shrink-0 items-center justify-center rounded-lg', KIND_TILE[kind])}>
+                                                {isDir ? <Folder size={18} /> : icon ? <img src={icon} alt="" aria-hidden="true" className="size-5" draggable={false} /> : <FileText size={17} />}
                                             </span>
                                             <span className="min-w-0 flex-1">
-                                                <span className="block truncate text-[0.9rem] font-semibold">{entry.name}</span>
-                                                <span className="mt-0.5 block font-mono text-[0.7rem] text-ink-muted sm:hidden">
-                                                    {isDir ? 'Folder' : fmtSize(entry.size)} · {fmtDate(entry.mtime)}
+                                                <span className="block truncate text-[0.88rem] font-medium">{entry.name}</span>
+                                                <span className="mt-0.5 block truncate font-mono text-[0.68rem] text-ink-muted">
+                                                    {isDir ? 'Folder' : (<>{fmtSize(entry.size)} <span className="mx-1 text-hairline">·</span> {fmtDate(entry.mtime)}</>)}
                                                 </span>
                                             </span>
                                         </button>
-                                        <span className="hidden w-32 shrink-0 whitespace-nowrap text-right font-mono text-[0.75rem] text-ink-muted md:block">{fmtDate(entry.mtime)}</span>
-                                        <span className="hidden w-24 shrink-0 whitespace-nowrap text-right font-mono text-[0.75rem] text-ink-muted sm:block">{isDir ? '—' : fmtSize(entry.size)}</span>
-                                        <span onClick={(e) => e.stopPropagation()}>
+                                        {canPreview && !selectOn && (
+                                            <button
+                                                type="button"
+                                                onClick={(e) => { e.stopPropagation(); const rel = relOf(entry.name); setPreview({ rel, name: entry.name, kind: previewKind(entry.name), size: entry.size }); }}
+                                                aria-label={`Preview ${entry.name}`}
+                                                title="Preview"
+                                                className="hidden size-8 shrink-0 items-center justify-center rounded-lg text-ink-muted opacity-0 transition group-hover:opacity-100 hover:bg-white/10 hover:text-foreground focus-visible:opacity-100 sm:inline-flex"
+                                            >
+                                                <Eye size={15} />
+                                            </button>
+                                        )}
+                                        <span onClick={(e) => e.stopPropagation()} className={cn('shrink-0', !(selectOn || checked) && 'opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity')}>
                                             <RowMenu
                                                 label={`Actions for ${entry.name}`}
                                                 items={rowMenuItems(entry, isDir, isArch)}
@@ -1038,6 +1143,68 @@ export default function ServerFiles({ server }) {
                     >
                         <RefreshCw size={16} className={cn(isFetching && 'animate-spin')} />
                     </button>
+                </div>
+            )}
+
+            {/* ============================ preview ============================ */}
+            {preview && (
+                <div className="fixed inset-0 z-[80] flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label={`Preview ${preview.name}`}>
+                    <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={() => setPreview(null)} />
+                    <div className="relative flex max-h-[90dvh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-hairline bg-card shadow-2xl">
+                        <div className="flex items-center gap-2.5 border-b border-hairline px-4 py-3">
+                            <span className={cn('flex size-8 shrink-0 items-center justify-center rounded-lg', KIND_TILE[tileKind({ type: 'file', name: preview.name })])}>
+                                <FileText size={16} />
+                            </span>
+                            <div className="min-w-0 flex-1 leading-tight">
+                                <p className="truncate text-[0.88rem] font-semibold">{preview.name}</p>
+                                <p className="font-mono text-[0.68rem] text-ink-muted">
+                                    {preview.kind} · {fmtSize(preview.size)}
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => { const entry = { name: preview.name }; onDownload(entry); }}
+                                disabled={!!download}
+                                className={btnSecondary}
+                            >
+                                <FileText size={15} /> <span className="hidden sm:inline">Download</span>
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setPreview(null)}
+                                aria-label="Close preview"
+                                className={btnIcon}
+                            >
+                                <X size={16} />
+                            </button>
+                        </div>
+                        <div className="flex min-h-[200px] items-center justify-center overflow-auto bg-black/40 p-4">
+                            {previewLoading && <Loader2 size={28} className="animate-spin text-ink-muted" />}
+                            {!previewLoading && previewError && (
+                                <div className="flex flex-col items-center gap-2 py-10 text-center">
+                                    <p className="text-[0.9rem] font-semibold text-red-400">Preview failed</p>
+                                    <p className="max-w-sm text-[0.8rem] text-ink-secondary">{previewError}</p>
+                                </div>
+                            )}
+                            {!previewLoading && !previewError && previewUrl && preview.kind === 'image' && (
+                                <img src={previewUrl} alt={preview.name} className="max-h-[65dvh] max-w-full rounded-lg object-contain" draggable={false} />
+                            )}
+                            {!previewLoading && !previewError && previewUrl && preview.kind === 'video' && (
+                                <video src={previewUrl} controls playsInline className="max-h-[65dvh] w-full rounded-lg bg-black" />
+                            )}
+                            {!previewLoading && !previewError && previewUrl && preview.kind === 'audio' && (
+                                <div className="flex w-full flex-col items-center gap-4 py-8">
+                                    <span className="flex size-16 items-center justify-center rounded-2xl bg-amber-400/10 text-amber-300">
+                                        <FileText size={28} />
+                                    </span>
+                                    <audio src={previewUrl} controls className="w-full max-w-md" />
+                                </div>
+                            )}
+                            {!previewLoading && !previewError && previewUrl && preview.kind === 'pdf' && (
+                                <iframe src={previewUrl} title={preview.name} className="h-[65dvh] w-full rounded-lg bg-white" />
+                            )}
+                        </div>
+                    </div>
                 </div>
             )}
 
