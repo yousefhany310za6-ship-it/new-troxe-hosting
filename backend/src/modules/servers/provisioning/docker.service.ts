@@ -727,6 +727,9 @@ export class DockerService {
     nodeId = 'local',
     deadlineMs = 60 * 60 * 1000,
   ): Promise<void> {
+    // a client that disconnects BEFORE the pipeline is attached would otherwise emit
+    // an unhandled 'error' (=> process-level uncaughtException => API exit)
+    source.on('error', () => undefined);
     const d = await this.pool.client(nodeId);
     await this.ensureImage(config.HELPER_IMAGE, 300_000, nodeId);
     let container: Container | null = null;
@@ -776,22 +779,40 @@ export class DockerService {
           }
           cb(null, c);
         },
+        // tar-stream does not treat a short entry as an error — enforce it here
+        flush(cb) {
+          if (received !== size) cb(new AppError('FILE_TRUNCATED', 400, `Upload ended after ${received} of ${size} bytes`));
+          else cb();
+        },
       });
       guard.on('error', () => undefined);
+      // Any failure on the feed side (client abort, size mismatch, tar error)
+      // must tear the daemon request down too: a half-written tar body would
+      // otherwise leave putArchive waiting forever. `feed` itself NEVER rejects
+      // (an unhandled rejection would exit the whole API process).
+      const ac = new AbortController();
+      let feedErr: Error | null = null;
       const feed = pipeline(source as any, guard, entry as any).catch((e: Error) => {
+        feedErr = e;
         pack.destroy(e);
-        throw e;
+        ac.abort();
       });
-      feed.catch(() => undefined); // surfaced through putArchive/await below
-      const put = withDeadline((container as any).putArchive(pack, { path: '/data' }), deadlineMs, 'file upload');
+      const put = withDeadline(
+        (container as any).putArchive(pack, { path: '/data', abortSignal: ac.signal }),
+        deadlineMs,
+        'file upload',
+      );
       try {
         await put;
       } catch (e) {
-        // prefer the root cause (client abort, size mismatch) over the daemon's echo
-        const cause = await feed.then(() => null, (fe: Error) => fe);
-        throw cause ?? e;
+        // deadline / daemon error: stop feeding, then prefer the root cause
+        ac.abort();
+        pack.destroy(e as Error);
+        await feed;
+        throw feedErr ?? e;
       }
       await feed;
+      if (feedErr) throw feedErr;
       if (received !== size) throw new AppError('FILE_TRUNCATED', 502, `upload sent ${received} of ${size} bytes`);
     } finally {
       if (container) await container.remove({ force: true }).catch(() => undefined);

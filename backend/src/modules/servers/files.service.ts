@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { randomBytes } from 'crypto';
 import { posix } from 'path';
 import { config } from '../../config/env';
 import { AppError, Err } from '../../common/errors';
@@ -169,6 +170,9 @@ export class FilesService {
     size: number,
     source: NodeJS.ReadableStream,
   ) {
+    // FIRST thing: a client abort during the (slow) helper prep below must never
+    // surface as an unhandled 'error' event on the request stream.
+    source.on('error', () => undefined);
     if (!Number.isSafeInteger(size) || size < 0)
       throw new AppError('LENGTH_REQUIRED', 411, 'Content-Length is required for uploads');
     if (size > FilesService.STREAM_UPLOAD_MAX)
@@ -190,7 +194,26 @@ export class FilesService {
       ].join('\n');
       const res = await this.helper(volume, script, { capture: true, timeoutMs: 60_000, nodeId });
       this.throwIfErr(res.out, res.code);
-      await this.docker.streamFileToVolume(volume, file, size, source, nodeId);
+      // Stream into a temp name next to the target, then rename into place only
+      // after the whole body arrived: a failed/aborted upload never leaves a
+      // truncated file, and an existing file is never half-overwritten.
+      const dir = posix.dirname(file);
+      const tmp = `${dir === '.' ? '' : `${dir}/`}.troxe-up-${randomBytes(8).toString('hex')}`;
+      const finish = (extra: string[]) =>
+        this.helper(
+          volume,
+          [`f=${this.q(`/data/${file}`)}; t=${this.q(`/data/${tmp}`)}`, ...extra].join('\n'),
+          { capture: true, timeoutMs: 60_000, nodeId },
+        );
+      try {
+        await this.docker.streamFileToVolume(volume, tmp, size, source, nodeId);
+      } catch (e) {
+        await finish([`rm -f "$t"`]).catch(() => undefined);
+        throw e;
+      }
+      // mv replaces a symlink itself instead of following it
+      const done = await finish([`mv -f "$t" "$f" || { rm -f "$t"; echo TROXE_ERR=WRITE; exit 5; }`]);
+      this.throwIfErr(done.out, done.code);
       return { path: file, size };
     } finally {
       release();
