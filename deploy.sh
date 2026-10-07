@@ -105,7 +105,7 @@ sed -i "s/admin@\${DOMAIN}/admin@$ROOT_DOMAIN/g" "$CADDYFILE"
 echo "🏗 Building frontend..."
 cd "$REPO_DIR"
 # Use the same digest-pinned base as backend/Dockerfile (audit-6)
-docker run --rm -v "$PWD:/app" -w /app node@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c \
+docker run --rm -e "VITE_API_URL=https://$API_DOMAIN/api/v1" -v "$PWD:/app" -w /app node@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c \
   sh -c "npm ci && npm run build"
 
 # Copy built assets to where Caddy expects them
@@ -158,6 +158,13 @@ for i in {1..30}; do
     exit 1
   fi
 done
+
+# ---------------------------------------------------------
+# 8b. Seed plans (idempotent upsert). users.plan_id has a FK to plans, so
+#     signup fails with "Database request could not be completed" on an empty table.
+# ---------------------------------------------------------
+echo "🌱 Seeding plans..."
+docker compose -f docker-compose.prod.yml exec -T api node dist/db/seed.js
 
 # ---------------------------------------------------------
 # 9. Verify schema (migrations run on API boot — see below)

@@ -41,12 +41,6 @@ api.{DOMAIN} {
         Referrer-Policy "strict-origin-when-cross-origin"
         -Server
     }
-    # Rate limiting on auth endpoints (8/min per IP shared)
-    @auth path /api/v1/auth/login /api/v1/auth/signup /api/v1/auth/refresh
-    rate_limit @auth {
-        zone auth_limit 10m
-        key {remote_host}
-        events 8
-        window 1m
-    }
+    # NOTE: auth rate limiting is enforced by the API (AUTH_RATE_LIMIT_MAX); the
+    # stock caddy image has no `rate_limit` directive.
 }
