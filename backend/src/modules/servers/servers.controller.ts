@@ -199,6 +199,25 @@ export class ServersController {
     return this.files.write(u.sub, id, dto.path, dto.content, dto.contentBase64);
   }
 
+  /**
+   * Raw-body streaming upload (up to 1 GB). Body = the file bytes
+   * (`Content-Type: application/octet-stream`, `Content-Length` required);
+   * target path in `?path=`. Not touched by the JSON body parser.
+   */
+  @Put(':id/files/upload')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @UseGuards(ServerOwnerGuard)
+  uploadFile(
+    @Param('id', ParseUuidPipe) id: string,
+    @CurrentUser() u: ReqUser,
+    @Query() q: FilesQuery,
+    @Req() req: Request,
+  ) {
+    const raw = req.headers['content-length'];
+    const size = raw === undefined || !/^\d+$/.test(raw) ? Number.NaN : Number(raw);
+    return this.files.uploadStream(u.sub, id, q.path, size, req);
+  }
+
   @Post(':id/files/mkdir')
   @HttpCode(200)
   @Throttle({ default: { limit: 30, ttl: 60_000 } })

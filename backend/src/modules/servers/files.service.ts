@@ -47,6 +47,8 @@ export class FilesService {
   static readonly READ_MAX = 512 * 1024;
   static readonly WRITE_MAX = 512 * 1024;
   static readonly UPLOAD_MAX = 2 * 1024 * 1024;
+  /** streaming (raw-body) upload ceiling: 1 GiB, never buffered in the API */
+  static readonly STREAM_UPLOAD_MAX = 1024 * 1024 * 1024;
   static readonly DOWNLOAD_MAX = 8 * 1024 * 1024;
   /** archive input / extraction output bounds (helper time + tarbomb safety) */
   static readonly ARCHIVE_MAX = 200 * 1024 * 1024;
@@ -149,6 +151,47 @@ export class FilesService {
       const res = await this.helper(volume, lines.join('\n'), { capture: true, timeoutMs: 60_000, nodeId });
       this.throwIfErr(res.out, res.code);
       return { path: file, size: buf.length };
+    } finally {
+      release();
+    }
+  }
+
+  /**
+   * Streaming upload of one file (raw request body, up to STREAM_UPLOAD_MAX).
+   * Path/ancestor-symlink validation and `mkdir -p` run in a helper first;
+   * the bytes then flow request → tar framing → daemon → volume with bounded
+   * memory. Holds the server lock like every other mutating file operation.
+   */
+  async uploadStream(
+    ownerId: string,
+    serverId: string,
+    rel: string | undefined,
+    size: number,
+    source: NodeJS.ReadableStream,
+  ) {
+    if (!Number.isSafeInteger(size) || size < 0)
+      throw new AppError('LENGTH_REQUIRED', 411, 'Content-Length is required for uploads');
+    if (size > FilesService.STREAM_UPLOAD_MAX)
+      throw new AppError('FILE_TOO_LARGE', 413, `File exceeds the ${FilesService.STREAM_UPLOAD_MAX / 1024 ** 3} GB upload limit`);
+    const release = await this.serversSvc.acquire(serverId);
+    try {
+      const { volume, nodeId } = await this.volumeOf(ownerId, serverId);
+      const file = this.sanitizeFile(rel ?? '');
+      const script = [
+        `f=${this.q(`/data/${file}`)}`,
+        `d=$(dirname "$f");`,
+        `c="$d"; while [ "$c" != /data ] && [ "$c" != / ] && [ "$c" != . ]; do`,
+        `  [ -L "$c" ] && { echo TROXE_ERR=ESCAPE; exit 4; }; c=$(dirname "$c");`,
+        `done;`,
+        `mkdir -p "$d" || { echo TROXE_ERR=WRITE; exit 5; }`,
+        `r=$(realpath "$d"); case "$r" in /data|/data/*) ;; *) echo TROXE_ERR=ESCAPE; exit 4;; esac`,
+        // extraction replaces whatever sits at the target: refuse to clobber a real directory
+        `if [ -d "$f" ] && [ ! -L "$f" ]; then echo TROXE_ERR=NOTFILE; exit 5; fi`,
+      ].join('\n');
+      const res = await this.helper(volume, script, { capture: true, timeoutMs: 60_000, nodeId });
+      this.throwIfErr(res.out, res.code);
+      await this.docker.streamFileToVolume(volume, file, size, source, nodeId);
+      return { path: file, size };
     } finally {
       release();
     }

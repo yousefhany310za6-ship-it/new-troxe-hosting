@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { apiGet, apiPost, apiPatch, apiPut, apiDelete, apiDownload, apiUploadJson } from '@/lib/api.js';
+import { apiGet, apiPost, apiPatch, apiPut, apiDelete, apiDownload, apiUploadRaw } from '@/lib/api.js';
 
 // Query keys
 export const keys = {
@@ -295,8 +295,9 @@ export async function downloadServerFile(id, path, { onProgress, signal } = {}) 
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
-export function uploadServerFile(id, path, contentBase64, { onProgress, signal } = {}) {
-  return apiUploadJson(`/servers/${id}/files/content`, { path, contentBase64 }, { onProgress, signal });
+// Streams the raw file (up to 1 GB) to the API — no base64, no memory copy.
+export function uploadServerFile(id, path, file, { onProgress, signal } = {}) {
+  return apiUploadRaw(`/servers/${id}/files/upload?path=${encodeURIComponent(path)}`, file, { onProgress, signal });
 }
 export function blobToBase64(blob) {
   return new Promise((resolve, reject) => {

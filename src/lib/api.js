@@ -158,14 +158,24 @@ function finishDownload(res, blob) {
 
 // JSON PUT over XHR — fetch has no upload-progress events. Used by the file
 // manager (base64 payloads). Retries once after a refresh on 401.
-export function apiUploadJson(path, body, { onProgress, signal } = {}) {
+export function apiUploadJson(path, body, opts = {}) {
+  return xhrUpload(path, 'application/json', JSON.stringify(body), opts);
+}
+
+// Raw-body PUT of a File/Blob (streamed by the browser from disk — never read
+// into memory, no base64). Used for large file-manager uploads.
+export function apiUploadRaw(path, file, opts = {}) {
+  return xhrUpload(path, 'application/octet-stream', file, opts);
+}
+
+function xhrUpload(path, contentType, payload, { onProgress, signal } = {}) {
   return new Promise((resolve, reject) => {
     let retried = false;
     const send = async () => {
       if (signal?.aborted) return reject(new ApiError(0, 'ABORTED', 'Upload cancelled.'));
       const xhr = new XMLHttpRequest();
       xhr.open('PUT', BASE + path);
-      xhr.setRequestHeader('Content-Type', 'application/json');
+      xhr.setRequestHeader('Content-Type', contentType);
       if (getAccessToken()) xhr.setRequestHeader('Authorization', `Bearer ${getAccessToken()}`);
       xhr.withCredentials = true;
       if (signal) signal.addEventListener('abort', () => xhr.abort(), { once: true });
@@ -197,7 +207,7 @@ export function apiUploadJson(path, body, { onProgress, signal } = {}) {
       };
       xhr.onerror = () => reject(new ApiError(0, 'NETWORK', 'Upload failed — check your connection.'));
       xhr.onabort = () => reject(new ApiError(0, 'ABORTED', 'Upload cancelled.'));
-      xhr.send(JSON.stringify(body));
+      xhr.send(payload);
     };
     send();
   });

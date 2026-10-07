@@ -4,6 +4,10 @@ import { createReadStream, createWriteStream } from 'fs';
 import { rm, stat } from 'fs/promises';
 import { PassThrough, Transform } from 'stream';
 import { pipeline } from 'stream/promises';
+// tar-stream ships (untyped) as a dockerode dependency; used to frame ONE file as a tar
+// stream so the daemon can extract it into the volume without buffering it in the API.
+// eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
+const tarStream: any = require('tar-stream');
 import { config } from '../../../config/env';
 import { NodePoolService } from '../../nodes/node-pool.service';
 import { AppError, Err } from '../../../common/errors';
@@ -696,6 +700,99 @@ export class DockerService {
       } as any);
       await withTimeout(container.start(), 15_000, 'stream holder start');
       await this.pipeToVolume(srcPath, container, '/data', maxBytes);
+    } finally {
+      if (container) await container.remove({ force: true }).catch(() => undefined);
+    }
+  }
+
+  /**
+   * Stream ONE file (exactly `size` bytes) from `source` into the volume at
+   * `/data/<relPath>` without ever holding it in memory or on the API host.
+   *
+   * The file is framed as a single-entry tar (owned by uid/gid 1000, the
+   * sandbox user) and handed to the daemon via putArchive. The daemon's
+   * extractor replaces an existing entry (a symlink is replaced, never
+   * followed) and resolves paths inside the short-lived holder container, so
+   * nothing can land outside the bound volume. The caller must have already
+   * validated the path and created the parent directories.
+   *
+   * Integrity: the tar entry declares `size`; any shortfall/excess (client
+   * abort, lying Content-Length) makes the archive invalid and the call fails.
+   */
+  async streamFileToVolume(
+    volumeName: string,
+    relPath: string,
+    size: number,
+    source: NodeJS.ReadableStream,
+    nodeId = 'local',
+    deadlineMs = 60 * 60 * 1000,
+  ): Promise<void> {
+    const d = await this.pool.client(nodeId);
+    await this.ensureImage(config.HELPER_IMAGE, 300_000, nodeId);
+    let container: Container | null = null;
+    try {
+      container = await d.createContainer({
+        Image: config.HELPER_IMAGE,
+        Entrypoint: ['/bin/sh', '-c'],
+        Cmd: ['sleep infinity'],
+        User: '0:0',
+        Labels: { 'troxe.helper': 'true' },
+        HostConfig: {
+          NetworkMode: 'none',
+          Binds: [`${volumeName}:/data`],
+          AutoRemove: false,
+          ReadonlyRootfs: false,
+          CapDrop: ['ALL'],
+          CapAdd: ['CHOWN', 'FOWNER', 'DAC_OVERRIDE', 'SETUID', 'SETGID'],
+          SecurityOpt: ['no-new-privileges:true'],
+          Memory: 256 * 1024 * 1024,
+          NanoCpus: 500_000_000,
+          PidsLimit: 32,
+          RestartPolicy: { Name: 'no' },
+          LogConfig: { Type: 'none', Config: {} },
+        },
+      } as any);
+      await withTimeout(container.start(), 15_000, 'upload holder start');
+
+      // never let a stream 'error' go unhandled: that would reach the
+      // process-level uncaughtException handler and take the API down.
+      const pack = tarStream.pack();
+      pack.on('error', () => undefined);
+      const entry = pack.entry(
+        { name: relPath, size, mode: 0o644, uid: 1000, gid: 1000, mtime: new Date(), type: 'file' },
+        (err?: Error) => {
+          if (err) pack.destroy(err);
+          else pack.finalize();
+        },
+      );
+      entry.on('error', (e: Error) => pack.destroy(e));
+      let received = 0;
+      const guard = new Transform({
+        transform(c: Buffer, _enc, cb) {
+          received += c.length;
+          if (received > size) {
+            cb(new AppError('FILE_TOO_LARGE', 413, 'Upload is larger than its declared Content-Length'));
+            return;
+          }
+          cb(null, c);
+        },
+      });
+      guard.on('error', () => undefined);
+      const feed = pipeline(source as any, guard, entry as any).catch((e: Error) => {
+        pack.destroy(e);
+        throw e;
+      });
+      feed.catch(() => undefined); // surfaced through putArchive/await below
+      const put = withDeadline((container as any).putArchive(pack, { path: '/data' }), deadlineMs, 'file upload');
+      try {
+        await put;
+      } catch (e) {
+        // prefer the root cause (client abort, size mismatch) over the daemon's echo
+        const cause = await feed.then(() => null, (fe: Error) => fe);
+        throw cause ?? e;
+      }
+      await feed;
+      if (received !== size) throw new AppError('FILE_TRUNCATED', 502, `upload sent ${received} of ${size} bytes`);
     } finally {
       if (container) await container.remove({ force: true }).catch(() => undefined);
     }

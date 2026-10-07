@@ -26,7 +26,6 @@ import { cn } from '@/lib/utils';
 import { fileIcon } from '@/lib/fileIcons.js';
 import { useToast } from '@/hooks/useToast.jsx';
 import {
-    blobToBase64,
     downloadServerFile,
     uploadServerFile,
     useArchiveFiles,
@@ -55,7 +54,7 @@ const menuItem =
     'flex w-full items-center gap-2 px-4 py-2 text-left text-[0.83rem] font-semibold text-ink-secondary transition hover:bg-veil hover:text-foreground disabled:opacity-40';
 
 const EDIT_MAX = 512 * 1024;
-const UPLOAD_MAX = 2 * 1024 * 1024;
+const UPLOAD_MAX = 1024 * 1024 * 1024; // 1 GB (streamed raw to the API)
 const ARCHIVE_RE = /\.(zip|tar\.gz|tgz|tar)$/i;
 const MEDIA_RE = /\.(png|jpe?g|gif|webp|ico|bmp|mp4|webm|mov|mp3|wav|ogg|pdf|woff2?|ttf|eot|exe|dll|so|bin|dat|db|sqlite|mpkg|dmg|iso)$/i;
 const DIR_FIRST = (a, b) => (a.type === 'dir' ? 0 : 1) - (b.type === 'dir' ? 0 : 1);
@@ -287,8 +286,7 @@ export default function ServerFiles({ server }) {
                 const ctrl = new AbortController();
                 patchItem(next.id, { status: 'uploading', ratio: 0, error: null, abort: () => ctrl.abort() });
                 try {
-                    const b64 = await blobToBase64(next.file);
-                    await uploadServerFile(server.id, relOf(next.name), b64, {
+                    await uploadServerFile(server.id, relOf(next.name), next.file, {
                         signal: ctrl.signal,
                         onProgress: (r) => patchItem(next.id, { ratio: r }),
                     });
@@ -315,7 +313,7 @@ export default function ServerFiles({ server }) {
     const enqueue = (files) => {
         const accepted = [];
         for (const f of files) {
-            if (f.size > UPLOAD_MAX) { toast.error(`${f.name} is larger than the 2 MB upload cap.`); continue; }
+            if (f.size > UPLOAD_MAX) { toast.error(`${f.name} is larger than the 1 GB upload cap.`); continue; }
             accepted.push({
                 id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
                 file: f,

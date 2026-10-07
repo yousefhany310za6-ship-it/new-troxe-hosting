@@ -59,7 +59,8 @@ async function bootstrap() {
 
   // file editor/upload payloads are JSON base64 (no multipart): raise the
   // default 100kb express limit once, and enforce tighter per-endpoint byte
-  // caps in FilesService (512KB text, 2MB binary, 8MB download).
+  // caps in FilesService (512KB text, 2MB base64 binary, 8MB download). Large
+  // uploads (up to 1GB) use the raw-body streaming route PUT /files/upload instead.
   app.use(json({ limit: '4mb' }));
   // HTML forms post urlencoded (the email-unsubscribe confirmation page):
   // parsed globally so ValidationPipe sees a body there too.
@@ -106,7 +107,10 @@ async function bootstrap() {
 
   app.enableShutdownHooks();
 
-  await app.listen(config.PORT, '0.0.0.0');
+  const server = await app.listen(config.PORT, '0.0.0.0');
+  // Node's default requestTimeout (5 min) would abort a 1 GB upload on a slow
+  // link. headersTimeout (60s) still guards slowloris on the header phase.
+  server.requestTimeout = 60 * 60 * 1000;
 
   const log = new Logger('Bootstrap');
   log.log(`troxe-api listening on :${config.PORT} (${config.NODE_ENV})`);
