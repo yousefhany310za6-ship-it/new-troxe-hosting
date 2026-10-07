@@ -13,11 +13,13 @@ import { config } from '../../config/env';
 import { WsTicketService } from '../auth/ws-ticket.service';
 import { AuditService } from '../audit/audit.module';
 import { ServersService } from './servers.service';
-import { DockerService, type ShellHandle } from './provisioning/docker.service';
+import { DockerService, startedAtToSince, type ShellHandle } from './provisioning/docker.service';
 
 const MAX_INPUT_BYTES = 4096;
-const IDLE_MS = 5 * 60 * 1000;
-const MAX_SESSION_MS = 30 * 60 * 1000;
+const IDLE_MS = 2 * 60 * 60 * 1000; // a quiet server is still being watched
+const MAX_SESSION_MS = 12 * 60 * 60 * 1000;
+/** lines of the current run replayed when a console connects */
+const LOG_TAIL = 500;
 const MAX_PER_USER = 3;
 // >600 input frames in 10s = paste-loop/flood, not a human
 const FLOOD_WINDOW_MS = 10_000;
@@ -61,7 +63,7 @@ interface ExecSession {
  *
  * Guardrails: owner-only, container must be online, 1 session per server,
  * 3 per user, 4KB input cap, 4MB/s + 64KB-frame output budget (paused, then
- * closed after 3s of sustained flood), 5min idle kill, 30min max life,
+ * closed after 3s of sustained flood), 2h idle kill, 12h max life,
  * open/close audited (content is never logged — keystrokes may carry secrets).
  */
 @WebSocketGateway({
@@ -132,7 +134,11 @@ export class ExecGateway implements OnGatewayConnection, OnGatewayDisconnect {
       }
       if ((this.perUser.get(userId) ?? 0) >= MAX_PER_USER) return fail('EXEC_LIMIT');
 
-      const shell = await this.docker.openShell(row.containerId, row.nodeId).catch(() => null);
+      // Output viewer: follow the container's logs for its CURRENT run only
+      // (a restart keeps the container, and with it every older run's logs).
+      const shell = await this.docker
+        .followLogs(row.containerId, row.nodeId, { tail: LOG_TAIL, since: startedAtToSince(state.startedAt) })
+        .catch(() => null);
       if (!shell) return fail('EXEC_FAILED');
 
       const session: ExecSession = {
@@ -152,6 +158,9 @@ export class ExecGateway implements OnGatewayConnection, OnGatewayDisconnect {
       this.bySocket.set(client.id, session);
       this.byServer.set(serverId, client.id);
       this.perUser.set(userId, (this.perUser.get(userId) ?? 0) + 1);
+
+      // 'ready' first: the client resets its view on it, so no log line may precede it
+      client.emit('ready', { serverId, readOnly });
 
       shell.onOutput((data) => {
         if (session.closed) return;
@@ -193,7 +202,6 @@ export class ExecGateway implements OnGatewayConnection, OnGatewayDisconnect {
         userAgent: 'ws-exec',
       }).catch(() => undefined);
 
-      client.emit('ready', { serverId, readOnly });
     } catch (e) {
       this.log.debug(`exec connect failed: ${(e as Error).message}`);
       fail('EXEC_DENIED');

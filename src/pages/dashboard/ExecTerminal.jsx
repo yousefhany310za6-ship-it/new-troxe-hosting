@@ -3,7 +3,6 @@ import {
   ArrowDown,
   Download,
   Eraser,
-  Lock,
   Maximize2,
   Minimize2,
   Play,
@@ -13,7 +12,6 @@ import {
 
 import { cn } from '@/lib/utils';
 import { useSocket } from '@/hooks/useWebSocket.jsx';
-import { apiGet } from '@/lib/api.js';
 
 const b64d = (b) =>
   new TextDecoder().decode(Uint8Array.from(atob(b), (c) => c.charCodeAt(0)));
@@ -24,6 +22,9 @@ const b64d = (b) =>
 const BUSY_RETRIES = 8;
 const BUSY_DELAY_MS = 3000;
 // Transport drops (mobile blips, sleep/wake): bounded backoff, then a button.
+// After the container stops (restart), wait this long for it to come back.
+const RESTART_WAIT_TRIES = 15;
+const RESTART_WAIT_MS = 2000;
 const DROP_RETRIES = 5;
 const dropDelay = (n) => Math.min(2000 * 2 ** n, 16000);
 
@@ -282,6 +283,8 @@ class LogView {
     this.line = null;
     this.span = null;
     this.overwrite = false;
+    this.stick = true;
+    this.onStick?.(true);
     this.onLines?.(0);
   }
 
@@ -351,9 +354,6 @@ function ConsoleFrame({ fullscreen, pill, actions, banner, footer, children }) {
           <h2 className="text-[0.85rem] font-semibold">Console</h2>
         </div>
         {pill}
-        <span className="hidden items-center gap-1 rounded-full border border-hairline bg-veil px-2 py-0.5 text-[0.7rem] font-semibold text-ink-secondary sm:inline-flex">
-          <Lock className="size-3" /> Read-only
-        </span>
         <div className="ml-auto flex items-center gap-0.5">{actions}</div>
       </header>
       {banner}
@@ -492,7 +492,6 @@ export default function ExecTerminal({ server }) {
   const stateRef = useRef(null);
   const [phase, setPhase] = useState('connecting'); // connecting | live | retrying | dead
   const [deadReason, setDeadReason] = useState('');
-  const [readOnly, setReadOnly] = useState(true); // updated from the ready event
   const [lineCount, setLineCount] = useState(0);
   const [atBottom, setAtBottom] = useState(true);
   const [fullscreen, setFullscreen] = useFullscreen();
@@ -507,6 +506,8 @@ export default function ExecTerminal({ server }) {
       socket: null,
       timer: null,
       attempts: 0,
+      waits: 0,
+      expectRestart: false,
       ended: false, // terminal exit / fatal error: never auto-retry
       phase: 'connecting',
       gen: 0, // connection generation: handlers from a superseded socket are ignored
@@ -547,12 +548,15 @@ export default function ExecTerminal({ server }) {
 
     const attach = (socket, g) => {
       st.socket = socket;
-      socket.on('ready', (data) => {
+      socket.on('ready', () => {
         if (!st.alive || g !== st.gen) return;
         st.attempts = 0;
-        const isReadOnly = data?.readOnly ?? true;
-        setReadOnly(isReadOnly);
-        view.writeln(`${ansi.green}●${ansi.reset} ${ansi.dim}Connected${isReadOnly ? ' (read-only)' : ''} — live output from ${server.name}${ansi.reset}`);
+        // every (re)connection replays the CURRENT run's tail: start from a clean view
+        // so a restarted server never shows its previous run's output
+        view.clear();
+        st.waits = 0;
+        st.expectRestart = false;
+        setDeadReason('');
         setPh('live');
       });
       socket.on('output', ({ data }) => {
@@ -561,13 +565,36 @@ export default function ExecTerminal({ server }) {
       });
       socket.on('exit', ({ code, reason }) => {
         if (!st.alive || g !== st.gen) return;
+        // the container stopped (restart / stop): wait for the next run instead of
+        // dying — the new run's logs replace this view as soon as it connects
+        if (reason === 'exit') {
+          st.waits = 0;
+          st.expectRestart = true;
+          schedule(2000, 'Server stopped — waiting for it to start…', g);
+          return;
+        }
+        // long-lived session expired server-side: just open a new one
+        if (reason === 'idle-timeout' || reason === 'max-time') {
+          schedule(800, 'Session expired — reconnecting…', g);
+          return;
+        }
         st.ended = true;
+        if (reason === 'replaced') {
+          setDeadReason('The console was opened in another tab.');
+        } else {
+          setDeadReason('Session ended.');
+        }
         note(`Session ended (${reason ?? 'closed'}${code !== null && code !== undefined ? `, code ${code}` : ''}).`);
-        setDeadReason('session ended');
         setPh('dead');
       });
       socket.on('exec-error', ({ code }) => {
         if (!st.alive || st.ended || g !== st.gen) return;
+        // right after a stop the container is briefly not running: keep waiting
+        if (code === 'EXEC_OFFLINE' && st.expectRestart && st.waits < RESTART_WAIT_TRIES) {
+          st.waits += 1;
+          schedule(RESTART_WAIT_MS, 'Waiting for the server to start…', g);
+          return;
+        }
         if (code === 'EXEC_BUSY' && st.attempts < BUSY_RETRIES) {
           st.attempts += 1;
           schedule(BUSY_DELAY_MS, `Console busy — retrying (${st.attempts}/${BUSY_RETRIES})…`, g);
@@ -623,20 +650,6 @@ export default function ExecTerminal({ server }) {
     };
 
     (async () => {
-      view.writeln(`${ansi.dim}Connecting to ${server.name}…${ansi.reset}`);
-
-      // recent logs as scrollback so the console never opens empty
-      try {
-        const logs = await apiGet(`/servers/${server.id}/logs?tail=200`);
-        if (!st.alive) return;
-        const lines = String(logs?.logs ?? '').split('\n').filter(Boolean).slice(-200);
-        if (lines.length) {
-          view.writeln(`${ansi.dim}── last ${lines.length} lines ──${ansi.reset}`);
-          for (const line of lines) view.writeln(line.slice(0, 2000));
-          view.writeln(`${ansi.dim}── live ──${ansi.reset}`);
-        }
-      } catch { /* offline or no logs — the console will say why */ }
-
       if (!st.alive) return;
       await openSocket();
     })();
@@ -715,7 +728,6 @@ export default function ExecTerminal({ server }) {
         <>
           <span>/data@{server.name}</span>
           {lineCount > 0 && <span>{lineCount.toLocaleString()} lines</span>}
-          <span className="ml-auto hidden sm:inline">{readOnly ? 'Read-only output' : 'Interactive'}</span>
         </>
       }
     >
@@ -724,6 +736,11 @@ export default function ExecTerminal({ server }) {
         className="troxe-log absolute inset-0 overflow-y-auto px-4 py-3 text-[0.78rem] leading-[1.5] sm:text-[0.8rem]"
         style={{ fontFamily: FONT_STACK }}
       />
+      {lineCount === 0 && phase === 'live' && (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-6 text-center text-[0.8rem] text-ink-muted">
+          No output yet — new lines will appear here.
+        </div>
+      )}
       {!atBottom && (
         <button
           type="button"

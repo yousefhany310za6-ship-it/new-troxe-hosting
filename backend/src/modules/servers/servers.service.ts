@@ -8,7 +8,7 @@ import { ReqCtx } from '../../common/request-context';
 import { DB, Db } from '../../db/db.module';
 import { plans, servers, serverEvents, users, type EnvVar, type Server } from '../../db/schema';
 import { AuditService } from '../audit/audit.module';
-import { DockerService } from './provisioning/docker.service';
+import { DockerService, startedAtToSince } from './provisioning/docker.service';
 import { ProvisionerService, type ProvisionResult } from './provisioning/provisioner.service';
 import { RUNTIMES, runtimeImage, type Runtime, applyTemplate, labelFor, resolveEggEnv, resolveVersion } from './provisioning/images';
 import { NodesService } from '../nodes/nodes.service';
@@ -589,7 +589,9 @@ export class ServersService {
   async logs(ownerId: string, id: string, tail = 200) {
     const row = await this.requireOwned(ownerId, id);
     if (!row.containerId) return { logs: '' };
-    return { logs: await this.docker.logs(row.containerId, tail, row.nodeId) };
+    // current run only: a restart keeps the container (and its old log history)
+    const state = await this.docker.inspect(row.containerId, row.nodeId).catch(() => null);
+    return { logs: await this.docker.logs(row.containerId, tail, row.nodeId, startedAtToSince(state?.startedAt)) };
   }
 
   async usage(ownerId: string, id: string) {

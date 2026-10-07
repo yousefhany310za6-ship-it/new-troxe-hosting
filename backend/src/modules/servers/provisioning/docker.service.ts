@@ -100,6 +100,19 @@ export interface ShellHandle {
 
 const isStatus = (e: unknown, code: number) => (e as { statusCode?: number })?.statusCode === code;
 
+/**
+ * Docker `since` value (unix seconds, ms precision) for the container's CURRENT
+ * run — i.e. since its last (re)start. A restart keeps the same container, and
+ * `docker logs` keeps every previous run, so without this filter a restarted
+ * server would show its whole history. undefined = never started / unparsable.
+ */
+export function startedAtToSince(startedAt: string | undefined | null): number | undefined {
+  if (!startedAt) return undefined;
+  const ms = Date.parse(startedAt);
+  if (!Number.isFinite(ms) || ms <= 0) return undefined; // "0001-01-01…" = never started
+  return Math.floor(ms) / 1000;
+}
+
 /** Docker frames logs as `type(1) | zero(3) | len(4 BE) | payload`. */
 export function decodeDockerLogs(buf: Buffer): string {
   const chunks: string[] = [];
@@ -529,12 +542,18 @@ export class DockerService {
     }
   }
 
-  async logs(id: string, tail = 200, nodeId = 'local'): Promise<string> {
+  async logs(id: string, tail = 200, nodeId = 'local', since?: number): Promise<string> {
     const d = await this.cx(nodeId).catch(() => null);
     if (!d) return '';
     try {
       const buf: Buffer = await withTimeout(
-        d.getContainer(id).logs({ stdout: true, stderr: true, tail: Math.min(Math.max(tail || 200, 1), 2000), timestamps: false }),
+        d.getContainer(id).logs({
+          stdout: true,
+          stderr: true,
+          tail: Math.min(Math.max(tail || 200, 1), 2000),
+          timestamps: false,
+          ...(since ? { since } : {}),
+        }),
         10_000,
         'container logs',
       );
@@ -880,6 +899,86 @@ export class DockerService {
   }
 
   // ---- interactive shells (exec gateway) --------------------------------------
+
+  /**
+   * Follow a container's output (`docker logs -f`) as a read-only stream:
+   * the last `tail` lines since `since`, then everything new. Returns the same
+   * handle shape as openShell so the exec gateway can drive either.
+   * Output produced before the first onOutput() listener is buffered, so the
+   * caller can announce the session before any data flows.
+   */
+  async followLogs(
+    containerId: string,
+    nodeId = 'local',
+    opts: { tail?: number; since?: number } = {},
+  ): Promise<ShellHandle> {
+    const container = (await this.cx(nodeId)).getContainer(containerId);
+    const info: any = await withTimeout(container.inspect(), 10_000, 'container inspect');
+    const tty = !!info?.Config?.Tty;
+    const raw = (await withTimeout(
+      container.logs({
+        follow: true,
+        stdout: true,
+        stderr: true,
+        timestamps: false,
+        tail: Math.min(Math.max(opts.tail ?? 200, 0), 2000),
+        ...(opts.since ? { since: opts.since } : {}),
+      }) as unknown as Promise<NodeJS.ReadableStream>,
+      15_000,
+      'follow logs',
+    )) as NodeJS.ReadableStream & { destroy?: () => void };
+
+    const outCbs: Array<(data: Buffer) => void> = [];
+    const endCbs: Array<(code: number | null) => void> = [];
+    let pending: Buffer[] | null = [];
+    let ended = false;
+    const emit = (d: Buffer | string) => {
+      const buf = Buffer.isBuffer(d) ? d : Buffer.from(d);
+      if (!outCbs.length) pending?.push(buf);
+      else for (const cb of outCbs) cb(buf);
+    };
+    if (tty) {
+      raw.on('data', emit);
+    } else {
+      // non-TTY containers multiplex stdout/stderr into framed chunks
+      const out = new PassThrough();
+      const err = new PassThrough();
+      out.on('data', emit);
+      err.on('data', emit);
+      out.on('error', () => undefined);
+      err.on('error', () => undefined);
+      (container as any).modem.demuxStream(raw, out, err);
+    }
+    const finish = () => {
+      if (ended) return;
+      ended = true;
+      for (const cb of endCbs) cb(null);
+    };
+    raw.on('end', finish);
+    raw.on('close', finish);
+    raw.on('error', finish);
+    return {
+      write: () => false,
+      resize: async () => undefined,
+      onOutput: (cb) => {
+        outCbs.push(cb);
+        if (pending) {
+          const queued = pending;
+          pending = null;
+          for (const b of queued) cb(b);
+        }
+      },
+      onEnd: (cb) => void endCbs.push(cb),
+      close: () => {
+        try {
+          raw.destroy?.();
+        } catch {
+          /* already gone */
+        }
+        finish();
+      },
+    };
+  }
 
   /**
    * Opens `/bin/sh` in a RUNNING container with a pty. Caller must verify

@@ -150,6 +150,7 @@ export default function ServerDetail() {
     const online = status === 'online';
 
     const start = async () => {
+        setLogs('');
         setStatus('restarting');
         try {
             await apiPost(`/servers/${id}/start`);
@@ -167,6 +168,7 @@ export default function ServerDetail() {
         }
     };
     const restart = async () => {
+        setLogs('');
         setStatus('restarting');
         try {
             await apiPost(`/servers/${id}/restart`);
