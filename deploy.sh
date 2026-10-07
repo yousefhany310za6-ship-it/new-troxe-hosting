@@ -145,6 +145,11 @@ export SOCK_GID
 
 docker compose -f docker-compose.prod.yml up -d --build --remove-orphans
 
+# Caddyfile is a single-file bind mount; git reset / sed -i replace the file
+# (new inode), so a running Caddy can keep serving the OLD config. Restart so
+# it always re-reads the current one (~1s blip).
+docker restart troxe-caddy >/dev/null
+
 # ---------------------------------------------------------
 # 8. Wait for API health
 # ---------------------------------------------------------
