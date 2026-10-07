@@ -181,57 +181,18 @@ export class BackupsService {
     );
 
     try {
-      // local: tar straight into the archive dir via a host bind (fast path,
-      // unchanged). remote: a host bind would resolve on the NODE's host —
-      // stream the volume tar to the API host instead.
-      if (server.nodeId === 'local') {
-        await this.docker.ensureImage(config.HELPER_IMAGE, 300_000, server.nodeId);
-        // `ulimit -f` is measured in 512-byte blocks in the helper's /bin/sh
-        // (verified against the pinned image), so the archive physically
-        // cannot grow past the ceiling: tar dies with SIGXFSZ (153) / EFBIG
-        // and we surface that as ARCHIVE_TOO_LARGE instead of a generic error.
-        const limitBytes = Math.max(512, Math.floor(archiveCapBytes / 512) * 512);
-        const blocks = limitBytes / 512;
-        const tarCmd =
-          `ulimit -f ${blocks} || exit 9\n` +
-          `tar -czf /backup/${id}.tar.gz -C /data . 2>/tmp/err\n` +
-          `rc=$?\n` +
-          `if [ $rc -ne 0 ]; then\n` +
-          `  cat /tmp/err >&2\n` +
-          `  sz=$(stat -c %s /backup/${id}.tar.gz 2>/dev/null || echo 0)\n` +
-          `  if [ $rc -eq 153 ] || grep -q "File too large" /tmp/err || [ "$sz" -ge ${limitBytes} ]; then\n` +
-          `    echo ARCHIVE_TOO_LARGE >&2\n` +
-          `    exit 413\n` +
-          `  fi\n` +
-          `  exit $rc\n` +
-          `fi`;
-        const res = await this.docker.runHelper({
-          image: config.HELPER_IMAGE,
-          cmd: [tarCmd],
-          binds: [`${server.volumeName}:/data:ro`, `${dir}:/backup`],
-          user: '0:0',
-          timeoutMs: 120_000,
-          memoryMb: 512,
-          captureLogs: true, // failure diagnostics come from out
-          nodeId: server.nodeId,
-        });
-        if (res.code !== 0) {
-          if (res.out.includes('ARCHIVE_TOO_LARGE'))
-            throw new AppError(
-              'ARCHIVE_TOO_LARGE',
-              413,
-              `This backup exceeds the ${config.BACKUP_MAX_MB} MB archive limit. Free space on the server first.`,
-            );
-          throw new Error(res.out.slice(0, 300) || `tar exited ${res.code}`);
-        }
-      } else {
-        if (!server.volumeName) throw new AppError('BACKUP_FAILED', 502, 'Backup failed');
-        await this.docker.streamVolumeToHost(server.volumeName, `${file}.streaming`, server.nodeId, archiveCapBytes);
-        // normalize: getArchive yields a plain tar; recompress to the .tar.gz
-        // shape the rest of the pipeline (restore/download) expects.
-        await gzipFile(`${file}.streaming`, file);
-        await rm(`${file}.streaming`, { force: true }).catch(() => undefined);
-      }
+      // One path for every node: stream the volume's tar to the API host and
+      // gzip it there. (The old local fast-path bound the API container's
+      // backup dir into a helper — but bind sources resolve on the DOCKER
+      // HOST, not in the API container, so tar wrote to a host directory the
+      // API could never see and every local backup failed with ENOENT on
+      // stat. Streaming uses only volume names, which are daemon-global.)
+      if (!server.volumeName) throw new AppError('BACKUP_FAILED', 502, 'Backup failed');
+      await this.docker.streamVolumeToHost(server.volumeName, `${file}.streaming`, server.nodeId, archiveCapBytes);
+      // normalize: getArchive yields a plain tar; recompress to the .tar.gz
+      // shape the rest of the pipeline (restore/download) expects.
+      await gzipFile(`${file}.streaming`, file);
+      await rm(`${file}.streaming`, { force: true }).catch(() => undefined);
 
       const size = (await stat(file)).size;
       await this.db.update(backups).set({ sizeBytes: size, status: 'ready' }).where(eq(backups.id, id));
