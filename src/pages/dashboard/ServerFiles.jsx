@@ -1,7 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import {
     Archive,
     ArrowDownUp,
+    ArrowLeft,
+    Maximize2,
+    Minimize2,
+    WrapText,
     Check,
     ChevronRight,
     FilePlus,
@@ -40,6 +44,10 @@ import {
 import { Sheet } from '@/components/ui/sheet.jsx';
 import { Select } from '@/components/ui/select.jsx';
 import { Skeleton } from '@/components/ui/field.jsx';
+
+// CodeMirror + language packs load only when a file is opened
+const CodeEditor = lazy(() => import('./CodeEditor.jsx'));
+import { languageFor } from './CodeEditor.jsx';
 
 // Modern controls: soft pills, normal-case labels.
 const btnSecondary =
@@ -190,6 +198,9 @@ export default function ServerFiles({ server }) {
     const [dragActive, setDragActive] = useState(false);
     const [queue, setQueue] = useState([]);
     const [download, setDownload] = useState(null);
+    const [wrap, setWrap] = useState(false);
+    const [fullscreen, setFullscreen] = useState(false);
+    const editorRef = useRef(null);
 
     const uploadRef = useRef(null);
     const toast = useToast();
@@ -202,11 +213,35 @@ export default function ServerFiles({ server }) {
     const archive = useArchiveFiles(server.id);
     const extract = useExtractFiles(server.id);
 
+    // Only sync the draft when a *different* file finishes loading: background
+    // refetches must never wipe unsaved edits.
+    const loadedRef = useRef(null);
     useEffect(() => {
-        if (fileData) setDraft(fileData.content ?? '');
-    }, [fileData]);
+        if (fileData && loadedRef.current !== editing) {
+            loadedRef.current = editing;
+            setDraft(fileData.content ?? '');
+        }
+        if (!editing) loadedRef.current = null;
+    }, [fileData, editing]);
 
     useEffect(() => { setSelected([]); }, [dirPath]);
+
+    const dirty = !!editing && !!fileData && draft !== (fileData.content ?? '');
+    useEffect(() => {
+        if (!dirty) return undefined;
+        const warn = (e) => { e.preventDefault(); e.returnValue = ''; };
+        window.addEventListener('beforeunload', warn);
+        return () => window.removeEventListener('beforeunload', warn);
+    }, [dirty]);
+    useEffect(() => {
+        if (!fullscreen) return undefined;
+        const onKey = (e) => { if (e.key === 'Escape' && !document.querySelector('.cm-search')) setFullscreen(false); };
+        const prev = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+        window.addEventListener('keydown', onKey);
+        return () => { document.body.style.overflow = prev; window.removeEventListener('keydown', onKey); };
+    }, [fullscreen]);
+    useEffect(() => { if (!editing) setFullscreen(false); }, [editing]);
 
     const fail = (e) => toast.error(e.message);
     const busy = writeFile.isPending || remove.isPending || rename.isPending || archive.isPending || extract.isPending || mkdir.isPending;
@@ -238,6 +273,8 @@ export default function ServerFiles({ server }) {
         const list = data?.entries ?? [];
         return {
             count: list.length,
+            dirs: list.filter((e) => e.type === 'dir').length,
+            files: list.filter((e) => e.type !== 'dir').length,
             bytes: list.reduce((acc, e) => acc + (e.type === 'file' ? e.size ?? 0 : 0), 0),
         };
     }, [data]);
@@ -522,55 +559,80 @@ export default function ServerFiles({ server }) {
 
     // ---- full-page editor takeover ------------------------------------------------
     if (editing) {
-        const dirty = !!fileData && draft !== (fileData.content ?? '');
         const icon = fileIcon(editing.split('/').pop(), 'file');
+        const lang = languageFor(editing.split('/').pop());
         return (
-            <div className="flex min-h-[70vh] flex-col overflow-hidden rounded-lg border border-hairline bg-[#0d1117]">
-                <div className="flex items-center gap-2 border-b border-hairline bg-black/30 px-4 py-2.5 sm:px-5">
-                    <button type="button" onClick={closeEditor} aria-label="Back to files" className="inline-flex min-h-11 shrink-0 items-center gap-1 text-[0.85rem] font-semibold text-ink-secondary transition hover:text-foreground sm:min-h-0">
-                        <Pencil size={16} />
+            <div className={fullscreen ? 'fixed inset-0 z-[70] flex flex-col bg-[#0a0a0d]' : 'flex min-h-[70vh] flex-col overflow-hidden rounded-2xl border border-hairline bg-[#0a0a0d]'}>
+                <div className="flex items-center gap-2 border-b border-hairline bg-card px-3 py-2.5 sm:px-4">
+                    <button type="button" onClick={closeEditor} aria-label="Back to files" title="Back to files" className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg text-ink-secondary transition hover:bg-white/10 hover:text-foreground">
+                        <ArrowLeft size={17} />
                     </button>
                     {icon ? <img src={icon} alt="" aria-hidden="true" className="size-5 shrink-0" draggable={false} /> : null}
-                    <span className="min-w-0 flex-1 truncate font-mono text-[0.85rem] font-semibold">{editing}</span>
+                    <div className="min-w-0 flex-1 leading-tight">
+                        <p className="truncate font-mono text-[0.85rem] font-semibold">{editing.split('/').pop()}</p>
+                        <p className="truncate font-mono text-[0.68rem] text-ink-muted">{editing}</p>
+                    </div>
+                    {lang && (
+                        <span className="hidden shrink-0 rounded-full border border-hairline bg-veil px-2.5 py-0.5 text-[0.68rem] font-semibold text-ink-secondary md:inline-block">
+                            {lang.label}
+                        </span>
+                    )}
                     {dirty
-                        ? <span className="shrink-0 rounded bg-amber-500/15 px-2 py-0.5 text-[0.68rem] font-bold uppercase tracking-wide text-amber-400">unsaved</span>
+                        ? <span className="shrink-0 rounded-full bg-amber-500/15 px-2.5 py-0.5 text-[0.68rem] font-bold uppercase tracking-wide text-amber-400">unsaved</span>
                         : <span className="hidden shrink-0 items-center gap-1 text-[0.7rem] text-ink-muted sm:inline-flex"><Check size={14} /> saved</span>}
-                    <div className="ml-auto flex shrink-0 items-center gap-2">
-                        <button type="button" onClick={saveEdit} disabled={fileLoading || !!fileError || writeFile.isPending} className={btnPrimary}>
+                    <div className="ml-auto flex shrink-0 items-center gap-1">
+                        <button type="button" onClick={() => editorRef.current?.openSearch()} title="Find in file (Ctrl+F)" aria-label="Find in file" className={btnIcon}>
+                            <Search size={16} />
+                        </button>
+                        <button type="button" onClick={() => setWrap((w) => !w)} title={wrap ? 'No word wrap' : 'Word wrap'} aria-label="Toggle word wrap" aria-pressed={wrap} className={btnIcon} style={wrap ? { color: '#fff', background: 'rgba(255,255,255,0.12)' } : undefined}>
+                            <WrapText size={16} />
+                        </button>
+                        <button type="button" onClick={() => setFullscreen((f) => !f)} title={fullscreen ? 'Exit fullscreen (Esc)' : 'Fullscreen'} aria-label="Toggle fullscreen" className={btnIcon}>
+                            {fullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+                        </button>
+                        <button type="button" onClick={saveEdit} disabled={fileLoading || !!fileError || writeFile.isPending || !dirty} className={btnPrimary}>
                             {writeFile.isPending ? 'Saving…' : 'Save'}
                         </button>
                     </div>
                 </div>
-                <div className="flex min-h-0 flex-1 flex-col">
+                <div className={fullscreen ? 'min-h-0 flex-1' : 'flex min-h-[55vh] flex-1 flex-col lg:h-[62vh]'}>
                     {fileLoading && (
-                        <div className="flex flex-col gap-2 p-4">
+                        <div className="flex flex-col gap-2 p-4" aria-busy="true">
                             <Skeleton className="h-3 w-2/3" />
                             <Skeleton className="h-3 w-5/6" />
                             <Skeleton className="h-3 w-1/2" />
+                            <Skeleton className="h-3 w-4/6" />
                         </div>
                     )}
                     {fileError && (
-                        <p className="p-5 text-[0.85rem] text-red-400">
-                            {fileError.code === 'FILE_BINARY'
-                                ? 'Binary file — preview unavailable. Download it instead.'
-                                : `Failed to load: ${fileError.message}`}
-                        </p>
+                        <div className="flex flex-col items-center gap-2 p-8 text-center">
+                            <p className="text-[0.9rem] font-semibold text-red-400">
+                                {fileError.code === 'FILE_BINARY' ? 'Binary file — preview unavailable' : 'Failed to load file'}
+                            </p>
+                            <p className="max-w-sm text-[0.82rem] text-ink-secondary">
+                                {fileError.code === 'FILE_BINARY' ? 'Download it instead.' : fileError.message}
+                            </p>
+                        </div>
                     )}
                     {!fileLoading && !fileError && fileData && (
-                        <textarea
-                            value={draft}
-                            onChange={(e) => setDraft(e.target.value)}
-                            spellCheck={false}
-                            autoCapitalize="off"
-                            autoCorrect="off"
-                            placeholder="Empty file — start typing…"
-                            className="min-h-[55vh] w-full flex-1 resize-y bg-transparent p-4 font-mono text-base leading-relaxed text-gray-200 focus:outline-none sm:p-5 sm:text-[0.85rem]"
-                        />
+                        <Suspense fallback={
+                            <div className="flex flex-col gap-2 p-4" aria-busy="true">
+                                <Skeleton className="h-3 w-2/3" />
+                                <Skeleton className="h-3 w-5/6" />
+                                <Skeleton className="h-3 w-1/2" />
+                            </div>
+                        }>
+                            <CodeEditor
+                                key={editing}
+                                ref={editorRef}
+                                doc={fileData.content ?? ''}
+                                filename={editing.split('/').pop()}
+                                wrap={wrap}
+                                onChange={(t) => setDraft(t)}
+                                onSave={saveEdit}
+                            />
+                        </Suspense>
                     )}
-                </div>
-                <div className="flex items-center gap-3 border-t border-hairline bg-black/30 px-4 py-2 sm:px-5">
-                    <span className="font-mono text-[0.7rem] text-ink-muted">{draft.split('\n').length} lines · {new Blob([draft]).size} bytes</span>
-                    <span className="ml-auto font-mono text-[0.7rem] text-ink-muted">512KB edit cap</span>
                 </div>
                 {sheet?.type === 'discard' && (
                     <Sheet title={sheetTitle()} subtitle={sheetSubtitle()} onClose={() => setSheet(null)} onSubmit={submitSheet} submitLabel="Discard" danger>
@@ -644,7 +706,7 @@ export default function ServerFiles({ server }) {
                         <input
                             value={query}
                             onChange={(e) => setQuery(e.target.value)}
-                            placeholder={filterActive ? 'No matches' : 'Search in this folder…'}
+                            placeholder="Search in this folder…" 
                             aria-label="Search files in this folder"
                             className="input-field pl-9"
                         />
@@ -858,7 +920,7 @@ export default function ServerFiles({ server }) {
                                             aria-label={`Select ${entry.name}`}
                                             className="size-5 shrink-0 cursor-pointer accent-white"
                                         />
-                                        <button type="button" onClick={() => openEntry(entry)} className="flex min-w-0 flex-1 items-center gap-3 text-left">
+                                        <button type="button" onClick={() => openEntry(entry)} onDoubleClick={() => openEntry(entry)} title={entry.type === 'dir' ? 'Open folder' : 'Open file'} className="flex min-w-0 flex-1 items-center gap-3 text-left">
                                             <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-white/10 to-white/[0.02]">
                                                 {isDir ? <Folder size={20} className="text-sky-300/90" /> : icon ? <img src={icon} alt="" aria-hidden="true" className="size-5" draggable={false} /> : <FileText size={18} className="text-ink-muted" />}
                                             </span>
@@ -869,8 +931,8 @@ export default function ServerFiles({ server }) {
                                                 </span>
                                             </span>
                                         </button>
-                                        <span className="hidden w-24 shrink-0 text-right font-mono text-[0.75rem] text-ink-muted md:block">{fmtDate(entry.mtime)}</span>
-                                        <span className="hidden w-20 shrink-0 text-right font-mono text-[0.75rem] text-ink-muted sm:block">{isDir ? '—' : fmtSize(entry.size)}</span>
+                                        <span className="hidden w-32 shrink-0 whitespace-nowrap text-right font-mono text-[0.75rem] text-ink-muted md:block">{fmtDate(entry.mtime)}</span>
+                                        <span className="hidden w-24 shrink-0 whitespace-nowrap text-right font-mono text-[0.75rem] text-ink-muted sm:block">{isDir ? '—' : fmtSize(entry.size)}</span>
                                         <span onClick={(e) => e.stopPropagation()}>
                                             <RowMenu
                                                 label={`Actions for ${entry.name}`}
@@ -913,7 +975,7 @@ export default function ServerFiles({ server }) {
                         </>
                     ) : (
                         <span className="font-mono text-[0.72rem] text-ink-muted">
-                            {dirStats.count} item{dirStats.count === 1 ? '' : 's'} · {fmtSize(dirStats.bytes)} in this folder
+                            {dirStats.count} item{dirStats.count === 1 ? '' : 's'} ({dirStats.dirs} folders · {dirStats.files} files) · {fmtSize(dirStats.bytes)}
                         </span>
                     )}
                     <button
@@ -921,7 +983,7 @@ export default function ServerFiles({ server }) {
                         onClick={() => refetch()}
                         disabled={isFetching}
                         aria-label="Refresh file list"
-                        className="btnIcon ml-auto"
+                        className={cn(btnIcon, "ml-auto")}
                     >
                         <RefreshCw size={16} className={cn(isFetching && 'animate-spin')} />
                     </button>
