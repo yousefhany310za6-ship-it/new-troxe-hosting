@@ -113,6 +113,18 @@ export class ServersController {
     return this.svc.usage(u.sub, id);
   }
 
+  @Get(':id/activity')
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  @UseGuards(ServerOwnerGuard)
+  activity(
+    @Param('id', ParseUuidPipe) id: string,
+    @CurrentUser() u: ReqUser,
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(30), ParseIntPipe) limit: number,
+  ) {
+    return this.svc.activity(u.sub, id, page, limit);
+  }
+
   @Get(':id/events')
   @Throttle({ default: { limit: 60, ttl: 60_000 } })
   @UseGuards(ServerOwnerGuard)

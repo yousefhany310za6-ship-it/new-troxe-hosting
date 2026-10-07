@@ -6,7 +6,7 @@ import { decryptEnv, encryptEnv, maskEnv } from '../../common/crypto';
 import { AppError, Err } from '../../common/errors';
 import { ReqCtx } from '../../common/request-context';
 import { DB, Db } from '../../db/db.module';
-import { plans, servers, serverEvents, users, type EnvVar, type Server } from '../../db/schema';
+import { auditLogs, plans, servers, serverEvents, users, type EnvVar, type Server } from '../../db/schema';
 import { AuditService } from '../audit/audit.module';
 import { DockerService, startedAtToSince } from './provisioning/docker.service';
 import { ProvisionerService, type ProvisionResult } from './provisioning/provisioner.service';
@@ -15,6 +15,7 @@ import { NodesService } from '../nodes/nodes.service';
 import { CreateServerDto, UpdateServerDto } from './dto';
 import { backupDirFor, backupOwnerDir } from './backup-paths';
 import { RealtimeGateway } from '../auth/realtime.gateway';
+import { GeoIpService } from '../../common/geoip/geoip.service';
 
 const CONTROL_CHARS = /[\u0000-\u0008\u000B-\u001F\u007F]/g;
 
@@ -29,6 +30,7 @@ export class ServersService {
     private docker: DockerService,
     private audit: AuditService,
     private realtime: RealtimeGateway,
+    private geo: GeoIpService,
     private nodes: NodesService,
   ) {}
 
@@ -596,6 +598,63 @@ export class ServersService {
     // current run only: a restart keeps the container (and its old log history)
     const state = await this.docker.inspect(row.containerId, row.nodeId).catch(() => null);
     return { logs: await this.docker.logs(row.containerId, tail, row.nodeId, startedAtToSince(state?.startedAt)) };
+  }
+
+  /**
+   * Activity trail of a server: who did what, from which IP and country.
+   * Built from the audit log (every server action is recorded with IP) with
+   * the actor's profile joined and the country resolved offline via GeoIP.
+   */
+  async activity(ownerId: string, id: string, page = 1, limit = 30) {
+    await this.requireOwned(ownerId, id);
+    const safePage = Math.min(Math.max(Math.floor(page) || 1, 1), 100);
+    const safeLimit = Math.min(Math.max(Math.floor(limit) || 30, 1), 100);
+    const rows = await this.db
+      .select({
+        id: auditLogs.id,
+        action: auditLogs.action,
+        ip: auditLogs.ip,
+        userAgent: auditLogs.userAgent,
+        meta: auditLogs.meta,
+        createdAt: auditLogs.createdAt,
+        actorId: users.id,
+        actorName: users.name,
+        actorAvatar: users.avatarUrl,
+      })
+      .from(auditLogs)
+      .leftJoin(users, eq(auditLogs.actorId, users.id))
+      .where(and(eq(auditLogs.targetType, 'server'), eq(auditLogs.targetId, id)))
+      .orderBy(desc(auditLogs.createdAt))
+      .limit(safeLimit + 1)
+      .offset((safePage - 1) * safeLimit);
+    const geos = new Map<string, { country: string; countryCode: string } | null>();
+    for (const r of rows) {
+      if (r.ip && !geos.has(r.ip)) {
+        const g = this.geo.lookup(r.ip);
+        geos.set(r.ip, g?.country && g?.countryCode ? { country: g.country, countryCode: g.countryCode } : null);
+      }
+    }
+    const SAFE_META = new Set(['reason', 'code', 'sizeBytes', 'status']);
+    const data = rows.slice(0, safeLimit).map((r) => {
+      const detail: Record<string, string | number | boolean> = {};
+      for (const [k, v] of Object.entries((r.meta ?? {}) as Record<string, unknown>)) {
+        if (!SAFE_META.has(k)) continue;
+        if (typeof v === 'string') detail[k] = v.slice(0, 200);
+        else if (typeof v === 'number' || typeof v === 'boolean') detail[k] = v;
+      }
+      const geo = (r.ip && geos.get(r.ip)) || null;
+      return {
+        id: r.id,
+        action: r.action,
+        ip: r.ip,
+        country: geo?.country ?? null,
+        countryCode: geo?.countryCode ?? null,
+        detail,
+        actor: r.actorId ? { id: r.actorId, name: r.actorName, avatarUrl: r.actorAvatar } : null,
+        createdAt: r.createdAt,
+      };
+    });
+    return { data, hasMore: rows.length > safeLimit, page: safePage };
   }
 
   /** Recent lifecycle events of a server (newest first), safe to show its owner. */

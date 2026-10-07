@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import {
+    Activity,
     ArrowLeft,
     Check,
     Database,
@@ -26,12 +27,14 @@ import ExecTerminal, { ConsoleOffline } from './ExecTerminal.jsx';
 import ResourceMonitor from './ResourceMonitor.jsx';
 import ServerOverview from './ServerOverview.jsx';
 import ServerBackups from './ServerBackups.jsx';
+import ServerActivity from './ServerActivity.jsx';
 
 const TABS = [
     { id: 'overview', label: 'Overview', Icon: LayoutDashboard },
     { id: 'console', label: 'Console', Icon: Terminal },
     { id: 'files', label: 'Files', Icon: Folder },
     { id: 'backups', label: 'Backups', Icon: Database },
+    { id: 'activity', label: 'Activity', Icon: Activity },
     { id: 'settings', label: 'Settings', Icon: SettingsIcon },
 ];
 
@@ -376,6 +379,8 @@ export default function ServerDetail() {
                     onDelete={(b) => setDeleteBackupTarget(b)}
                 />
             )}
+
+            {tab === 'activity' && <ServerActivity key={server.id} server={server} />}
 
             {tab === 'settings' && (
                 <div className="flex flex-col gap-4">
