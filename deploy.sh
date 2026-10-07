@@ -140,7 +140,7 @@ export JWT_REFRESH_SECRET
 export ENV_ENCRYPTION_KEY
 export SOCK_GID
 
-docker compose -f docker-compose.prod.yml up -d --remove-orphans
+docker compose -f docker-compose.prod.yml up -d --build --remove-orphans
 
 # ---------------------------------------------------------
 # 8. Wait for API health
