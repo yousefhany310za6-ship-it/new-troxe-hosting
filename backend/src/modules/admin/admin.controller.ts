@@ -173,6 +173,12 @@ export class AdminController {
     return this.admin.unsuspendServer(id, u.sub, ctxOf(req).ip);
   }
 
+  @Post('servers/:id/backups')
+  @HttpCode(201)
+  serverBackupCreate(@Param('id', UUID) id: string, @CurrentUser() u: ReqUser, @Req() req: Request) {
+    return this.admin.adminServerBackupCreate(id, u.sub, u.email, ctxOf(req).ip);
+  }
+
   @Post('servers/:id/:action')
   @HttpCode(200)
   adminLifecycle(
@@ -228,12 +234,6 @@ export class AdminController {
   @Get('servers/:id/backups/quota')
   serverBackupQuota(@Param('id', UUID) id: string) {
     return this.admin.adminServerBackupQuota(id);
-  }
-
-  @Post('servers/:id/backups')
-  @HttpCode(201)
-  serverBackupCreate(@Param('id', UUID) id: string, @CurrentUser() u: ReqUser, @Req() req: Request) {
-    return this.admin.adminServerBackupCreate(id, u.sub, u.email, ctxOf(req).ip);
   }
 
   @Delete('servers/:id/backups/:backupId')

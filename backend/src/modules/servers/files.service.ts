@@ -124,8 +124,9 @@ export class FilesService {
       throw new AppError('FILE_TOO_LARGE', 413, `File exceeds ${cap} bytes`);
     const release = await this.serversSvc.acquire(serverId);
     try {
-      const { volume, nodeId } = await this.volumeOf(ownerId, serverId, opts);
+      const { volume, nodeId, storageGb } = await this.volumeOf(ownerId, serverId, opts);
       const file = this.sanitizeFile(rel);
+      await this.assertQuota(volume, nodeId, storageGb, buf.length, file);
       const b64 = buf.toString('base64');
       // one giant argv would hit ARG_MAX — stream in 4-char-aligned chunks
       const CHUNK = 500_000 - (500_000 % 4);
@@ -180,7 +181,7 @@ export class FilesService {
       throw new AppError('FILE_TOO_LARGE', 413, `File exceeds the ${FilesService.STREAM_UPLOAD_MAX / 1024 ** 3} GB upload limit`);
     const release = await this.serversSvc.acquire(serverId);
     try {
-      const { volume, nodeId } = await this.volumeOf(ownerId, serverId, opts);
+      const { volume, nodeId, storageGb } = await this.volumeOf(ownerId, serverId, opts);
       const file = this.sanitizeFile(rel ?? '');
       const script = [
         `f=${this.q(`/data/${file}`)}`,
@@ -195,6 +196,7 @@ export class FilesService {
       ].join('\n');
       const res = await this.helper(volume, script, { capture: true, timeoutMs: 60_000, nodeId });
       this.throwIfErr(res.out, res.code);
+      await this.assertQuota(volume, nodeId, storageGb, size, file);
       // Stream into a temp name next to the target, then rename into place only
       // after the whole body arrived: a failed/aborted upload never leaves a
       // truncated file, and an existing file is never half-overwritten.
@@ -224,7 +226,8 @@ export class FilesService {
   async mkdir(ownerId: string, serverId: string, rel: string, opts?: { admin?: boolean }) {
     const release = await this.serversSvc.acquire(serverId);
     try {
-      const { volume, nodeId } = await this.volumeOf(ownerId, serverId, opts);
+      const { volume, nodeId, storageGb } = await this.volumeOf(ownerId, serverId, opts);
+      await this.assertQuota(volume, nodeId, storageGb, 0);
       const dir = this.sanitizeFile(rel);
       const script = [
         `p=${this.q(`/data/${dir}`)}`,
@@ -316,7 +319,8 @@ export class FilesService {
   async archive(ownerId: string, serverId: string, sources: string[], dest: string, opts?: { admin?: boolean }) {
     const release = await this.serversSvc.acquire(serverId);
     try {
-      const { volume, nodeId } = await this.volumeOf(ownerId, serverId, opts);
+      const { volume, nodeId, storageGb } = await this.volumeOf(ownerId, serverId, opts);
+      await this.assertQuota(volume, nodeId, storageGb, 0);
       const srcs = sources.map((s) => this.sanitizeFile(s));
       const dst = this.sanitizeFile(dest);
       if (!/\.tar\.gz$/.test(dst) && !/\.tgz$/.test(dst))
@@ -355,8 +359,9 @@ export class FilesService {
   async extract(ownerId: string, serverId: string, file: string, dest: string | undefined, opts?: { admin?: boolean }) {
     const release = await this.serversSvc.acquire(serverId);
     try {
-      const { volume, nodeId } = await this.volumeOf(ownerId, serverId, opts);
+      const { volume, nodeId, storageGb } = await this.volumeOf(ownerId, serverId, opts);
       const arc = this.sanitizeFile(file);
+      await this.assertQuota(volume, nodeId, storageGb, 0);
       const kind = /\.zip$/.test(arc) ? 'zip' : /(\.tar\.gz|\.tgz)$/.test(arc) ? 'targz' : /\.tar$/.test(arc) ? 'tar' : null;
       if (!kind) throw Err.invalid('FILE_FORMAT', 'Only .zip, .tar.gz, .tgz and .tar can be extracted');
       const outDir = dest !== undefined ? this.sanitizeFile(dest) : posix.dirname(arc);
@@ -425,12 +430,59 @@ export class FilesService {
     ownerId: string,
     serverId: string,
     opts?: { admin?: boolean },
-  ): Promise<{ volume: string; nodeId: string }> {
+  ): Promise<{ volume: string; nodeId: string; storageGb: number }> {
     const row = await this.serversSvc.requireOwned(ownerId, serverId);
     this.serversSvc.assertOperable(row, opts);
     if (!(await this.docker.availableOn(row.nodeId))) throw new AppError('DOCKER_UNAVAILABLE', 503, 'Container runtime is not available');
     if (!row.volumeName) throw Err.conflict('SERVER_NOT_PROVISIONED', 'Server has no volume yet');
-    return { volume: row.volumeName, nodeId: row.nodeId };
+    return { volume: row.volumeName, nodeId: row.nodeId, storageGb: row.storageGb };
+  }
+
+  /**
+   * Synchronous storage-quota gate for operations that grow the volume.
+   * `incoming` is the bytes about to be added; when the target already
+   * exists (overwrite), its current size is subtracted so replacing a file
+   * with same-sized content is never rejected. Measurement failure fails
+   * OPEN (with a warning) so a `du` hiccup can't brick the file manager —
+   * the reconciler still fences over-quota servers hourly.
+   */
+  private async assertQuota(
+    volume: string,
+    nodeId: string,
+    storageGb: number,
+    incoming: number,
+    existingRel?: string,
+  ): Promise<void> {
+    if (!storageGb || storageGb <= 0 || incoming < 0) return;
+    const cap = storageGb * 1024 ** 3;
+    const statPart = existingRel
+      ? `; s=$(stat -c %s ${this.q(`/data/${existingRel}`)} 2>/dev/null || echo 0)`
+      : `; s=0`;
+    const res = await this.helper(
+      volume,
+      `u=$(du -sb /data 2>/dev/null | cut -f1)${statPart}; echo "$u $s"`,
+      { capture: true, timeoutMs: 30_000, nodeId },
+    ).catch(() => null);
+    const parts = res && res.code === 0 ? res.out.trim().split(/\s+/) : [];
+    const used = parts.length === 2 ? Number(parts[0]) : NaN;
+    const existing = parts.length === 2 ? Number(parts[1]) : NaN;
+    if (!Number.isFinite(used) || !Number.isFinite(existing) || used < 0 || existing < 0) {
+      this.log.warn(`quota check skipped (unreadable usage for volume ${volume})`);
+      return;
+    }
+    if (used - existing + incoming > cap) {
+      const fmt = (n: number) => {
+        const u = ['B', 'KB', 'MB', 'GB'];
+        let v = n, i = 0;
+        while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+        return `${v.toFixed(v < 10 && i > 0 ? 1 : 0)} ${u[i]}`;
+      };
+      throw new AppError(
+        'STORAGE_QUOTA_EXCEEDED',
+        413,
+        `Storage quota exceeded (${fmt(used)} used of ${fmt(cap)}). Free space or upgrade your plan.`,
+      );
+    }
   }
 
   private async helper(

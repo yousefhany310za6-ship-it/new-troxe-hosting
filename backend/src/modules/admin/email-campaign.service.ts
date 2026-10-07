@@ -177,7 +177,8 @@ export class EmailCampaignService implements OnModuleInit, OnModuleDestroy {
   // ---- recipients -------------------------------------------------------------------
 
   private async recipientWhere(f: RecipientFilters) {
-    const conds = [eq(users.notifyMarketing, true)];
+    // suspended/deleted accounts never receive campaigns, even if still opted in
+    const conds = [eq(users.notifyMarketing, true), eq(users.status, 'active')];
     if (f.audience === 'verified') conds.push(eq(users.emailVerified, true));
     else if (f.audience === 'unverified') conds.push(eq(users.emailVerified, false));
     if (f.planId) {
@@ -359,7 +360,7 @@ export class EmailCampaignService implements OnModuleInit, OnModuleDestroy {
       return;
     }
     const [u] = await this.db
-      .select({ id: users.id, email: users.email, name: users.name, notifyMarketing: users.notifyMarketing })
+      .select({ id: users.id, email: users.email, name: users.name, notifyMarketing: users.notifyMarketing, status: users.status })
       .from(users)
       .where(eq(users.id, userId))
       .limit(1);
@@ -367,9 +368,15 @@ export class EmailCampaignService implements OnModuleInit, OnModuleDestroy {
       await skip('user gone');
       return;
     }
-    // opt-out is re-checked at send time: unsubscribing mid-campaign stops it
+    // opt-out AND account status are re-checked at send time: unsubscribing
+    // mid-campaign stops it, as does a suspension/deletion that landed after
+    // the audience snapshot
     if (!u.notifyMarketing) {
       await skip('unsubscribed');
+      return;
+    }
+    if (u.status !== 'active') {
+      await skip('inactive');
       return;
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(u.email)) {
