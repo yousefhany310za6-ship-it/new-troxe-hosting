@@ -65,7 +65,10 @@ export class JwtAuthGuard implements CanActivate {
         role: payload.role === 'admin' ? 'admin' : 'user',
       } satisfies ReqUser;
       return true;
-    } catch {
+    } catch (e) {
+      // explicit denials (e.g. ACCOUNT_SUSPENDED) must reach the client with
+      // their own code — only unexpected failures collapse to INVALID_TOKEN
+      if (e instanceof AppError && e.getStatus() === 403) throw e;
       throw Err.unauthorized('INVALID_TOKEN');
     }
   }
