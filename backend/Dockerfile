@@ -42,8 +42,16 @@ ENV NODE_ENV=production
 # PORT unified with the code default (3300) and the healthcheck below.
 ENV PORT=3300
 RUN apt-get update \
- && apt-get install -y --no-install-recommends iptables tini ca-certificates \
+ && apt-get install -y --no-install-recommends iptables libcap2-bin tini ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
+ # The API runs as uid 1000, and docker `cap_add: NET_ADMIN` does NOT make the
+ # capability effective for a non-root process -> `iptables` fails with
+ # "Permission denied (you must be root)" and every server provision is rolled
+ # back ("Network isolation could not be applied"). Grant NET_ADMIN to
+ # the iptables binaries only (file capabilities), keeping Node itself unprivileged.
+ && for b in /usr/sbin/xtables-nft-multi /usr/sbin/xtables-legacy-multi; do \
+      if [ -e "$b" ]; then setcap cap_net_admin+ep "$b"; fi; \
+    done \
  && mkdir -p /app/data/backups \
  && chown -R 1000:1000 /app
 # NOTE: base image already ships a non-root `node` user as 1000:1000 — reuse it.
