@@ -391,12 +391,15 @@ export class ServersService {
     ctx: ReqCtx,
     opts?: { actorId?: string; actorEmail?: string | null; isAdmin?: boolean },
   ) {
-    const row = await this.requireOwned(ownerId, id);
+    let row = await this.requireOwned(ownerId, id);
     const isAdmin = opts?.isAdmin ?? ownerId === 'admin';
     this.assertOperable(row, { admin: isAdmin });
     const actorId = opts?.actorId ?? ownerId;
     const release = await this.acquire(id);
     try {
+      // re-read under the lock (see lifecycle): a concurrent suspension wins.
+      row = await this.requireOwned(ownerId, id);
+      this.assertOperable(row, { admin: isAdmin });
       if (row.status === 'deleting') throw Err.conflict('SERVER_DELETING', 'Server is being deleted');
       const patch: Partial<typeof servers.$inferInsert> = {};
       let rebuild = false;
@@ -533,6 +536,10 @@ export class ServersService {
     const actor = { actorId: ownerId, targetType: 'server', targetId: id, ip: ctx.ip, userAgent: ctx.device };
     const release = await this.acquire(id);
     try {
+    // re-read under the lock: a suspension (or delete) that landed between
+    // the pre-check above and now must still win over this operation.
+    row = await this.requireOwned(ownerId, id);
+    this.assertOperable(row);
     if (row.status === 'deleting') throw Err.conflict('SERVER_DELETING', 'Server is being deleted');
 
     if (action === 'reinstall') {

@@ -308,15 +308,18 @@ export class AuthService {
       // suspended/deleted mid-session: kill the family instead of rotating
       if (user.status !== 'active') return { kind: 'suspended', familyId: row.familyId, userId: row.userId } as const;
 
-      // rotate: same row/family, brand new secret; the superseded hash stays
-      // valid for 60s so a retried request re-issues instead of wiping.
+      // rotate: same row/family, brand new secret. Presenting the CURRENT
+      // secret preserves one grace step (a retried request re-issues instead
+      // of wiping). Presenting the PREVIOUS secret consumes the grace: the new
+      // rotation carries no prev hash, so any further use of a superseded
+      // secret wipes the family instead of chaining fresh sessions forever.
       const secret = randomToken(32);
       const expiresAt = new Date(Date.now() + config.JWT_REFRESH_TTL_SEC * 1000);
       await tx
         .update(authSessions)
         .set({
-          prevRefreshTokenHash: row.refreshTokenHash,
-          prevRotatedAt: new Date(),
+          prevRefreshTokenHash: current ? row.refreshTokenHash : null,
+          prevRotatedAt: current ? new Date() : null,
           refreshTokenHash: sha256(secret),
           expiresAt,
           lastUsedAt: new Date(),

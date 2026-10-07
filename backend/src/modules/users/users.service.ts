@@ -183,6 +183,10 @@ export class UsersService {
       .update(users)
       .set({ passwordHash: await hashPassword(dto.next), passwordChangedAt: new Date() })
       .where(eq(users.id, userId));
+    // a known password must not coexist with sessions minted before it
+    // existed: kill everything (including this session — same rule as a
+    // normal password change) so the user signs back in explicitly.
+    const revoked = await this.auth.revokeAllForUser(userId);
     await this.audit.record({
       actorId: userId,
       actorEmail: u.email,
@@ -190,8 +194,9 @@ export class UsersService {
       targetType: 'user',
       targetId: userId,
       ip: ctx.ip,
+      meta: { revokedSessions: revoked },
     });
-    return { ok: true };
+    return { ok: true, revokedSessions: revoked };
   }
 
   async updateNotifications(userId: string, dto: UpdateNotificationsDto) {

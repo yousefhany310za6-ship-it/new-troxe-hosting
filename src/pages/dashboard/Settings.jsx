@@ -233,10 +233,15 @@ export default function Settings() {
     const doSetPassword = async (e) => {
         e.preventDefault();
         try {
-            await setPassword.mutateAsync(newPw);
-            toast.success('Password set. You can now sign in with email + password too.');
+            const res = await setPassword.mutateAsync(newPw);
+            toast.success(`Password set. ${res?.revokedSessions ? 'All sessions were signed out — please sign in again.' : 'You can now sign in with email + password too.'}`);
             setNewPw({ next: '', confirm: '' });
-            oauth.refetch();
+            if (res?.revokedSessions) {
+                await signOut();
+                navigate('/signin', { replace: true });
+            } else {
+                oauth.refetch();
+            }
         } catch (err) {
             toast.error(err.message);
         }

@@ -327,7 +327,9 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
     let checked = 0;
     for (const row of rows) {
       if (checked >= STORAGE_CHECKS_PER_TICK) break;
-      if (!row.volumeName || row.status === 'deleting' || row.status === 'provisioning') continue;
+      // suspended servers are frozen by administration: the fence must never
+      // lift a suspension (same skip as syncStatuses and the backup cron).
+      if (!row.volumeName || row.status === 'deleting' || row.status === 'provisioning' || row.status === 'suspended') continue;
       if (row.status === 'error' && /storage quota exceeded/i.test(row.lastError ?? '')) continue;
       if (now - (this.lastStorageCheck.get(row.id) ?? 0) < STORAGE_CHECK_INTERVAL_MS) continue;
       this.lastStorageCheck.set(row.id, now);
