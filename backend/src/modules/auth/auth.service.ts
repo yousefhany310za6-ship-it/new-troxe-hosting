@@ -146,6 +146,13 @@ export class AuthService {
     const email = dto.email.toLowerCase().trim();
     const [user] = await this.db.select().from(users).where(eq(users.email, email)).limit(1);
 
+    // Deleted accounts are indistinguishable from wrong passwords (no oracle):
+    // login simply never succeeds for them.
+    if (user?.status === 'deleted') {
+      await this.audit.record({ actorEmail: email, action: 'auth.login.fail.unknown', ip: ctx.ip, userAgent: ctx.device });
+      throw Err.invalidCredentials();
+    }
+
     // suspended / deleted accounts never get a session: suspended is told
     // plainly (dedicated UI), deleted looks like a wrong password (no oracle)
     if (user?.status === 'suspended') {
