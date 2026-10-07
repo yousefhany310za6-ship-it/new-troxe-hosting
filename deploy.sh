@@ -109,9 +109,12 @@ docker run --rm -e "VITE_API_URL=https://$API_DOMAIN/api/v1" -v "$PWD:/app" -w /
   sh -c "npm ci && npm run build"
 
 # Copy built assets to where Caddy expects them
-mkdir -p /var/www/html
-rm -rf /var/www/html/*
+mkdir -p /var/www/html/assets
+# Replace everything EXCEPT assets/: tabs opened before this deploy still import
+# the previous hashed chunks, so those stay for 14 days (hashes never collide).
+find /var/www/html -mindepth 1 -maxdepth 1 ! -name assets -exec rm -rf {} +
 cp -r dist/* /var/www/html/
+find /var/www/html/assets -type f -mtime +14 -delete
 
 # ---------------------------------------------------------
 # 5. Get docker socket GID for API user mapping

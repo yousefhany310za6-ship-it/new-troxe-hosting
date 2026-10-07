@@ -19,6 +19,17 @@ import './index.css';
 //   before the app boots.
 const basename = APP_BASE === '/' ? undefined : APP_BASE.replace(/\/+$/, '');
 
+// A deploy replaces the hashed chunks: a tab opened before it fails to import
+// the old ones ("Failed to fetch dynamically imported module"). Reload once to
+// pick up the new index.html (guarded so a real outage cannot loop).
+window.addEventListener('vite:preloadError', (event) => {
+    const last = Number(sessionStorage.getItem('troxe:chunk-reload') || 0);
+    if (Date.now() - last < 30_000) return;
+    sessionStorage.setItem('troxe:chunk-reload', String(Date.now()));
+    event.preventDefault();
+    window.location.reload();
+});
+
 // The app booted: cancel the index.html white-page guard.
 if (window.__troxeBootTimer) {
     clearTimeout(window.__troxeBootTimer);

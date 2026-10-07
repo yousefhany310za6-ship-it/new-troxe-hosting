@@ -18,8 +18,19 @@
         Permissions-Policy "geolocation=(), microphone=(), camera=()"
         -Server
     }
-    # SPA fallback: unknown routes -> index.html
-    try_files {path} /index.html
+    # Hashed build assets never change: cache hard. index.html (and everything
+    # else) must always be revalidated so a deploy is picked up immediately.
+    @assets path /assets/*
+    header @assets Cache-Control "public, max-age=31536000, immutable"
+    @notassets not path /assets/*
+    header @notassets Cache-Control "no-cache"
+    # SPA fallback: unknown routes -> index.html, but NEVER for /assets/*: a
+    # missing chunk must be a real 404, not index.html served as JavaScript.
+    @spa {
+        not path /assets/*
+        not file
+    }
+    rewrite @spa /index.html
 }
 
 # ---- API reverse proxy ----

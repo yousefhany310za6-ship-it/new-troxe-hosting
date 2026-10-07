@@ -12,7 +12,11 @@ export default defineConfig({
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },
-  base: './',
+  // Absolute asset URLs: with './' a reload on a nested route (/dashboard/servers/x)
+  // requested /dashboard/servers/assets/*.js, which the SPA fallback answered with
+  // index.html -> module load failure -> "app files couldn't be loaded".
+  // Set VITE_BASE=./ only when hosting inside a subfolder.
+  base: process.env.VITE_BASE || '/',
   server: {
     port: 5173,
     host: true,
