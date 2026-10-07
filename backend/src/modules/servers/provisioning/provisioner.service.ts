@@ -411,7 +411,7 @@ export class ProvisionerService {
         // provision call (create, restart, reinstall, repair) so any
         // ownership drift caused by root-owned uploads/extractions is
         // silently corrected before the sandbox starts.
-        cmd: [`touch /data/.troxe-init && { ${ownershipRepairScript()} ${seed}; } && chmod 750 /data`],
+        cmd: [`touch /data/.troxe-init && { ${ownershipRepairScript()}; ${seed}; } && chmod 750 /data`],
         binds: [`${volumeName}:/data`],
         user: '0:0',
         timeoutMs: 30_000,
