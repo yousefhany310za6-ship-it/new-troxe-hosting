@@ -86,6 +86,27 @@ export interface ContainerStats {
 }
 
 /**
+ * Reduce one raw `docker stats` frame to the numbers we expose. Every field
+ * comes from the node: coerce to finite numbers so a malformed/rogue payload
+ * yields 0 instead of NaN/Infinity in JSON.
+ */
+export function parseContainerStats(s: any): ContainerStats {
+  const cpuDelta = finiteNum(s?.cpu_stats?.cpu_usage?.total_usage) - finiteNum(s?.precpu_stats?.cpu_usage?.total_usage);
+  const sysDelta = finiteNum(s?.cpu_stats?.system_cpu_usage) - finiteNum(s?.precpu_stats?.system_cpu_usage);
+  const cpus = Math.max(1, finiteNum(s?.cpu_stats?.online_cpus) || 1);
+  const cpuPercent = sysDelta > 0 ? Math.round((cpuDelta / sysDelta) * cpus * 1000) / 10 : 0;
+  const mem = s?.memory_stats ?? {};
+  const cache = finiteNum(mem?.stats?.cache);
+  return {
+    cpuPercent: cpuPercent > 0 ? cpuPercent : 0,
+    memBytes: Math.max(0, finiteNum(mem.usage) - cache),
+    memLimitBytes: Math.max(0, finiteNum(mem.limit)),
+    netRxBytes: sumNet(s?.networks, 'rx_bytes'),
+    netTxBytes: sumNet(s?.networks, 'tx_bytes'),
+  };
+}
+
+/**
  * Interactive shell inside a running sandbox (`docker exec -it /bin/sh`).
  * Runs as the container's own (unprivileged) user with its WorkingDir —
  * no new privileges, no new mounts, container cgroup limits still apply.
@@ -521,21 +542,7 @@ export class DockerService {
     if (!d) return null;
     try {
       const s: any = await withTimeout(d.getContainer(id).stats({ stream: false }), 10_000, 'container stats');
-      // every field below comes from the node: coerce to finite numbers so a
-      // malformed/rogue payload yields 0 instead of NaN/Infinity in JSON
-      const cpuDelta = finiteNum(s?.cpu_stats?.cpu_usage?.total_usage) - finiteNum(s?.precpu_stats?.cpu_usage?.total_usage);
-      const sysDelta = finiteNum(s?.cpu_stats?.system_cpu_usage) - finiteNum(s?.precpu_stats?.system_cpu_usage);
-      const cpus = Math.max(1, finiteNum(s?.cpu_stats?.online_cpus) || 1);
-      const cpuPercent = sysDelta > 0 ? Math.round((cpuDelta / sysDelta) * cpus * 1000) / 10 : 0;
-      const mem = s?.memory_stats ?? {};
-      const cache = finiteNum(mem?.stats?.cache);
-      return {
-        cpuPercent: cpuPercent > 0 ? cpuPercent : 0,
-        memBytes: Math.max(0, finiteNum(mem.usage) - cache),
-        memLimitBytes: Math.max(0, finiteNum(mem.limit)),
-        netRxBytes: sumNet(s?.networks, 'rx_bytes'),
-        netTxBytes: sumNet(s?.networks, 'tx_bytes'),
-      };
+      return parseContainerStats(s);
     } catch (e) {
       if (isStatus(e, 404)) return null;
       throw e;
@@ -899,6 +906,69 @@ export class DockerService {
   }
 
   // ---- interactive shells (exec gateway) --------------------------------------
+
+  /**
+   * Stream `docker stats` for a container (~1 frame/second). One long-lived
+   * daemon connection replaces repeated one-shot calls (each of which blocks
+   * ~1s waiting for a second sample). The FIRST frame is dropped: the daemon
+   * has no previous frame to diff against, so its CPU figure is meaningless.
+   */
+  async streamStats(
+    containerId: string,
+    nodeId: string,
+    onSample: (stats: ContainerStats) => void,
+    onEnd: () => void,
+  ): Promise<{ close(): void }> {
+    const container = (await this.cx(nodeId)).getContainer(containerId);
+    const raw = (await withTimeout(
+      container.stats({ stream: true }) as unknown as Promise<NodeJS.ReadableStream>,
+      10_000,
+      'stats stream',
+    )) as NodeJS.ReadableStream & { destroy?: () => void };
+    let buf = '';
+    let first = true;
+    let closed = false;
+    raw.on('data', (chunk: Buffer | string) => {
+      if (closed) return;
+      buf += chunk.toString();
+      let i: number;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i).trim();
+        buf = buf.slice(i + 1);
+        if (!line) continue;
+        try {
+          const frame = JSON.parse(line);
+          if (first) {
+            first = false;
+            continue;
+          }
+          onSample(parseContainerStats(frame));
+        } catch {
+          /* malformed frame from the daemon: skip it */
+        }
+      }
+      if (buf.length > 1_000_000) buf = ''; // never accumulate an unterminated line
+    });
+    const end = () => {
+      if (closed) return;
+      closed = true;
+      onEnd();
+    };
+    raw.on('end', end);
+    raw.on('close', end);
+    raw.on('error', end);
+    return {
+      close: () => {
+        if (closed) return;
+        closed = true;
+        try {
+          raw.destroy?.();
+        } catch {
+          /* already gone */
+        }
+      },
+    };
+  }
 
   /**
    * Follow a container's output (`docker logs -f`) as a read-only stream:

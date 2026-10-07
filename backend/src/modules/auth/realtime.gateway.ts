@@ -118,6 +118,21 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
     return { ok: true, ts: Date.now() };
   }
 
+  /**
+   * Ids of servers that currently have at least one live stats subscriber.
+   * Read straight from the socket.io rooms, so a closed tab / dropped socket
+   * stops counting without any bookkeeping of our own.
+   */
+  statsSubscribers(): string[] {
+    const rooms = (this.server?.adapter as unknown as { rooms?: Map<string, Set<string>> } | undefined)?.rooms;
+    if (!rooms) return [];
+    const ids: string[] = [];
+    for (const [room, members] of rooms) {
+      if (room.startsWith(CHANNEL_PREFIX.serverStats) && members.size > 0) ids.push(room.slice(CHANNEL_PREFIX.serverStats.length));
+    }
+    return ids;
+  }
+
   /** Broadcast server stats to channel `server:stats:{id}`. */
   broadcastServerStats(serverId: string, payload: unknown) {
     this.server.to(`${CHANNEL_PREFIX.serverStats}${serverId}`).emit('server:stats', payload);

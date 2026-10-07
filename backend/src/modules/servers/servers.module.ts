@@ -11,6 +11,7 @@ import { ReconcilerService } from './reconciler.service';
 import { ServerOwnerGuard } from './server-owner.guard';
 import { ServersController } from './servers.controller';
 import { ServersService } from './servers.service';
+import { StatsStreamService } from './stats-stream.service';
 
 @Module({
   imports: [AuthModule, NodesModule],
@@ -25,6 +26,7 @@ import { ServersService } from './servers.service';
     NetworkHardeningService,
     ProvisionerService,
     ReconcilerService,
+    StatsStreamService,
   ],
   exports: [ServersService, BackupsService, DockerService, ProvisionerService, ReconcilerService],
 })
