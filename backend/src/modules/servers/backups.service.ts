@@ -440,6 +440,33 @@ export class BackupsService {
    * resources (display), but authorization must follow the account: otherwise
    * a downgraded user keeps pro backup slots on old servers forever.
    */
+  /**
+   * Backup quota of a server for its owner: allowed slots (from the owner's
+   * CURRENT plan — a downgrade shrinks old servers too), used slots on this
+   * server, and the plan name for display. Same source of truth as create().
+   */
+  async quota(ownerId: string, serverId: string) {
+    const server = await this.serversSvc.requireOwned(ownerId, serverId);
+    const [owner] = await this.db
+      .select({ planId: users.planId })
+      .from(users)
+      .where(eq(users.id, server.ownerId))
+      .limit(1);
+    const [plan] = owner?.planId
+      ? await this.db.select().from(plans).where(eq(plans.id, owner.planId)).limit(1)
+      : [];
+    const rows = await this.db
+      .select({ id: backups.id })
+      .from(backups)
+      .where(eq(backups.serverId, serverId));
+    return {
+      slots: plan?.maxBackupSlots ?? 0,
+      used: rows.length,
+      planId: owner?.planId ?? null,
+      planName: plan?.name ?? null,
+    };
+  }
+
   private async backupSlots(server: Server): Promise<number> {
     const [owner] = await this.db
       .select({ planId: users.planId })

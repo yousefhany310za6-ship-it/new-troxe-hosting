@@ -6,7 +6,6 @@ import {
     Database,
     FileText,
     Folder,
-    History,
     LayoutDashboard,
     Play,
     Plus,
@@ -22,11 +21,11 @@ import { apiGet, apiPost, apiPatch, apiDelete } from '@/lib/api.js';
 import { STATUS_STYLE } from './Overview.jsx';
 import { RUNTIME_ICONS } from './Servers.jsx';
 import { ConfirmModal } from '@/components/ui/confirm-modal.jsx';
-import { Select } from '@/components/ui/select.jsx';
 import ServerFiles from './ServerFiles.jsx';
 import ExecTerminal, { ConsoleOffline } from './ExecTerminal.jsx';
 import ResourceMonitor from './ResourceMonitor.jsx';
 import ServerOverview from './ServerOverview.jsx';
+import ServerBackups from './ServerBackups.jsx';
 
 const TABS = [
     { id: 'overview', label: 'Overview', Icon: LayoutDashboard },
@@ -50,6 +49,8 @@ export default function ServerDetail() {
     const [stats, setStats] = useState(null);
     const [usage, setUsage] = useState(null);
     const [backups, setBackups] = useState([]);
+    const [quota, setQuota] = useState(null);
+    const [creatingBackup, setCreatingBackup] = useState(false);
     const [logs, setLogs] = useState('');
     const [tab, setTab] = useState('overview');
     const [status, setStatus] = useState('offline');
@@ -101,6 +102,9 @@ export default function ServerDetail() {
             const data = await apiGet(`/servers/${id}/backups`);
             setBackups(data);
         } catch { setBackups([]); }
+        try {
+            setQuota(await apiGet(`/servers/${id}/backups/quota`));
+        } catch { /* quota display only — creation errors still surface */ }
     };
 
     // Only used for the offline console view (the live console streams over
@@ -181,11 +185,35 @@ export default function ServerDetail() {
     };
 
     const createBackup = async () => {
+        if (creatingBackup) return;
+        setCreatingBackup(true);
         setMsg({ text: 'Creating backup…', ok: true });
         try {
             await apiPost(`/servers/${id}/backups`);
             setMsg({ text: 'Backup started', ok: true });
             fetchBackups();
+        } catch (e) {
+            setMsg({ text: e.message, ok: false });
+        } finally {
+            setCreatingBackup(false);
+        }
+    };
+
+    const toggleAutoBackup = async (on) => {
+        try {
+            await apiPatch(`/servers/${id}`, { autoBackup: on });
+            setMsg({ text: `Automatic backups ${on ? 'enabled' : 'disabled'}.`, ok: true });
+            fetchServer();
+        } catch (e) {
+            setMsg({ text: e.message, ok: false });
+        }
+    };
+
+    const setBackupRetain = async (n) => {
+        try {
+            await apiPatch(`/servers/${id}`, { autoBackupRetain: n });
+            setMsg({ text: `Retention set to ${n} snapshots.`, ok: true });
+            fetchServer();
         } catch (e) {
             setMsg({ text: e.message, ok: false });
         }
@@ -318,6 +346,7 @@ export default function ServerDetail() {
                     backups={backups}
                     onTab={(t) => { setTab(t); setMsg({ text: '', ok: true }); }}
                     onCreateBackup={createBackup}
+                    quota={quota}
                 />
             )}
 
@@ -335,100 +364,17 @@ export default function ServerDetail() {
             {tab === 'files' && <ServerFiles server={server} />}
 
             {tab === 'backups' && (
-                <div className="flex flex-col gap-4">
-                    <div className="flex flex-wrap items-center gap-3 rounded-xl border border-hairline bg-card p-5">
-                        <Database className="size-5 shrink-0 text-ink-muted" />
-                        <div className="min-w-0 flex-1">
-                            <p className="text-[0.92rem] font-bold">Automatic backups</p>
-                            <p className="mt-0.5 text-[0.8rem] text-ink-secondary">
-                                {server.autoBackup
-                                    ? `Daily snapshot, keeping the newest ${server.autoBackupRetain ?? 7}.`
-                                    : 'Off — only manual snapshots.'}
-                            </p>
-                        </div>
-                        <label className="flex cursor-pointer items-center gap-2 text-[0.85rem] font-semibold">
-                            <input
-                                type="checkbox"
-                                checked={!!server.autoBackup}
-                                onChange={async (e) => {
-                                    try {
-                                        await apiPatch(`/servers/${id}`, { autoBackup: e.target.checked });
-                                        setMsg({ text: `Automatic backups ${e.target.checked ? 'enabled' : 'disabled'}.`, ok: true });
-                                        fetchServer();
-                                    } catch (err) { setMsg({ text: err.message, ok: false }); }
-                                }}
-                                className="size-4 accent-white"
-                            />
-                            Auto
-                        </label>
-                        {server.autoBackup && (
-                            <span className="flex items-center gap-2 text-[0.85rem] font-semibold">
-                                Keep
-                                <Select
-                                    ariaLabel="Backup retention"
-                                    value={String(server.autoBackupRetain ?? 7)}
-                                    onChange={async (v) => {
-                                        try {
-                                            await apiPatch(`/servers/${id}`, { autoBackupRetain: Number(v) });
-                                            setMsg({ text: `Retention set to ${v} snapshots.`, ok: true });
-                                            fetchServer();
-                                        } catch (err) { setMsg({ text: err.message, ok: false }); }
-                                    }}
-                                    options={[1, 3, 7, 14, 30].map((n) => ({ value: String(n), label: `${n} snapshot${n === 1 ? '' : 's'}` }))}
-                                    buttonClassName="px-2.5 py-1.5 font-mono text-[0.82rem]"
-                                />
-                            </span>
-                        )}
-                    </div>
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                        <p className="text-[0.9rem] text-ink-secondary">
-                            {backups.length} snapshot{backups.length === 1 ? '' : 's'} stored
-                        </p>
-                        <button
-                            type="button"
-                            onClick={createBackup}
-                            className="inline-flex items-center gap-2 rounded-full bg-white px-5 py-2.5 text-sm font-bold text-black transition hover:bg-gray-200"
-                        >
-                            <Plus className="size-4" /> Create backup
-                        </button>
-                    </div>
-                    {backups.length === 0 && (
-                        <div className="rounded-xl border border-dashed border-hairline bg-card p-10 text-center">
-                            <History className="mx-auto mb-3 size-8 text-ink-muted" />
-                            <p className="text-[0.92rem] font-semibold">No backups yet</p>
-                            <p className="mt-1 text-[0.85rem] text-ink-secondary">Create your first snapshot to protect this server.</p>
-                        </div>
-                    )}
-                    {backups.map((backup) => (
-                        <div key={backup.id} className="flex flex-wrap items-center gap-3 rounded-xl border border-hairline bg-card p-5">
-                            <Database className="size-5 shrink-0 text-ink-muted" />
-                            <div>
-                                <p className="font-mono text-[0.9rem] font-bold">{backup.name}</p>
-                                <p className="mt-0.5 font-mono text-[0.75rem] text-ink-muted">
-                                    {fmtBytes(backup.sizeBytes)} • {new Date(backup.createdAt).toLocaleString()} {backup.type === 'auto' ? '• automatic' : '• manual'}
-                                </p>
-                            </div>
-                            <div className="ml-auto flex items-center gap-2">
-                                <button
-                                    type="button"
-                                    onClick={() => setRestoreTarget(backup)}
-                                    disabled={backup.status !== 'ready'}
-                                    className={cn(actionBtn, backup.status !== 'ready' && 'opacity-50')}
-                                >
-                                    <History className="size-3.5" /> Restore
-                                </button>
-                                <button
-                                    type="button"
-                                    aria-label={`Delete ${backup.name}`}
-                                    onClick={() => setDeleteBackupTarget(backup)}
-                                    className={cn(actionBtn, 'hover:!border-red-500/50 hover:!text-red-400')}
-                                >
-                                    <Trash2 className="size-3.5" />
-                                </button>
-                            </div>
-                        </div>
-                    ))}
-                </div>
+                <ServerBackups
+                    server={server}
+                    backups={backups}
+                    quota={quota}
+                    creating={creatingBackup}
+                    onCreateBackup={createBackup}
+                    onToggleAuto={toggleAutoBackup}
+                    onRetain={setBackupRetain}
+                    onRestore={(b) => setRestoreTarget(b)}
+                    onDelete={(b) => setDeleteBackupTarget(b)}
+                />
             )}
 
             {tab === 'settings' && (

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Activity,
+  Lock,
   AlertTriangle,
   ArrowDown,
   ArrowUp,
@@ -271,7 +272,7 @@ function LimitRow({ label, used, limit, pct, color, icon: Icon }) {
  * Server overview: status hero with uptime, live metric tiles, recent
  * activity, quick actions, backups summary, limits and configuration.
  */
-export default function ServerOverview({ server, status, stats, usage, backups, onTab, onCreateBackup }) {
+export default function ServerOverview({ server, status, stats, usage, backups, quota, onTab, onCreateBackup }) {
   const online = status === 'online';
   const st = STATUS[status] ?? STATUS.offline;
   const { samples, mode } = useLiveStats(server, online);
@@ -538,13 +539,31 @@ export default function ServerOverview({ server, status, stats, usage, backups, 
                   ? `Latest: ${timeAgo(latestBackup.createdAt)} · ${fmtBytes(latestBackup.sizeBytes)} · ${latestBackup.type === 'auto' ? 'automatic' : 'manual'}`
                   : 'No backups yet'}
               </p>
-              <button
-                type="button"
-                onClick={onCreateBackup}
-                className="inline-flex items-center justify-center gap-1.5 rounded-full bg-white px-4 py-2 text-[0.8rem] font-bold text-black transition hover:bg-gray-200"
-              >
-                <Plus className="size-3.5" /> Create backup now
-              </button>
+              {quota != null && (quota.slots ?? 0) <= 0 ? (
+                <Link
+                  to="/pricing"
+                  className="group flex items-center gap-3 rounded-xl border border-amber-500/25 bg-amber-500/[0.06] px-4 py-3 transition hover:border-amber-500/50"
+                >
+                  <span className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-300">
+                    <Lock className="size-4" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[0.85rem] font-semibold">Backups locked</span>
+                    <span className="block truncate text-[0.74rem] text-ink-muted">
+                      <span className="capitalize">{quota.planName ?? 'Current'} plan</span> has no backup slots — upgrade to unlock
+                    </span>
+                  </span>
+                  <ChevronRight className="size-4 shrink-0 text-ink-muted transition group-hover:translate-x-0.5 group-hover:text-foreground" />
+                </Link>
+              ) : (
+                <button
+                  type="button"
+                  onClick={onCreateBackup}
+                  className="inline-flex items-center justify-center gap-1.5 rounded-full bg-white px-4 py-2 text-[0.8rem] font-bold text-black transition hover:bg-gray-200"
+                >
+                  <Plus className="size-3.5" /> Create backup now
+                </button>
+              )}
             </div>
           </Panel>
         </div>

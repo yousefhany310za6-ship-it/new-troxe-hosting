@@ -124,6 +124,13 @@ export class ServersController {
     return this.svc.events(u.sub, id, limit);
   }
 
+  @Get(':id/backups/quota')
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  @UseGuards(ServerOwnerGuard)
+  backupQuota(@Param('id', ParseUuidPipe) id: string, @CurrentUser() u: ReqUser) {
+    return this.backups.quota(u.sub, id);
+  }
+
   @Get(':id/logs')
   @Throttle({ default: { limit: 60, ttl: 60_000 } })
   @UseGuards(ServerOwnerGuard)
