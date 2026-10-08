@@ -18,8 +18,8 @@ export default function SignUp() {
       <AntiGravityCanvas />
       <Navbar />
       {/* pt accounts for the fixed navbar height */}
-      <main className="container-page relative z-10 pt-28 pb-16">
-        <div className="overflow-hidden rounded-xl">
+      <main className="container-page relative z-10 flex min-h-[calc(100vh-7rem)] items-center justify-center pt-28 pb-16">
+        <div className="w-full">
           <SignUp1
             brandName="Troxe Hosting"
             onSignUp={({ username, email, password }) => signUp({ name: username, email, password })}

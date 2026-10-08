@@ -11,6 +11,7 @@ import {
   Globe,
   History,
   LogIn,
+  MailWarning,
   MonitorSmartphone,
   Plus,
   Power,
@@ -105,19 +106,23 @@ function greeting() {
 function Tile({ to, icon: Icon, label, value, sub, accent }) {
     const body = (
         <>
+            <span aria-hidden="true" className="absolute inset-x-4 top-0 h-px" style={{ background: `linear-gradient(90deg, transparent, ${accent}66, transparent)` }} />
             <div className="flex items-center justify-between gap-2">
                 <p className="truncate text-[0.8rem] font-semibold text-ink-secondary">{label}</p>
-                <span className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-hairline bg-veil" style={{ color: accent }}>
+                <span className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-hairline" style={{ backgroundColor: `${accent}14`, color: accent }}>
                     <Icon className="size-4" />
                 </span>
             </div>
             <p className="mt-2 truncate text-[1.5rem] leading-none font-extrabold tabular-nums">{value}</p>
-            <p className="mt-1.5 truncate text-[0.74rem] text-ink-muted">{sub}</p>
+            <p className="mt-1.5 flex items-center gap-1 truncate text-[0.74rem] text-ink-muted">
+                {sub}
+                {to && <ArrowRight size={12} className="shrink-0 opacity-0 transition group-hover:translate-x-0.5 group-hover:opacity-100" />}
+            </p>
         </>
     );
-    const cls = 'flex flex-col rounded-2xl border border-hairline bg-card p-4 transition sm:p-5';
+    const cls = 'group relative flex flex-col overflow-hidden rounded-2xl border border-hairline bg-card p-4 transition duration-200 hover:-translate-y-0.5 hover:border-hairline-hover hover:shadow-[0_16px_40px_-16px_rgba(255,255,255,0.15)] sm:p-5';
     return to ? (
-        <Link to={to} className={cn(cls, 'hover:border-hairline-hover hover:bg-white/[0.03]')}>
+        <Link to={to} className={cn(cls, 'hover:bg-white/[0.03]')}>
             {body}
         </Link>
     ) : (
@@ -127,10 +132,14 @@ function Tile({ to, icon: Icon, label, value, sub, accent }) {
 
 function Panel({ title, icon: Icon, action, children, className }) {
     return (
-        <section className={cn('flex flex-col rounded-2xl border border-hairline bg-card', className)}>
-            <header className="flex items-center gap-2.5 border-b border-hairline px-5 py-3.5">
-                {Icon && <Icon className="size-4 text-ink-muted" />}
-                <h2 className="flex-1 text-[0.92rem] font-semibold">{title}</h2>
+        <section className={cn('flex flex-col overflow-hidden rounded-2xl border border-hairline bg-card', className)}>
+            <header className="flex items-center gap-2.5 border-b border-hairline bg-white/[0.015] px-5 py-3.5">
+                {Icon && (
+                    <span className="flex size-7 shrink-0 items-center justify-center rounded-lg border border-hairline bg-veil">
+                        <Icon className="size-3.5 text-ink-secondary" />
+                    </span>
+                )}
+                <h2 className="flex-1 text-[0.92rem] font-bold tracking-tight">{title}</h2>
                 {action}
             </header>
             <div className="flex-1 p-3 sm:p-4">{children}</div>
@@ -169,55 +178,92 @@ export default function Overview() {
     const recentActivity = (activity?.data ?? []).slice(0, 6);
     const planId = user?.planId ?? 'free';
     const firstName = (user?.name || 'there').split(' ')[0];
+    const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+    const allHealthy = list.length > 0 && online === list.length && attention.length === 0;
 
     return (
         <div className="flex flex-col gap-5">
             {/* ---- welcome hero ---- */}
-            <section className="relative overflow-hidden rounded-2xl border border-hairline bg-card p-5 sm:p-6">
+            <section className="relative overflow-hidden rounded-3xl border border-hairline bg-card">
                 <div
                     aria-hidden="true"
                     className="pointer-events-none absolute inset-0"
-                    style={{ backgroundImage: 'radial-gradient(600px circle at 100% 0%, rgba(255,255,255,0.07), transparent 60%)' }}
+                    style={{
+                        backgroundImage:
+                            'radial-gradient(560px circle at 100% 0%, rgba(255,255,255,0.09), transparent 62%), radial-gradient(420px circle at 0% 100%, rgba(255,255,255,0.045), transparent 60%), linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px)',
+                        backgroundSize: 'auto, auto, 28px 28px, 28px 28px',
+                    }}
                 />
-                <div className="relative flex flex-wrap items-center gap-4">
-                    <AvatarBadge url={user?.avatarUrl} name={user?.name} size="size-14" text="text-2xl" />
-                    <div className="min-w-0 flex-1 basis-48">
-                        <h1 className="text-[1.25rem] leading-tight font-extrabold tracking-tight break-words sm:text-[1.5rem]">
-                            {greeting()}, {firstName}
-                        </h1>
-                        <p className="mt-1 text-[0.88rem] text-ink-secondary">
-                            {list.length === 0
-                                ? 'Create your first server to get started.'
-                                : online === list.length
-                                  ? `All ${list.length} server${list.length === 1 ? '' : 's'} running smoothly.`
-                                  : `${online} of ${list.length} servers online.`}
-                        </p>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2">
-                        <Link
-                            to="/dashboard/servers/new"
-                            className="inline-flex items-center gap-1.5 rounded-full bg-white px-4 py-2 text-[0.8rem] font-bold text-black transition hover:bg-gray-200"
-                        >
-                            <Plus className="size-4" /> New server
-                        </Link>
-                        {planId === 'free' && (
+                <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/40 to-transparent" aria-hidden="true" />
+                <div className="relative p-5 sm:p-7">
+                    <div className="flex flex-wrap items-center gap-x-5 gap-y-4">
+                        <span className="relative shrink-0">
+                            <AvatarBadge url={user?.avatarUrl} name={user?.name} size="size-16" text="text-2xl" className="ring-2 ring-white/15" />
+                            {list.length > 0 && (
+                                <span
+                                    title={allHealthy ? 'All systems operational' : 'Something needs attention'}
+                                    className={cn(
+                                        'absolute -right-0.5 -bottom-0.5 size-4 rounded-full border-[3px] border-card',
+                                        allHealthy ? 'bg-emerald-400' : 'bg-amber-400',
+                                    )}
+                                />
+                            )}
+                        </span>
+                        <div className="min-w-0 flex-1 basis-56">
+                            <div className="flex flex-wrap items-center gap-2">
+                                <p className="font-mono text-[0.68rem] tracking-[0.16em] text-ink-muted uppercase">{today}</p>
+                                <span className="rounded-full border border-hairline bg-veil px-2 py-0.5 text-[0.66rem] font-bold text-ink-secondary capitalize">
+                                    {planId} plan
+                                </span>
+                                {user?.emailVerified === false && (
+                                    <Link to="/verify-email" className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[0.66rem] font-bold text-amber-200 transition hover:bg-amber-500/20">
+                                        Verify email
+                                    </Link>
+                                )}
+                            </div>
+                            <h1 className="mt-1.5 text-[1.6rem] leading-tight font-extrabold tracking-tight break-words sm:text-[2rem]">
+                                {greeting()}, {firstName}
+                            </h1>
+                            <p className="mt-1 flex items-center gap-2 text-[0.88rem] text-ink-secondary">
+                                {list.length > 0 && (
+                                    <span className={cn('size-1.5 shrink-0 rounded-full', allHealthy ? 'animate-pulse bg-emerald-400' : 'bg-amber-400')} />
+                                )}
+                                {list.length === 0
+                                    ? 'Create your first server to get started.'
+                                    : online === list.length
+                                      ? `All ${list.length} server${list.length === 1 ? '' : 's'} running smoothly.`
+                                      : `${online} of ${list.length} servers online.`}
+                            </p>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
                             <Link
-                                to="/pricing"
-                                className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-[0.8rem] font-bold text-amber-200 transition hover:bg-amber-500/20"
+                                to="/dashboard/servers/new"
+                                className="inline-flex items-center gap-1.5 rounded-xl bg-white px-4 py-2.5 text-[0.83rem] font-bold text-black shadow-[0_10px_36px_-12px_rgba(255,255,255,0.5)] transition hover:bg-gray-200"
                             >
-                                <Crown className="size-4" /> Upgrade
+                                <Plus className="size-4" /> New server
                             </Link>
-                        )}
+                            {planId === 'free' && (
+                                <Link
+                                    to="/pricing"
+                                    className="inline-flex items-center gap-1.5 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-[0.83rem] font-bold text-amber-200 transition hover:bg-amber-500/20"
+                                >
+                                    <Crown className="size-4" /> Upgrade
+                                </Link>
+                            )}
+                        </div>
                     </div>
                 </div>
             </section>
 
             {user && user.emailVerified === false && (
-                <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-500/40 bg-amber-500/10 px-5 py-3.5">
-                    <p className="text-[0.88rem] text-amber-200">
-                        Your email <span className="font-bold">{user.email}</span> is not verified yet — some features may ask for it.
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-500/40 bg-gradient-to-r from-amber-500/10 to-transparent px-5 py-3.5">
+                    <p className="flex min-w-0 flex-1 items-center gap-2.5 text-[0.88rem] text-amber-200 basis-48">
+                        <MailWarning size={16} className="shrink-0" />
+                        <span className="min-w-0">
+                            Your email <span className="font-bold">{user.email}</span> is not verified yet — some features may ask for it.
+                        </span>
                     </p>
-                    <Link to="/verify-email" className="rounded-full bg-white px-5 py-2 text-[0.83rem] font-bold text-black transition hover:bg-gray-200">
+                    <Link to="/verify-email" className="shrink-0 rounded-xl bg-white px-5 py-2 text-[0.83rem] font-bold text-black transition hover:bg-gray-200">
                         Verify now
                     </Link>
                 </div>
@@ -306,16 +352,26 @@ export default function Overview() {
                 >
                     {list.length === 0 ? (
                         <div className="flex flex-col items-center gap-3 px-4 py-10 text-center">
-                            <span className="flex size-12 items-center justify-center rounded-2xl border border-hairline bg-veil">
+                            <span className="relative flex size-14 items-center justify-center rounded-2xl border border-hairline bg-veil">
                                 <Server className="size-6 text-ink-muted" />
+                                <span className="absolute -top-1 -right-1 flex size-5 items-center justify-center rounded-full bg-white text-black">
+                                    <Plus size={13} strokeWidth={3} />
+                                </span>
                             </span>
                             <div>
-                                <p className="text-[0.92rem] font-bold">No servers yet</p>
-                                <p className="mt-1 text-[0.8rem] text-ink-muted">Deploy your first app, bot or site in minutes.</p>
+                                <p className="text-[0.95rem] font-bold">No servers yet</p>
+                                <p className="mx-auto mt-1 max-w-xs text-[0.8rem] text-ink-muted">Deploy your first app, bot or site in minutes.</p>
+                            </div>
+                            <div className="flex flex-wrap items-center justify-center gap-1.5" aria-hidden="true">
+                                {['Node.js', 'Python', 'Bun', 'PHP'].map((r) => (
+                                    <span key={r} className="rounded-full border border-hairline bg-white/[0.03] px-2.5 py-1 font-mono text-[0.66rem] text-ink-secondary">
+                                        {r}
+                                    </span>
+                                ))}
                             </div>
                             <Link
                                 to="/dashboard/servers/new"
-                                className="inline-flex items-center gap-1.5 rounded-full bg-white px-4 py-2 text-[0.8rem] font-bold text-black transition hover:bg-gray-200"
+                                className="inline-flex items-center gap-1.5 rounded-xl bg-white px-5 py-2.5 text-[0.83rem] font-bold text-black shadow-[0_10px_36px_-12px_rgba(255,255,255,0.5)] transition hover:bg-gray-200"
                             >
                                 <Plus size={15} /> Create server
                             </Link>
