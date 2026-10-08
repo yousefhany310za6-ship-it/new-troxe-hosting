@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { and, eq, gt, isNull } from 'drizzle-orm';
-import { createHash, randomBytes, timingSafeEqual } from 'crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'crypto';
 import { TOTP } from 'otpauth';
 import { config } from '../../config/env';
 import { AppError, Err } from '../../common/errors';
@@ -192,7 +192,7 @@ export class TwoFactorService {
    * The challenge is single-use, short-lived, and bound to the user.
    */
   async createChallenge(userId: string, ctx: { ip: string; userAgent?: string }) {
-    const id = randomToken(16);
+    const id = randomUUID();
     const expiresAt = new Date(Date.now() + CHALLENGE_TTL_MS());
     await this.db.insert(mfaChallenges).values({
       id,
