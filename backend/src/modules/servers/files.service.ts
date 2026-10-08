@@ -362,6 +362,9 @@ export class FilesService {
       const { volume, nodeId, storageGb } = await this.volumeOf(ownerId, serverId, opts);
       const arc = this.sanitizeFile(file);
       await this.assertQuota(volume, nodeId, storageGb, 0);
+      // effective cap in bytes for the post-extract gate below (0 = no cap
+      // configured → gate skipped, same fail-open rule as assertQuota)
+      const capBytes = storageGb > 0 ? Math.floor(storageGb * 1024 ** 3) : 0;
       const kind = /\.zip$/.test(arc) ? 'zip' : /(\.tar\.gz|\.tgz)$/.test(arc) ? 'targz' : /\.tar$/.test(arc) ? 'tar' : null;
       if (!kind) throw Err.invalid('FILE_FORMAT', 'Only .zip, .tar.gz, .tgz and .tar can be extracted');
       const outDir = dest !== undefined ? this.sanitizeFile(dest) : posix.dirname(arc);
@@ -415,6 +418,20 @@ export class FilesService {
         `  if [ "$newdir" -eq 1 ]; then rm -rf "$rd"; fi;`,
         `  echo TROXE_ERR=ESCAPE; exit 4;`,
         `fi`,
+        // post-extract quota gate: the compressed-size check above is
+        // vacuous for tarbombs — measure what actually landed on the
+        // volume and roll the extraction back when it crosses the cap.
+        // Unreadable usage fails open, same as the write-path gate.
+        ...(capBytes > 0
+          ? [
+              `used=$(du -sb /data 2>/dev/null | cut -f1);`,
+              `if [ -n "$used" ] && [ "$used" -gt ${capBytes} ]; then`,
+              `  if [ "$newdir" -eq 1 ]; then rm -rf "$rd";`,
+              `  else while IFS= read -r e || [ -n "$e" ]; do case "$e" in ""|./|./*) ;; *) rm -rf "$rd/$e";; esac; done < /tmp/troxe_list.txt; fi;`,
+              `  echo TROXE_ERR=QUOTA:$used:${capBytes}; exit 7;`,
+              `fi`,
+            ]
+          : []),
       ].join('\n');
       const res = await this.helper(volume, script, { capture: true, timeoutMs: 120_000, nodeId });
       this.throwIfErr(res.out, res.code);
@@ -471,18 +488,19 @@ export class FilesService {
       return;
     }
     if (used - existing + incoming > cap) {
-      const fmt = (n: number) => {
-        const u = ['B', 'KB', 'MB', 'GB'];
-        let v = n, i = 0;
-        while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
-        return `${v.toFixed(v < 10 && i > 0 ? 1 : 0)} ${u[i]}`;
-      };
       throw new AppError(
         'STORAGE_QUOTA_EXCEEDED',
         413,
-        `Storage quota exceeded (${fmt(used)} used of ${fmt(cap)}). Free space or upgrade your plan.`,
+        `Storage quota exceeded (${this.fmtBytes(used)} used of ${this.fmtBytes(cap)}). Free space or upgrade your plan.`,
       );
     }
+  }
+
+  private fmtBytes(n: number): string {
+    const u = ['B', 'KB', 'MB', 'GB'];
+    let v = n, i = 0;
+    while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+    return `${v.toFixed(v < 10 && i > 0 ? 1 : 0)} ${u[i]}`;
   }
 
   private async helper(
@@ -507,12 +525,12 @@ export class FilesService {
   }
 
   private throwIfErr(out: string, code: number): void {
-    const m = out.match(/TROXE_ERR=([A-Z]+)(?::(\d+))?/);
+    const m = out.match(/TROXE_ERR=([A-Z]+)(?::(\d+))?(?::(\d+))?/);
     if (!m) {
       if (code !== 0) throw new AppError('FILE_OP_FAILED', 502, 'File operation failed');
       return;
     }
-    const [, kind, size] = m;
+    const [, kind, size, size2] = m;
     switch (kind) {
       case 'NOTFOUND':
         throw Err.notFound('FILE_NOT_FOUND');
@@ -526,6 +544,12 @@ export class FilesService {
         throw new AppError('FILE_TOO_LARGE', 413, `File is ${size ?? '?'} bytes — exceeds the limit`);
       case 'WRITE':
         throw new AppError('FILE_OP_FAILED', 502, 'File operation failed');
+      case 'QUOTA':
+        throw new AppError(
+          'STORAGE_QUOTA_EXCEEDED',
+          413,
+          `Storage quota exceeded (${this.fmtBytes(Number(size))} used of ${this.fmtBytes(Number(size2))}). Free space or upgrade your plan.`,
+        );
       default:
         throw new AppError('FILE_OP_FAILED', 502, 'File operation failed');
     }
