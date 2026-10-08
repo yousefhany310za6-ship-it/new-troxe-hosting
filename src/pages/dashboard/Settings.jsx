@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { BadgeCheck, CalendarClock, Camera, Loader2, ShieldCheck, Trash2 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
-import { apiDelete, apiPatch } from '@/lib/api.js';
+import { apiDelete, apiGet, apiPatch, apiPost } from '@/lib/api.js';
 import { useAuth } from '@/context/AuthContext.jsx';
 import {
     useChangePassword,
