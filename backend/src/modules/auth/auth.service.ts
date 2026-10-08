@@ -453,6 +453,42 @@ export class AuthService {
     return rows.length;
   }
 
+  /**
+   * Finalize a completed 2FA challenge: re-validate the account (a suspension,
+   * deletion, or lock that landed after the challenge was created must still
+   * win) and then mint the full session. Called by TwoFactorController after
+   * TwoFactorService.completeChallenge() consumes the challenge.
+   */
+  async finalizeMfaLogin(userId: string, ctx: ReqCtx, provider: 'password' | 'google' | 'discord' = 'password') {
+    const [user] = await this.db.select().from(users).where(eq(users.id, userId)).limit(1);
+    if (!user || user.status === 'deleted') throw Err.unauthorized('USER_GONE');
+    if (user.status === 'suspended') {
+      await this.audit.record({ actorId: user.id, actorEmail: user.email, action: 'auth.login.suspended', ip: ctx.ip, userAgent: ctx.device });
+      throw new AppError('ACCOUNT_SUSPENDED', 403, 'Your account has been suspended by the administration. If you believe this is a mistake, please contact support.');
+    }
+    if (user.lockedUntil && user.lockedUntil.getTime() > Date.now()) {
+      throw Err.accountLocked(Math.ceil((user.lockedUntil.getTime() - Date.now()) / 1000));
+    }
+    await this.recordLogin(user.id, ctx, 'success', provider);
+    const issued = await this.newRefreshSession(user, ctx);
+    await this.audit.record({
+      actorId: user.id,
+      actorEmail: user.email,
+      action: 'auth.login.success',
+      targetType: 'user',
+      targetId: user.id,
+      ip: ctx.ip,
+      userAgent: ctx.device,
+    });
+    await this.alertNewIp(user, ctx, provider);
+    return {
+      user: { id: user.id, name: user.name, email: user.email, role: user.role },
+      accessToken: issued.accessToken,
+      refreshToken: issued.refreshToken,
+      expiresAt: issued.expiresAt,
+    };
+  }
+
   // ---- helpers --------------------------------------------------------------
 
   private async newRefreshSession(

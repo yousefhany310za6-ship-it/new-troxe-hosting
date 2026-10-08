@@ -251,6 +251,7 @@ export class TwoFactorService {
       ip: ctx.ip,
       userAgent: ctx.userAgent,
     });
+
     return { userId: challenge.userId };
   }
 

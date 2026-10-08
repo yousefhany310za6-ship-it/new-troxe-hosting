@@ -51,6 +51,11 @@ export class AuthController {
   @HttpCode(200)
   async login(@Body() dto: LoginDto, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const out = await this.auth.login(dto, ctxOf(req));
+    // 2FA challenge: no tokens yet, just the challenge
+    if ((out as any).mfaRequired) {
+      noStore(res);
+      return { mfaRequired: true, challengeId: (out as any).challengeId, expiresAt: (out as any).expiresAt };
+    }
     res.cookie(COOKIE, out.refreshToken, cookieOpts);
     noStore(res);
     return { user: out.user, accessToken: out.accessToken, expiresAt: out.expiresAt };

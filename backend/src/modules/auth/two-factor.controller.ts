@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Post, Req, Res, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { IsString, Length, Matches } from 'class-validator';
 import { JwtAuthGuard, type ReqUser } from './jwt.guard';
@@ -6,6 +6,19 @@ import { CurrentUser } from './current-user';
 import { ctxOf } from '../../common/request-context';
 import type { Request } from 'express';
 import { TwoFactorService } from './two-factor.service';
+import { AuthService } from './auth.service';
+import { config } from '../../config/env';
+import type { Response } from 'express';
+
+const COOKIE = config.REFRESH_COOKIE;
+const cookieOpts = {
+  httpOnly: true,
+  secure: config.IS_PROD,
+  sameSite: 'lax' as const,
+  path: '/',
+  maxAge: config.JWT_REFRESH_TTL_SEC * 1000,
+};
+const noStore = (res: Response) => res.setHeader('Cache-Control', 'no-store');
 
 class TotpCodeDto {
   @IsString()
@@ -26,7 +39,10 @@ class ChallengeCodeDto {
 
 @Controller({ path: 'auth/2fa', version: '1' })
 export class TwoFactorController {
-  constructor(private twoFactor: TwoFactorService) {}
+  constructor(
+    private twoFactor: TwoFactorService,
+    private auth: AuthService,
+  ) {}
 
   /** 2FA status for the current user. */
   @Get()
@@ -75,7 +91,12 @@ export class TwoFactorController {
   @Post('verify')
   @Throttle({ default: { limit: 5, ttl: 300_000 } })
   @HttpCode(200)
-  verify(@Body() dto: ChallengeCodeDto, @Req() req: Request) {
-    return this.twoFactor.completeChallenge(dto.challengeId, dto.code, ctxOf(req));
+  async verify(@Body() dto: ChallengeCodeDto, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    const c = ctxOf(req);
+    const { userId } = await this.twoFactor.completeChallenge(dto.challengeId, dto.code, { ip: c.ip, userAgent: c.device });
+    const out = await this.auth.finalizeMfaLogin(userId, c);
+    res.cookie(COOKIE, out.refreshToken, cookieOpts);
+    noStore(res);
+    return { user: out.user, accessToken: out.accessToken, expiresAt: out.expiresAt };
   }
 }
