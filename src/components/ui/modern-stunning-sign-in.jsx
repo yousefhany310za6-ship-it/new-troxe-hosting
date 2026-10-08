@@ -61,7 +61,10 @@ function SignIn1({ className, onSignIn, onGoogleSignIn, onDiscordSignIn, brandNa
     setPending(true);
     try {
       if (onSignIn) {
-        await onSignIn({ email, password });
+        const out = await onSignIn({ email, password });
+        // 2FA challenge: the parent swaps to the verification screen — do NOT
+        // navigate away (the success + auto-advance below is for full logins only).
+        if (out?.mfaRequired) return;
       }
       setSuccess(true);
       // Real auth — head to the dashboard after a beat so the success shows.
