@@ -60,10 +60,10 @@ export class TwoFactorService {
 
     await this.db
       .insert(twoFactorSecrets)
-      .values({ userId, secretEnc: encryptSecret(secret), enabled: false })
+      .values({ userId, secretEnc: encryptSecret(JSON.stringify(secret)), enabled: false })
       .onConflictDoUpdate({
         target: twoFactorSecrets.userId,
-        set: { secretEnc: encryptSecret(secret), enabled: false, updatedAt: new Date() },
+        set: { secretEnc: encryptSecret(JSON.stringify(secret)), enabled: false, updatedAt: new Date() },
       });
 
     return { secret, otpauthUrl };
