@@ -1,5 +1,22 @@
 import { useEffect, useState } from 'react';
 import { cn } from '@/lib/utils';
+import { apiBase } from '@/lib/api.js';
+
+/**
+ * Resolve an avatar URL to something the browser can actually load.
+ * Custom uploads are stored as site-relative paths (/api/v1/users/avatars/…),
+ * but API calls (and the avatar files themselves) live on the API origin —
+ * the site domain has no /api proxy, so a relative <img src> only ever gets
+ * the SPA fallback page. Absolute provider (OAuth) URLs pass through.
+ */
+function resolveAvatarSrc(url) {
+    if (!url || !url.startsWith('/')) return url || null;
+    try {
+        return new URL(url, apiBase()).href;
+    } catch {
+        return url;
+    }
+}
 
 /**
  * Circular avatar with initial fallback.
@@ -8,7 +25,8 @@ import { cn } from '@/lib/utils';
  */
 export function AvatarBadge({ url, name, size = 'size-16', text = 'text-xl', className }) {
     const [broken, setBroken] = useState(false);
-    useEffect(() => setBroken(false), [url]);
+    const src = resolveAvatarSrc(url);
+    useEffect(() => setBroken(false), [src]);
     return (
         <div
             className={cn(
@@ -18,8 +36,8 @@ export function AvatarBadge({ url, name, size = 'size-16', text = 'text-xl', cla
                 className,
             )}
         >
-            {url && !broken ? (
-                <img src={url} alt="" className="size-full object-cover" onError={() => setBroken(true)} />
+            {src && !broken ? (
+                <img src={src} alt="" className="size-full object-cover" onError={() => setBroken(true)} />
             ) : (
                 ((name || 'U').charAt(0) || 'U').toUpperCase()
             )}

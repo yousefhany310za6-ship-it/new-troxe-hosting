@@ -68,7 +68,10 @@ export function AuthProvider({ children }) {
   const signOut = useCallback(async () => {
     // POST (not apiGet — it forces GET and would 404, leaving the httpOnly
     // cookie alive while the UI pretends the session is dead)
-    try { await apiPost('/auth/logout', null, { auth: false }); } catch { /* cookie may be gone */ }
+    // NOTE: body must stay `undefined` (not null) — the API rejects a JSON
+    // `null` body with 400, which would leave the refresh cookie alive and
+    // silently re-authenticate the next visit (logout that "doesn't stick").
+    try { await apiPost('/auth/logout', undefined, { auth: false }); } catch { /* cookie may be gone */ }
     setAccessToken(null);
     setUser(null);
     qc.removeQueries({ queryKey: keys.user() });
