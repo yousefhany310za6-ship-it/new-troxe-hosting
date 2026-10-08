@@ -89,7 +89,8 @@ function SidebarContent({ onNavigate }) {
 
 export default function DashboardLayout() {
     const [open, setOpen] = useState(false);
-    const { user } = useAuth();
+    const { user, signOut } = useAuth();
+    const navigate = useNavigate();
 
     return (
         <div className="min-h-screen bg-black text-foreground">
@@ -140,6 +141,25 @@ export default function DashboardLayout() {
                     </div>
                 </header>
 
+                {user?.impersonatedBy && (
+                    <div className="border-b border-amber-500/30 bg-amber-500/10 px-4 py-2.5 sm:px-6" role="alert">
+                        <div className="mx-auto flex w-full max-w-[1100px] flex-wrap items-center gap-x-3 gap-y-1 text-[0.83rem]">
+                            <ShieldCheck className="size-4 shrink-0 text-amber-300" />
+                            <p className="min-w-0 flex-1 text-amber-200">
+                                <span className="font-bold">Admin view</span> — you are viewing as{' '}
+                                <span className="font-mono font-bold">{user?.name}</span>. Actions are logged.
+                                This session expires automatically.
+                            </p>
+                            <button
+                                type="button"
+                                onClick={async () => { await signOut(); navigate('/signin', { replace: true }); }}
+                                className="shrink-0 rounded-full border border-amber-500/40 px-3.5 py-1 text-[0.75rem] font-bold text-amber-200 transition hover:bg-amber-500/20"
+                            >
+                                End session
+                            </button>
+                        </div>
+                    </div>
+                )}
                 <main className="mx-auto w-full max-w-[1100px] p-4 sm:p-6 lg:p-8">
                     <Outlet />
                 </main>

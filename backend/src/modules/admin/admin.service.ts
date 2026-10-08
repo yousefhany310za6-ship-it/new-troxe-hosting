@@ -501,7 +501,7 @@ export class AdminService {
     }
   }
 
-  async impersonateUser(userId: string, actorId: string) {
+  async impersonateUser(userId: string, actorId: string, actorEmail?: string) {
     const [user] = await this.db
       .select({ id: users.id, email: users.email, role: users.role, tokenVersion: users.tokenVersion })
       .from(users)
@@ -519,10 +519,11 @@ export class AdminService {
 
     await this.audit.record({
       actorId,
-      actorEmail: 'admin',
+      actorEmail: actorEmail ?? null,
       action: 'admin.user.impersonate',
       targetType: 'user',
       targetId: userId,
+      meta: { impersonatedUserId: user.id, impersonatedEmail: user.email },
     });
 
     return { token: impersonationToken, expiresAt, user: { id: user.id, email: user.email, role: user.role } };

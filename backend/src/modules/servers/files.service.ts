@@ -435,7 +435,7 @@ export class FilesService {
     this.serversSvc.assertOperable(row, opts);
     if (!(await this.docker.availableOn(row.nodeId))) throw new AppError('DOCKER_UNAVAILABLE', 503, 'Container runtime is not available');
     if (!row.volumeName) throw Err.conflict('SERVER_NOT_PROVISIONED', 'Server has no volume yet');
-    return { volume: row.volumeName, nodeId: row.nodeId, storageGb: row.storageGb };
+    return { volume: row.volumeName, nodeId: row.nodeId, storageGb: await this.serversSvc.effectiveStorageGb(row) };
   }
 
   /**

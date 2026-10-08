@@ -28,10 +28,13 @@ export class UsersService {
     return safe;
   }
 
-  async me(userId: string) {
+  async me(userId: string, impAdminId?: string) {
     const [u] = await this.db.select().from(users).where(eq(users.id, userId)).limit(1);
     if (!u) throw Err.unauthorized('USER_GONE');
-    return this.strip(u);
+    const safe = this.strip(u);
+    // tell the client when this session is an admin impersonation so the UI
+    // can banner it; never expose anything else about the admin.
+    return impAdminId ? { ...safe, impersonatedBy: impAdminId } : safe;
   }
 
   /** Own audit trail for the Activity page (newest first, capped). */

@@ -288,7 +288,7 @@ export class BackupsService {
 
       // storage check: current usage + archive bytes must fit the plan cap
       const used = await this.provisioner.volumeUsage(server.volumeName ?? '', runtimeImage(server.runtime).image, server.nodeId);
-      const cap = server.storageGb * 1024 ** 3;
+      const cap = (await this.serversSvc.effectiveStorageGb(server)) * 1024 ** 3;
       if (used !== null && used + (row.sizeBytes ?? 0) > cap)
         throw Err.quota('QUOTA_STORAGE', 'Not enough storage headroom to unpack this backup. Free space or upgrade.');
 
@@ -458,7 +458,10 @@ export class BackupsService {
         retain: servers.autoBackupRetain,
       })
       .from(servers)
-      .where(eq(servers.autoBackup, true))
+      // suspended servers are skipped below; deleted/suspended OWNERS are
+      // excluded here so their data stops accumulating backups
+      .innerJoin(users, eq(users.id, servers.ownerId))
+      .where(and(eq(servers.autoBackup, true), eq(users.status, 'active')))
       .orderBy(servers.createdAt)
       .limit(200);
 

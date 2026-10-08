@@ -120,8 +120,11 @@ export class AdminController {
     return this.admin.deleteUser(id, u.sub, u.email, ctxOf(req).ip);
   }
 
-  // NOTE: impersonation exists in AdminService but is intentionally NOT
-  // exposed here — it mints a live session for another account and needs a
+  // NOTE: impersonation is deliberately exposed with guardrails (5-min TTL,
+  // non-admin targets only, audited issuance, client banner via
+  // /users/me impersonatedBy). Per-action audit still attributes the
+  // impersonated user id — full dual-attribution needs an audit-schema
+  // change (documented limitation, not silent). — it mints a live session for another account and needs a
   // dedicated security review (ticket scoping, banner, forced expiry) before
   // any UI is built on top of it.
 
@@ -363,7 +366,7 @@ export class AdminController {
     @Param('id', UUID) id: string,
     @CurrentUser() u: ReqUser,
   ) {
-    const result = await this.admin.impersonateUser(id, u.sub);
+    const result = await this.admin.impersonateUser(id, u.sub, u.email);
     return { token: result.token, expiresAt: result.expiresAt, user: result.user };
   }
 }

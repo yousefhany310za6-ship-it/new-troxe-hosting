@@ -8,6 +8,7 @@ import { NetworkHardeningService } from './provisioning/network-hardening.servic
 import { ProvisionerService } from './provisioning/provisioner.service';
 import { runtimeImage } from './provisioning/images';
 import { BackupsService } from './backups.service';
+import { ServersService } from './servers.service';
 
 const GRACE_MS = 5 * 60 * 1000; // never GC a resource that is seconds old
 const STUCK_PROVISIONING_MS = 15 * 60 * 1000;
@@ -62,6 +63,7 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
     private hardening: NetworkHardeningService,
     private provisioner: ProvisionerService,
     private backups: BackupsService,
+    private serversSvc: ServersService,
   ) {}
 
   onModuleInit() {
@@ -319,7 +321,7 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
    * stalls the tick: each check spawns one short-lived `du` helper.
    */
   private async enforceStorage(
-    rows: Pick<typeof servers.$inferSelect, 'id' | 'runtime' | 'status' | 'lastError' | 'containerId' | 'volumeName' | 'storageGb' | 'nodeId'>[],
+    rows: Pick<typeof servers.$inferSelect, 'id' | 'runtime' | 'status' | 'lastError' | 'containerId' | 'volumeName' | 'storageGb' | 'nodeId' | 'ownerId'>[],
     nodeId: string,
   ): Promise<void> {
     if (this.lastStorageCheck.size > 10_000) this.lastStorageCheck.clear();
@@ -337,7 +339,8 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
       try {
         const used = await this.provisioner.volumeUsage(row.volumeName, runtimeImage(row.runtime).image, nodeId);
         if (used === null) continue;
-        const cap = row.storageGb * 1024 ** 3;
+        const capGb = await this.serversSvc.effectiveStorageGb(row);
+        const cap = capGb * 1024 ** 3;
         if (used > cap) {
           if (row.containerId) await this.docker.stop(row.containerId, 15, nodeId).catch(() => undefined);
           await this.db

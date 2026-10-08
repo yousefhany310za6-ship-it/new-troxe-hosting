@@ -11,6 +11,8 @@ export interface ReqUser {
   sid: string;
   email: string;
   role: 'user' | 'admin';
+  /** admin actor behind an impersonation token (undefined for normal sessions) */
+  imp?: string;
 }
 
 /**
@@ -63,6 +65,9 @@ export class JwtAuthGuard implements CanActivate {
         sid: payload.sid ?? '',
         email: payload.email,
         role: payload.role === 'admin' ? 'admin' : 'user',
+        // surface impersonation so downstream code (and /users/me) can show
+        // it; authorization still uses sub/role, which the guard verified.
+        imp: typeof payload.imp === 'string' ? payload.imp : undefined,
       } satisfies ReqUser;
       return true;
     } catch (e) {

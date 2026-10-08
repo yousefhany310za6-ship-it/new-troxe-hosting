@@ -1,4 +1,4 @@
-import { Inject, Logger } from '@nestjs/common';
+import { Inject, Logger, UsePipes, ValidationPipe } from '@nestjs/common';
 import {
   ConnectedSocket,
   MessageBody,
@@ -18,6 +18,7 @@ import { users } from '../../db/schema';
 import { AuditService } from '../audit/audit.module';
 import { ServersService } from './servers.service';
 import { DockerService, startedAtToSince, type ShellHandle } from './provisioning/docker.service';
+import { ExecInputDto, ExecResizeDto } from './exec.dto';
 
 const MAX_INPUT_BYTES = 4096;
 const IDLE_MS = 2 * 60 * 60 * 1000; // a quiet server is still being watched
@@ -261,7 +262,8 @@ export class ExecGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   @SubscribeMessage('input')
-  onInput(@ConnectedSocket() client: Socket, @MessageBody() body: { data?: string }) {
+  @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
+  onInput(@ConnectedSocket() client: Socket, @MessageBody() body: ExecInputDto) {
     const s = this.bySocket.get(client.id);
     if (!s || s.closed) return { ok: false };
     if (s.readOnly) return { ok: false, error: 'READ_ONLY_MODE' };
@@ -281,9 +283,10 @@ export class ExecGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   @SubscribeMessage('resize')
+  @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
   async onResize(
     @ConnectedSocket() client: Socket,
-    @MessageBody() body: { cols?: number; rows?: number },
+    @MessageBody() body: ExecResizeDto,
   ) {
     const s = this.bySocket.get(client.id);
     if (!s || s.closed) return { ok: false };

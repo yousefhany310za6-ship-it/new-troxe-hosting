@@ -15,7 +15,7 @@ export class UsersController {
 
   @Get('me')
   me(@CurrentUser() u: ReqUser) {
-    return this.usersSvc.me(u.sub);
+    return this.usersSvc.me(u.sub, u.imp);
   }
 
   /** Own audit trail (Activity page). */

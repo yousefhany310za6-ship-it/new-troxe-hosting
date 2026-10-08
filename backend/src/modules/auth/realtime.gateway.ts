@@ -8,11 +8,12 @@ import {
   MessageBody,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
-import { Inject, UseGuards } from '@nestjs/common';
+import { Inject, UseGuards, UsePipes, ValidationPipe } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
 import { config } from '../../config/env';
 import { WsAuthGuard } from './ws-auth.guard';
 import { AdminGrantService } from './admin-grant.service';
+import { ChannelSubscribeDto } from './ws.dto';
 import { DB, Db } from '../../db/db.module';
 import { servers, users } from '../../db/schema';
 
@@ -104,9 +105,10 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
   }
 
   @SubscribeMessage('subscribe')
+  @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
   async handleSubscribe(
     @ConnectedSocket() client: AuthenticatedSocket,
-    @MessageBody() data: { channels: string[] },
+    @MessageBody() data: ChannelSubscribeDto,
   ) {
     if (!client.userId) return { ok: false, error: 'NOT_AUTHENTICATED' };
     if (!Array.isArray(data.channels)) return { ok: false, error: 'INVALID_CHANNELS' };
@@ -124,9 +126,10 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
   }
 
   @SubscribeMessage('unsubscribe')
+  @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
   handleUnsubscribe(
     @ConnectedSocket() client: AuthenticatedSocket,
-    @MessageBody() data: { channels: string[] },
+    @MessageBody() data: ChannelSubscribeDto,
   ) {
     if (!client.userId) return { ok: false, error: 'NOT_AUTHENTICATED' };
     if (!Array.isArray(data.channels)) return { ok: false, error: 'INVALID_CHANNELS' };

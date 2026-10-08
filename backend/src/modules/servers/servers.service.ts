@@ -96,6 +96,31 @@ export class ServersService {
   }
 
   /**
+   * Effective storage cap for enforcement: the LOWER of the row snapshot
+   * (limits at provision time) and the owner's CURRENT plan. A plan
+   * downgrade therefore shrinks enforcement immediately without migrating
+   * stored rows; a missing plan falls back to the snapshot (fail-open to
+   * today's behavior, never stricter than the purchased record).
+   */
+  async effectiveStorageGb(row: Pick<Server, 'storageGb' | 'ownerId'>): Promise<number> {
+    const snap = row.storageGb;
+    if (!snap || snap <= 0) return snap;
+    const [owner] = await this.db
+      .select({ planId: users.planId })
+      .from(users)
+      .where(eq(users.id, row.ownerId))
+      .limit(1);
+    if (!owner?.planId) return snap;
+    const [plan] = await this.db
+      .select({ storageGb: plans.storageGb })
+      .from(plans)
+      .where(eq(plans.id, owner.planId))
+      .limit(1);
+    if (!plan || !plan.storageGb || plan.storageGb <= 0) return snap;
+    return Math.min(snap, plan.storageGb);
+  }
+
+  /**
    * Suspension gate: every user-facing operation that touches a server must
    * pass through here. Suspended servers are fully inert for their owners
    * (lifecycle, files, backups, console, stats) while the row, volume and
@@ -770,10 +795,11 @@ export class ServersService {
     const row = await this.requireOwned(ownerId, id);
     this.assertOperable(row);
     const bytes = await this.provisioner.volumeUsage(row.volumeName ?? '', runtimeImage(row.runtime).image, row.nodeId);
+    const capGb = await this.effectiveStorageGb(row);
     return {
       usedBytes: bytes ?? 0,
-      limitBytes: row.storageGb * 1024 * 1024 * 1024,
-      usedPercent: bytes && row.storageGb ? Math.min(100, Math.round((bytes / (row.storageGb * 1024 ** 3)) * 100)) : 0,
+      limitBytes: capGb * 1024 * 1024 * 1024,
+      usedPercent: bytes && capGb ? Math.min(100, Math.round((bytes / (capGb * 1024 ** 3)) * 100)) : 0,
     };
   }
 
