@@ -254,6 +254,14 @@ export interface AppConfig {
   readonly RATE_LIMIT_WINDOW_MS: number;
   readonly RATE_LIMIT_MAX: number;
   readonly AUTH_RATE_LIMIT_MAX: number;
+  /** 2FA challenge TTL (seconds) — temporary login state expires fast. */
+  readonly MFA_CHALLENGE_TTL_SEC: number;
+  /** Failed 2FA verifications before a per-user temporary lockout. */
+  readonly MFA_MAX_FAILURES: number;
+  /** How long a 2FA lockout lasts (seconds). */
+  readonly MFA_LOCKOUT_SEC: number;
+  /** Recovery codes issued per batch. */
+  readonly RECOVERY_CODE_COUNT: number;
   readonly LOCKOUT_THRESHOLD: number;
   /** Failures older than this no longer count toward the lockout (seconds). */
   readonly LOCKOUT_DECAY_SEC: number;
@@ -291,6 +299,10 @@ export const config: AppConfig = Object.freeze({
   JWT_REFRESH_SECRET: REFRESH_SECRET,
   JWT_ACCESS_TTL: accessTtl(raw.JWT_ACCESS_TTL ?? '15m'),
   JWT_REFRESH_TTL_SEC: num('JWT_REFRESH_TTL_SEC', 7 * 24 * 3600, 600, 30 * 24 * 3600),
+  MFA_CHALLENGE_TTL_SEC: num('MFA_CHALLENGE_TTL_SEC', 300, 60, 3600),
+  MFA_MAX_FAILURES: num('MFA_MAX_FAILURES', 5, 3, 20),
+  MFA_LOCKOUT_SEC: num('MFA_LOCKOUT_SEC', 900, 60, 3600),
+  RECOVERY_CODE_COUNT: num('RECOVERY_CODE_COUNT', 10, 6, 20),
   BCRYPT_ROUNDS: num('BCRYPT_ROUNDS', IS_PROD ? 12 : 10, IS_PROD ? 10 : 4, 15),
   ENV_ENCRYPTION_KEY: ENV_KEY,
   WS_TICKET_SECRET: WS_TICKET_SECRET,

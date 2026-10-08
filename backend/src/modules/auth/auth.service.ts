@@ -9,12 +9,13 @@ import { hashPassword, verifyPassword } from '../../common/password';
 import { AppError, Err, pgCodeOf } from '../../common/errors';
 import { ReqCtx } from '../../common/request-context';
 import { DB, Db } from '../../db/db.module';
-import { authSessions, sessions, users, type User } from '../../db/schema';
+import { authSessions, sessions, twoFactorSecrets, users, type User } from '../../db/schema';
 import { AuditService } from '../audit/audit.module';
 import { GeoIpService } from '../../common/geoip/geoip.service';
 import { LoginNotifyService, type LoginMethod } from '../email/login-notify.service';
 import { EmailService } from '../email/email.service';
 import { EmailVerificationService } from './email-verification.service';
+import { TwoFactorService } from './two-factor.service';
 import { LoginDto, SignupDto } from './dto';
 
 /** `<sessionId>.<48-byte secret>` — opaque, high entropy, versionless */
@@ -53,6 +54,7 @@ export class AuthService {
     private email: EmailService,
     private verification: EmailVerificationService,
     private geo: GeoIpService,
+    private twoFactor: TwoFactorService,
   ) {
     this.dummyHash = bcrypt.hash(randomToken(32), config.BCRYPT_ROUNDS);
   }
@@ -200,6 +202,27 @@ export class AuthService {
     }
 
     await this.recordLogin(user.id, ctx, 'success', 'password');
+
+    // 2FA gate: if enabled, issue a challenge instead of tokens
+    const [tfa] = await this.db
+      .select({ enabled: twoFactorSecrets.enabled })
+      .from(twoFactorSecrets)
+      .where(eq(twoFactorSecrets.userId, user.id))
+      .limit(1);
+    if (tfa?.enabled) {
+      const challenge = await this.twoFactor.createChallenge(user.id, ctx);
+      await this.audit.record({
+        actorId: user.id,
+        actorEmail: user.email,
+        action: 'auth.login.2fa_challenge',
+        targetType: 'user',
+        targetId: user.id,
+        ip: ctx.ip,
+        userAgent: ctx.device,
+      });
+      return { mfaRequired: true, challengeId: challenge.challengeId, expiresAt: challenge.expiresAt } as any;
+    }
+
     const issued = await this.newRefreshSession(user, ctx);
     await this.audit.record({
       actorId: user.id,
@@ -248,6 +271,27 @@ export class AuthService {
     }
 
     await this.recordLogin(user.id, ctx, 'success', provider);
+
+    // 2FA gate for OAuth: challenge instead of tokens
+    const [tfa] = await this.db
+      .select({ enabled: twoFactorSecrets.enabled })
+      .from(twoFactorSecrets)
+      .where(eq(twoFactorSecrets.userId, user.id))
+      .limit(1);
+    if (tfa?.enabled) {
+      const challenge = await this.twoFactor.createChallenge(user.id, ctx);
+      await this.audit.record({
+        actorId: user.id,
+        actorEmail: user.email,
+        action: `auth.oauth.${provider}.2fa_challenge`,
+        targetType: 'user',
+        targetId: user.id,
+        ip: ctx.ip,
+        userAgent: ctx.device,
+      });
+      return { mfaRequired: true, challengeId: challenge.challengeId, expiresAt: challenge.expiresAt } as any;
+    }
+
     const issued = await this.newRefreshSession(user, ctx);
     await this.audit.record({
       actorId: user.id,

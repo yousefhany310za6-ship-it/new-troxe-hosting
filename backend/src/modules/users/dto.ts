@@ -1,4 +1,4 @@
-import { IsBoolean, IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator';
+import { IsBoolean, IsOptional, IsString, Length, Matches, MaxLength, MinLength } from 'class-validator';
 
 /**
  * Profile PATCH is username-only: email is immutable (accounts are keyed by
@@ -20,6 +20,11 @@ export class UpdatePasswordDto {
   @MinLength(1)
   @MaxLength(128)
   current!: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(6, 12)
+  twoFactorCode?: string;
 
   @MinLength(8, { message: 'PASSWORD_TOO_SHORT' })
   @MaxLength(128, { message: 'PASSWORD_TOO_LONG' })
@@ -43,6 +48,11 @@ export class DeleteAccountDto {
   @MinLength(1)
   @MaxLength(128)
   current!: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(6, 12)
+  twoFactorCode?: string;
 }
 
 export class SetPasswordDto {
@@ -55,4 +65,9 @@ export class SetPasswordDto {
   @MaxLength(128, { message: 'PASSWORD_TOO_LONG' })
   @Matches(/^(?=.*[A-Za-z])(?=.*\d).+$/, { message: 'PASSWORD_TOO_SIMPLE' })
   confirm!: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(6, 12)
+  twoFactorCode?: string;
 }

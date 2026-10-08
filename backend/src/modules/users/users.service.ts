@@ -3,12 +3,13 @@ import { and, desc, eq, sql } from 'drizzle-orm';
 import { Err, pgCodeOf } from '../../common/errors';
 import { hashPassword, verifyPassword } from '../../common/password';
 import { DB, Db } from '../../db/db.module';
-import { auditLogs, users, oauthAccounts } from '../../db/schema';
+import { auditLogs, users, oauthAccounts, twoFactorSecrets } from '../../db/schema';
 import { config } from '../../config/env';
 import { httpsUrlOk } from '../auth/oauth/oauth.helpers';
 import { verifyUnsubscribe } from '../email/email.tokens';
 import { AuditService } from '../audit/audit.module';
 import { AuthService } from '../auth/auth.service';
+import { TwoFactorService } from '../auth/two-factor.service';
 import { ServersService } from '../servers/servers.service';
 import { UpdateNotificationsDto, UpdatePasswordDto, UpdateProfileDto, DeleteAccountDto, SetPasswordDto } from './dto';
 
@@ -21,6 +22,7 @@ export class UsersService {
     private auth: AuthService,
     private audit: AuditService,
     private servers: ServersService,
+    private twoFactor: TwoFactorService,
   ) {}
 
   private strip(u: typeof users.$inferSelect) {
@@ -144,6 +146,19 @@ export class UsersService {
       });
       throw new BadRequestException('WRONG_CURRENT_PASSWORD');
     }
+    // 2FA gate: when enabled, require TOTP or recovery code
+    if (dto.twoFactorCode) {
+      await this.twoFactor.verifyForSensitiveAction(userId, dto.twoFactorCode, ctx);
+    } else {
+      const [tfa] = await this.db
+        .select({ enabled: twoFactorSecrets.enabled })
+        .from(twoFactorSecrets)
+        .where(eq(twoFactorSecrets.userId, userId))
+        .limit(1);
+      if (tfa?.enabled) {
+        throw new BadRequestException('TWO_FACTOR_REQUIRED');
+      }
+    }
     if (dto.current === dto.next) throw new BadRequestException('PASSWORD_UNCHANGED');
 
     await this.db
@@ -182,6 +197,19 @@ export class UsersService {
     const [u] = await this.db.select().from(users).where(eq(users.id, userId)).limit(1);
     if (!u) throw Err.unauthorized('USER_GONE');
     if (u.passwordHash) throw Err.conflict('PASSWORD_ALREADY_SET', 'A password is already set — use password change instead');
+    // 2FA gate: when enabled, require TOTP or recovery code
+    if (dto.twoFactorCode) {
+      await this.twoFactor.verifyForSensitiveAction(userId, dto.twoFactorCode, ctx);
+    } else {
+      const [tfa] = await this.db
+        .select({ enabled: twoFactorSecrets.enabled })
+        .from(twoFactorSecrets)
+        .where(eq(twoFactorSecrets.userId, userId))
+        .limit(1);
+      if (tfa?.enabled) {
+        throw new BadRequestException('TWO_FACTOR_REQUIRED');
+      }
+    }
     await this.db
       .update(users)
       .set({ passwordHash: await hashPassword(dto.next), passwordChangedAt: new Date() })
@@ -255,6 +283,19 @@ export class UsersService {
         ip: ctx.ip,
       });
       throw new BadRequestException('WRONG_CURRENT_PASSWORD');
+    }
+    // 2FA gate: when enabled, require TOTP or recovery code
+    if (dto.twoFactorCode) {
+      await this.twoFactor.verifyForSensitiveAction(userId, dto.twoFactorCode, ctx);
+    } else {
+      const [tfa] = await this.db
+        .select({ enabled: twoFactorSecrets.enabled })
+        .from(twoFactorSecrets)
+        .where(eq(twoFactorSecrets.userId, userId))
+        .limit(1);
+      if (tfa?.enabled) {
+        throw new BadRequestException('TWO_FACTOR_REQUIRED');
+      }
     }
 
     // 1. stop & remove docker resources of every owned server

@@ -4,6 +4,7 @@ import Navbar from '../components/Navbar.jsx';
 import Footer from '../components/Footer.jsx';
 import { refreshAccess, sanitizeNextPath } from '@/lib/api.js';
 import { useAuth } from '@/context/AuthContext.jsx';
+import { TwoFactorChallenge } from '@/components/TwoFactorChallenge.jsx';
 
 const ERROR_TEXT = {
   OAUTH_DENIED: 'You declined the authorization — no account was created. You can try again whenever you like.',
@@ -17,8 +18,10 @@ const ERROR_TEXT = {
 export default function OAuthCallback() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
-  const { reloadUser } = useAuth();
+  const { reloadUser, completeMfaChallenge } = useAuth();
   const [state, setState] = useState({ phase: 'working', message: 'Signing you in…' });
+  const [mfaChallenge, setMfaChallenge] = useState(null);
+  const [mfaError, setMfaError] = useState(null);
 
   useEffect(() => {
     let alive = true;
@@ -27,6 +30,16 @@ export default function OAuthCallback() {
       const next = sanitizeNextPath(params.get('next'));
       if (status === 'suspended') {
         if (alive) navigate('/suspended', { replace: true });
+        return;
+      }
+      // 2FA challenge from OAuth: show the challenge screen
+      if (status === '2fa') {
+        const challenge = params.get('challenge');
+        if (challenge && alive) {
+          setMfaChallenge({ challengeId: challenge, next });
+        } else if (alive) {
+          setState({ phase: 'error', message: 'Invalid 2FA challenge. Please sign in again.' });
+        }
         return;
       }
       if (status !== 'ok') {
@@ -53,7 +66,36 @@ export default function OAuthCallback() {
     return () => {
       alive = false;
     };
-  }, [params, navigate, reloadUser]);
+  }, [params, navigate, reloadUser, completeMfaChallenge]);
+
+  const handleMfaComplete = async (challengeId, code) => {
+    setMfaError(null);
+    try {
+      await completeMfaChallenge(challengeId, code);
+      navigate(mfaChallenge.next || '/dashboard', { replace: true });
+    } catch (err) {
+      setMfaError(err.message);
+    }
+  };
+
+  if (mfaChallenge) {
+    return (
+      <div className="relative min-h-screen overflow-hidden bg-background text-foreground">
+        <Navbar />
+        <main className="container-page relative z-10 flex min-h-screen items-center justify-center pt-28 pb-16">
+          <div className="w-full max-w-md rounded-xl border border-hairline bg-card p-8">
+            <TwoFactorChallenge
+              challengeId={mfaChallenge.challengeId}
+              onComplete={handleMfaComplete}
+              onCancel={() => navigate('/signin', { replace: true })}
+              error={mfaError}
+            />
+          </div>
+        </main>
+        <Footer className="bg-transparent" />
+      </div>
+    );
+  }
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-background text-foreground">

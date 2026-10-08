@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { BadgeCheck, CalendarClock, Camera, Loader2, Trash2 } from 'lucide-react';
+import { BadgeCheck, CalendarClock, Camera, Loader2, ShieldCheck, Trash2 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { apiDelete, apiPatch } from '@/lib/api.js';
@@ -22,6 +22,8 @@ import { ConfirmModal } from '@/components/ui/confirm-modal.jsx';
 import { Field, Input, PasswordInput, Skeleton } from '@/components/ui/field.jsx';
 import { PasswordStrength } from '@/components/ui/password-strength.jsx';
 import { AvatarCropModal } from '@/components/AvatarCropModal.jsx';
+import { TwoFactorSetup } from '@/components/TwoFactorSetup.jsx';
+import { TwoFactorChallenge } from '@/components/TwoFactorChallenge.jsx';
 import { AvatarBadge } from '@/components/AvatarBadge.jsx';
 
 const USERNAME_COOLDOWN_MS = 30 * 24 * 60 * 60 * 1000;
@@ -78,6 +80,84 @@ export default function Settings() {
     const linkStart = useOAuthLinkStart();
     const linkConfirm = useOAuthLinkConfirm();
     const unlinkOAuth = useOAuthUnlink();
+
+    // ---- 2FA ------------------------------------------------------------------
+    const [twoFactor, setTwoFactor] = useState(null);
+    const [twoFactorSetup, setTwoFactorSetup] = useState(null);
+    const [twoFactorDisable, setTwoFactorDisable] = useState(false);
+    const [twoFactorDisableCode, setTwoFactorDisableCode] = useState('');
+    const [twoFactorBusy, setTwoFactorBusy] = useState(false);
+    const [twoFactorError, setTwoFactorError] = useState(null);
+
+    const fetchTwoFactor = useCallback(async () => {
+        try {
+            const res = await apiGet('/auth/2fa');
+            setTwoFactor(res);
+        } catch {
+            setTwoFactor({ enabled: false, unusedRecoveryCodes: 0 });
+        }
+    }, []);
+
+    useEffect(() => { fetchTwoFactor(); }, [fetchTwoFactor]);
+
+    const startTwoFactorSetup = async () => {
+        setTwoFactorBusy(true);
+        setTwoFactorError(null);
+        try {
+            const res = await apiPost('/auth/2fa/setup', {});
+            setTwoFactorSetup(res);
+        } catch (err) {
+            setTwoFactorError(err.message);
+        } finally {
+            setTwoFactorBusy(false);
+        }
+    };
+
+    const confirmTwoFactorSetup = async (code) => {
+        setTwoFactorBusy(true);
+        try {
+            const res = await apiPost('/auth/2fa/confirm', { code });
+            setTwoFactorSetup(null);
+            setTwoFactor({ enabled: true, unusedRecoveryCodes: res.recoveryCodes.length });
+            fetchTwoFactor();
+            return res;
+        } finally {
+            setTwoFactorBusy(false);
+        }
+    };
+
+    const disableTwoFactor = async () => {
+        if (!twoFactorDisableCode) return;
+        setTwoFactorBusy(true);
+        setTwoFactorError(null);
+        try {
+            await apiPost('/auth/2fa/disable', { code: twoFactorDisableCode });
+            setTwoFactorDisable(false);
+            setTwoFactorDisableCode('');
+            setTwoFactor({ enabled: false, unusedRecoveryCodes: 0 });
+            toast.success('Two-factor authentication disabled.');
+        } catch (err) {
+            setTwoFactorError(err.message);
+        } finally {
+            setTwoFactorBusy(false);
+        }
+    };
+
+    const regenerateRecoveryCodes = async () => {
+        setTwoFactorBusy(true);
+        setTwoFactorError(null);
+        try {
+            const res = await apiPost('/auth/2fa/recovery-codes', { code: twoFactorDisableCode });
+            setTwoFactorDisableCode('');
+            setTwoFactor({ ...twoFactor, unusedRecoveryCodes: res.recoveryCodes.length });
+            return res;
+        } catch (err) {
+            setTwoFactorError(err.message);
+            throw err;
+        } finally {
+            setTwoFactorBusy(false);
+        }
+    };
     const setPassword = useSetPassword();
 
     const fileRef = useRef(null);
@@ -385,6 +465,98 @@ export default function Settings() {
                         </button>
                     </div>
                 </form>
+            </Section>
+
+            {/* ============================== Security ============================== */}
+            <Section title="Security" subtitle="Protect your account with two-factor authentication.">
+                <div className="flex flex-col gap-4">
+                    {/* 2FA Status */}
+                    <div className="flex items-center justify-between rounded-xl border border-hairline bg-black/20 p-4">
+                        <div className="flex items-center gap-3">
+                            <div className={`flex size-10 items-center justify-center rounded-full ${twoFactor?.enabled ? 'bg-emerald-500/10' : 'bg-white/5'}`}>
+                                <ShieldCheck className={`size-5 ${twoFactor?.enabled ? 'text-emerald-400' : 'text-ink-muted'}`} />
+                            </div>
+                            <div>
+                                <p className="text-sm font-semibold text-foreground">Two-factor authentication</p>
+                                <p className="text-xs text-ink-muted">
+                                    {twoFactor?.enabled
+                                        ? `Enabled — ${twoFactor?.unusedRecoveryCodes ?? 0} recovery codes remaining`
+                                        : 'Disabled — add an extra layer of security'}
+                                </p>
+                            </div>
+                        </div>
+                        {!twoFactor?.enabled && !twoFactorSetup && (
+                            <button
+                                type="button"
+                                onClick={startTwoFactorSetup}
+                                disabled={twoFactorBusy}
+                                className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-xs font-bold text-black transition hover:bg-gray-200 disabled:opacity-50"
+                            >
+                                {twoFactorBusy ? <Loader2 className="size-3 animate-spin" /> : <ShieldCheck className="size-3" />}
+                                Enable 2FA
+                            </button>
+                        )}
+                    </div>
+
+                    {/* 2FA Setup Flow */}
+                    {twoFactorSetup && (
+                        <div className="rounded-xl border border-hairline bg-black/20 p-4">
+                            <TwoFactorSetup
+                                setupData={twoFactorSetup}
+                                onConfirm={confirmTwoFactorSetup}
+                                onCancel={() => setTwoFactorSetup(null)}
+                                busy={twoFactorBusy}
+                            />
+                        </div>
+                    )}
+
+                    {/* 2FA Disable */}
+                    {twoFactor?.enabled && !twoFactorSetup && (
+                        <div className="flex flex-col gap-3 rounded-xl border border-hairline bg-black/20 p-4">
+                            <div className="flex items-center justify-between">
+                                <p className="text-xs text-ink-muted">Disable 2FA or regenerate recovery codes.</p>
+                                <button
+                                    type="button"
+                                    onClick={() => setTwoFactorDisable(!twoFactorDisable)}
+                                    className="text-xs font-bold text-ink-secondary underline-offset-4 transition hover:text-foreground hover:underline"
+                                >
+                                    {twoFactorDisable ? 'Cancel' : 'Manage'}
+                                </button>
+                            </div>
+                            {twoFactorDisable && (
+                                <div className="flex flex-col gap-3">
+                                    <Field label="Enter 6-digit code or recovery code">
+                                        <Input
+                                            value={twoFactorDisableCode}
+                                            onChange={(e) => setTwoFactorDisableCode(e.target.value)}
+                                            placeholder="000000"
+                                            className="font-mono"
+                                        />
+                                    </Field>
+                                    {twoFactorError && <p className="text-xs text-red-400">{twoFactorError}</p>}
+                                    <div className="flex gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={disableTwoFactor}
+                                            disabled={twoFactorBusy || !twoFactorDisableCode}
+                                            className="inline-flex flex-1 items-center justify-center rounded-full border border-red-500/30 px-4 py-2 text-xs font-bold text-red-400 transition hover:bg-red-500/10 disabled:opacity-50"
+                                        >
+                                            {twoFactorBusy ? <Loader2 className="size-3 animate-spin" /> : 'Disable 2FA'}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={regenerateRecoveryCodes}
+                                            disabled={twoFactorBusy || !twoFactorDisableCode}
+                                            className="inline-flex flex-1 items-center justify-center rounded-full border border-hairline px-4 py-2 text-xs font-bold text-ink-secondary transition hover:border-hairline-hover hover:text-foreground disabled:opacity-50"
+                                        >
+                                            Regenerate codes
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
             </Section>
 
             {/* ============================== Sign-in methods ============================== */}

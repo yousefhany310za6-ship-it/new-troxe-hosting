@@ -338,6 +338,48 @@ export const auditLogs = pgTable('audit_logs', {
   index('audit_logs_target_idx').on(t.targetType, t.targetId),
 ]);
 
+// ---- Two-Factor Authentication (TOTP) -----------------------------------------
+export const twoFactorSecrets = pgTable('two_factor_secrets', {
+  userId: uuid('user_id').primaryKey().references(() => users.id, { onDelete: 'cascade' }),
+  /** AES-256-GCM encrypted TOTP secret (base32). Never stored in plaintext. */
+  secretEnc: text('secret_enc').notNull(),
+  /** Whether 2FA is fully enabled (verified at least once). */
+  enabled: boolean('enabled').default(false).notNull(),
+  /** Last successfully-used TOTP counter (replay protection). */
+  lastUsedCounter: bigint('last_used_counter', { mode: 'number' }).default(0).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+export const recoveryCodes = pgTable('recovery_codes', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  /** SHA-256 hash of the recovery code. Plaintext is shown once at generation. */
+  codeHash: varchar('code_hash', { length: 64 }).notNull(),
+  usedAt: timestamp('used_at'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (t) => [
+  index('recovery_codes_user_idx').on(t.userId),
+]);
+
+/**
+ * Temporary 2FA login challenges. Created after password/OAuth verification
+ * when 2FA is enabled; consumed (single-use) when the TOTP/recovery code
+ * succeeds. Short TTL (5 min). Bound to userId — never transferable.
+ */
+export const mfaChallenges = pgTable('mfa_challenges', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  expiresAt: timestamp('expires_at').notNull(),
+  consumedAt: timestamp('consumed_at'),
+  ip: varchar('ip', { length: 45 }),
+  userAgent: varchar('user_agent', { length: 255 }),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (t) => [
+  index('mfa_challenges_user_idx').on(t.userId),
+  index('mfa_challenges_expires_idx').on(t.expiresAt),
+]);
+
 // ---- Types ------------------------------------------------------------------
 export type EnvVar = { k: string; v: string };
 export type User = typeof users.$inferSelect;

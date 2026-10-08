@@ -103,6 +103,11 @@ export class OAuthController {
       const out = await this.oauth.callback(provider as OAuthProvider, (req.query ?? {}) as Record<string, unknown>, req.cookies?.[STATE_COOKIE], ctxOf(req));
       clear();
       if (out.kind === 'login') {
+        // 2FA challenge: don't set the refresh cookie — redirect to the 2FA screen
+        if ((out.issued as any).mfaRequired) {
+          res.redirect(this.frontend('2fa', { challenge: (out.issued as any).challengeId, next: sanitizeNext(out.next) }));
+          return;
+        }
         res.cookie(COOKIE, out.issued.refreshToken, cookieOpts);
         res.redirect(this.frontend('ok', { next: sanitizeNext(out.next) }));
         return;
@@ -140,7 +145,9 @@ export class OAuthController {
   @Delete(':provider')
   @UseGuards(JwtAuthGuard)
   @HttpCode(200)
-  unlink(@CurrentUser() u: ReqUser, @Param('provider') provider: string, @Req() req: Request) {
-    return this.oauth.unlink(u.sub, provider as OAuthProvider, ctxOf(req));
+  unlink(@CurrentUser() u: ReqUser, @Param('provider') provider: string, @Body() body: { twoFactorCode?: string }, @Req() req: Request) {
+    const ctx = ctxOf(req);
+    if (body?.twoFactorCode) ctx.twoFactorCode = body.twoFactorCode;
+    return this.oauth.unlink(u.sub, provider as OAuthProvider, ctx);
   }
 }

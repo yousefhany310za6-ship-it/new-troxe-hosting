@@ -24,6 +24,7 @@ import { CurrentUser } from '../auth/current-user';
 import { ctxOf } from '../../common/request-context';
 import { config } from '../../config/env';
 import { AvatarService, type CropRect } from './avatar.service';
+import { CropRectDto } from './crop.dto';
 
 @Controller({ path: 'users', version: '1' })
 export class AvatarController {
@@ -57,9 +58,9 @@ export class AvatarController {
   @UseGuards(JwtAuthGuard)
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @HttpCode(200)
-  cropAvatar(@CurrentUser() u: ReqUser, @Body() body: CropRect, @Req() req: Request) {
+  cropAvatar(@CurrentUser() u: ReqUser, @Body() body: CropRectDto, @Req() req: Request) {
     const ctx = ctxOf(req);
-    return this.avatarService.cropAvatar(u.sub, body ?? { x: NaN, y: NaN, size: NaN }, { ip: ctx.ip, userAgent: ctx.device });
+    return this.avatarService.cropAvatar(u.sub, body, { ip: ctx.ip, userAgent: ctx.device });
   }
 
   @Get('me/avatar')

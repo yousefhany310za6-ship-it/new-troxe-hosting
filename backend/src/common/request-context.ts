@@ -3,6 +3,8 @@ import { config } from '../config/env';
 export interface ReqCtx {
   ip: string;
   device: string;
+  /** Optional 2FA code for sensitive-action verification. */
+  twoFactorCode?: string;
 }
 
 /**

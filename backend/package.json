@@ -11,7 +11,7 @@
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
     "db:seed": "ts-node --transpile-only src/db/seed.ts",
-    "test:unit": "DATABASE_URL=postgresql://test:test@localhost:5432/test node --experimental-strip-types --loader ./test/loader.mjs --test test/unit/oauth-helpers.test.ts test/unit/oauth-service.test.ts test/unit/email-templates.test.ts test/unit/email-tokens.test.ts test/unit/email-service.test.ts test/unit/deps-prelude.test.ts",
+    "test:unit": "DATABASE_URL=postgresql://test:test@localhost:5432/test node --experimental-strip-types --loader ./test/loader.mjs --test test/unit/oauth-helpers.test.ts test/unit/oauth-service.test.ts test/unit/email-templates.test.ts test/unit/email-tokens.test.ts test/unit/email-service.test.ts test/unit/deps-prelude.test.ts test/unit/two-factor.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -34,6 +34,7 @@
     "geoip-lite": "^1.4.10",
     "helmet": "^8.0.0",
     "multer": "^2.4.0",
+    "otpauth": "^9.5.2",
     "pg": "^8.13.1",
     "reflect-metadata": "^0.2.2",
     "resend": "^6.32.0",

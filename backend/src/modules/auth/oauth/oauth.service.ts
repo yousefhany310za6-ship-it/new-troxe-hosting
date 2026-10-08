@@ -1,12 +1,13 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, Logger } from '@nestjs/common';
 import { and, eq, isNull, or } from 'drizzle-orm';
 import { config } from '../../../config/env';
 import { Err } from '../../../common/errors';
 import { ReqCtx } from '../../../common/request-context';
 import { DB, Db } from '../../../db/db.module';
-import { oauthAccounts, users } from '../../../db/schema';
+import { oauthAccounts, twoFactorSecrets, users } from '../../../db/schema';
 import { AuditService } from '../../audit/audit.module';
 import { AuthService } from '../auth.service';
+import { TwoFactorService } from '../two-factor.service';
 import {
   DISCORD_AUTH_URL,
   DISCORD_SCOPES,
@@ -44,6 +45,7 @@ export class OAuthService {
     @Inject(DB) private db: Db,
     private auth: AuthService,
     private audit: AuditService,
+    private twoFactor: TwoFactorService,
   ) {}
 
   private get enabled(): Record<OAuthProvider, boolean> {
@@ -130,7 +132,7 @@ export class OAuthService {
     ctx: ReqCtx,
     fetchImpl: FetchImpl = fetch,
   ): Promise<
-    | { kind: 'login'; issued: { refreshToken: string }; next: string }
+    | { kind: 'login'; issued: { refreshToken: string; mfaRequired?: boolean; challengeId?: string; expiresAt?: Date }; next: string }
     | { kind: 'link_token'; linkToken: string; next: string }
   > {
     this.requireEnabled(provider);
@@ -182,6 +184,9 @@ export class OAuthService {
     }
 
     const issued = await this.loginOrCreate(provider, profile, userAccessToken, ctx, fetchImpl);
+    if (issued.mfaRequired) {
+      return { kind: 'login', issued, next: st.n };
+    }
     return { kind: 'login', issued: { refreshToken: issued.refreshToken }, next: st.n };
   }
 
@@ -193,7 +198,7 @@ export class OAuthService {
     userAccessToken: string,
     ctx: ReqCtx,
     fetchImpl: FetchImpl,
-  ): Promise<{ refreshToken: string }> {
+  ): Promise<{ refreshToken: string; mfaRequired?: boolean; challengeId?: string; expiresAt?: Date }> {
     const [linked] = await this.db
       .select()
       .from(oauthAccounts)
@@ -208,6 +213,7 @@ export class OAuthService {
       } else {
         await this.refreshSnapshots(provider, profile, user.id, user.avatarUrl);
         const issued = await this.auth.openSession(user.id, ctx, provider);
+        if ((issued as any).mfaRequired) return issued as any;
         await this.maybeGuildJoin(provider, linked, userAccessToken, ctx, user.id);
         return { refreshToken: issued.refreshToken };
       }
@@ -260,6 +266,7 @@ export class OAuthService {
         return u;
       });
       const issued = await this.auth.openSession(created.id, ctx, provider);
+      if ((issued as any).mfaRequired) return issued as any;
       const [row] = await this.db
         .select()
         .from(oauthAccounts)
@@ -280,6 +287,7 @@ export class OAuthService {
         if (!user) throw Err.unavailable('OAUTH_UPSTREAM', 'Sign-in replay, please retry');
         await this.refreshSnapshots(provider, profile, user.id, user.avatarUrl);
         const issued = await this.auth.openSession(user.id, ctx, provider);
+        if ((issued as any).mfaRequired) return issued as any;
         await this.maybeGuildJoin(provider, row, userAccessToken, ctx, user.id);
         return { refreshToken: issued.refreshToken };
       }
@@ -466,6 +474,19 @@ export class OAuthService {
       .limit(1);
     if (!u?.passwordHash && rows.length <= 1)
       throw Err.conflict('OAUTH_LAST_METHOD', 'Set a password first — this is your only sign-in method');
+    // 2FA gate: when enabled, require TOTP or recovery code
+    if (ctx.twoFactorCode) {
+      await this.twoFactor.verifyForSensitiveAction(userId, ctx.twoFactorCode, ctx);
+    } else {
+      const [tfa] = await this.db
+        .select({ enabled: twoFactorSecrets.enabled })
+        .from(twoFactorSecrets)
+        .where(eq(twoFactorSecrets.userId, userId))
+        .limit(1);
+      if (tfa?.enabled) {
+        throw new BadRequestException('TWO_FACTOR_REQUIRED');
+      }
+    }
     await this.db.delete(oauthAccounts).where(eq(oauthAccounts.id, target.id));
     await this.audit.record({
       actorId: userId,

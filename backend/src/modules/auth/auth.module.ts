@@ -15,11 +15,13 @@ import { OAuthService } from './oauth/oauth.service';
 import { EmailAuthController } from './email-auth.controller';
 import { EmailVerificationService } from './email-verification.service';
 import { PasswordResetService } from './password-reset.service';
+import { TwoFactorService } from './two-factor.service';
+import { TwoFactorController } from './two-factor.controller';
 import { EmailModule } from '../email/email.module';
 
 @Module({
   imports: [JwtModule.register({ global: true, secret: config.JWT_ACCESS_SECRET }), AuditModule, EmailModule],
-  controllers: [AuthController, OAuthController, EmailAuthController],
+  controllers: [AuthController, OAuthController, EmailAuthController, TwoFactorController],
   providers: [
     AuthService,
     JwtAuthGuard,
@@ -31,6 +33,7 @@ import { EmailModule } from '../email/email.module';
     OAuthService,
     EmailVerificationService,
     PasswordResetService,
+    TwoFactorService,
   ],
   exports: [AuthService, JwtAuthGuard, WsTicketService, AdminGrantService, AdminGuard, RealtimeGateway, OAuthService],
 })

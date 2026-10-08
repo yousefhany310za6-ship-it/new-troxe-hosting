@@ -42,6 +42,10 @@ export function AuthProvider({ children }) {
 
   const signIn = useCallback(async (email, password) => {
     const out = await authPost('/auth/login', { email, password });
+    // 2FA challenge: no tokens yet — return the challenge info
+    if (out.mfaRequired) {
+      return { mfaRequired: true, challengeId: out.challengeId, expiresAt: out.expiresAt };
+    }
     setAccessToken(out.accessToken);
     try { await loadUser(); } catch { setUser({ ...out.user }); }
     return out.user;
@@ -49,6 +53,13 @@ export function AuthProvider({ children }) {
 
   const signUp = useCallback(async ({ name, email, password }) => {
     const out = await authPost('/auth/signup', { name, email, password });
+    setAccessToken(out.accessToken);
+    try { await loadUser(); } catch { setUser({ ...out.user }); }
+    return out.user;
+  }, [loadUser]);
+
+  const completeMfaChallenge = useCallback(async (challengeId, code) => {
+    const out = await authPost('/auth/2fa/verify', { challengeId, code });
     setAccessToken(out.accessToken);
     try { await loadUser(); } catch { setUser({ ...out.user }); }
     return out.user;
@@ -88,7 +99,8 @@ export function AuthProvider({ children }) {
     signUp,
     signOut,
     reloadUser: loadUser,
-  }), [user, status, signIn, signUp, signOut, loadUser]);
+    completeMfaChallenge,
+  }), [user, status, signIn, signUp, signOut, loadUser, completeMfaChallenge]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
