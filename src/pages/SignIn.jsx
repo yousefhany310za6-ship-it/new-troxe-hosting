@@ -25,6 +25,9 @@ export default function SignIn() {
     if (result?.mfaRequired) {
       setMfaChallenge({ challengeId: result.challengeId, expiresAt: result.expiresAt });
     }
+    // SignIn1 decides whether to auto-advance based on this return value —
+    // without it the 2FA screen is unmounted 600ms after it appears.
+    return result;
   };
 
   const handleMfaComplete = async (challengeId, code) => {
