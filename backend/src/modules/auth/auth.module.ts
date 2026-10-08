@@ -35,6 +35,6 @@ import { EmailModule } from '../email/email.module';
     PasswordResetService,
     TwoFactorService,
   ],
-  exports: [AuthService, JwtAuthGuard, WsTicketService, AdminGrantService, AdminGuard, RealtimeGateway, OAuthService],
+  exports: [AuthService, JwtAuthGuard, WsTicketService, AdminGrantService, AdminGuard, RealtimeGateway, OAuthService, TwoFactorService],
 })
 export class AuthModule {}
