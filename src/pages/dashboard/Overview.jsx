@@ -181,7 +181,7 @@ export default function Overview() {
                 />
                 <div className="relative flex flex-wrap items-center gap-4">
                     <AvatarBadge url={user?.avatarUrl} name={user?.name} size="size-14" text="text-2xl" />
-                    <div className="min-w-0 flex-1">
+                    <div className="min-w-0 flex-1 basis-48">
                         <h1 className="text-[1.25rem] leading-tight font-extrabold tracking-tight break-words sm:text-[1.5rem]">
                             {greeting()}, {firstName}
                         </h1>

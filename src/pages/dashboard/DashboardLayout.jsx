@@ -145,7 +145,7 @@ export default function DashboardLayout() {
                     <div className="border-b border-amber-500/30 bg-amber-500/10 px-4 py-2.5 sm:px-6" role="alert">
                         <div className="mx-auto flex w-full max-w-[1100px] flex-wrap items-center gap-x-3 gap-y-1 text-[0.83rem]">
                             <ShieldCheck className="size-4 shrink-0 text-amber-300" />
-                            <p className="min-w-0 flex-1 text-amber-200">
+                            <p className="min-w-0 flex-1 basis-48 text-amber-200">
                                 <span className="font-bold">Admin view</span> — you are viewing as{' '}
                                 <span className="font-mono font-bold">{user?.name}</span>. Actions are logged.
                                 This session expires automatically.
