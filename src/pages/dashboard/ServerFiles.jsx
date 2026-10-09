@@ -1023,10 +1023,10 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
                                                 aria-label={`Select ${entry.name}`}
                                                 className={cn(
                                                     'size-4 cursor-pointer accent-white transition-opacity',
-                                                    selectOn || checked ? 'opacity-100' : 'opacity-0 focus-visible:opacity-100 group-hover:opacity-100 max-sm:opacity-100',
+                                                    selectOn || checked ? 'opacity-100' : 'opacity-0 focus-visible:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100',
                                                 )}
                                             />
-                                            <span onClick={(e) => e.stopPropagation()} className={cn(!(selectOn || checked) && 'opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 max-sm:opacity-100')}>
+                                            <span onClick={(e) => e.stopPropagation()} className={cn(!(selectOn || checked) && 'opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100')}>
                                                 <RowMenu
                                                     label={`Actions for ${entry.name}`}
                                                     items={rowMenuItems(entry, isDir, isArch)}
@@ -1078,7 +1078,7 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
                                             aria-label={`Select ${entry.name}`}
                                             className={cn(
                                                 'size-[18px] shrink-0 cursor-pointer accent-white transition-opacity',
-                                                selectOn || checked ? 'opacity-100' : 'opacity-0 focus-visible:opacity-100 group-hover:opacity-100 max-sm:opacity-100',
+                                                selectOn || checked ? 'opacity-100' : 'opacity-0 focus-visible:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100',
                                             )}
                                         />
                                         <button
@@ -1109,7 +1109,7 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
                                                 <Eye size={15} />
                                             </button>
                                         )}
-                                        <span onClick={(e) => e.stopPropagation()} className={cn('shrink-0', !(selectOn || checked) && 'opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 max-sm:opacity-100')}>
+                                        <span onClick={(e) => e.stopPropagation()} className={cn('shrink-0', !(selectOn || checked) && 'opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100')}>
                                             <RowMenu
                                                 label={`Actions for ${entry.name}`}
                                                 items={rowMenuItems(entry, isDir, isArch)}
