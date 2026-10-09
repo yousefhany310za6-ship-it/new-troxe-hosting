@@ -477,9 +477,27 @@ export class SupportService {
     return ticketView(updated);
   }
 
+  /**
+   * Every state change is an action ON the ticket's owner-workload, so it is
+   * limited to the specialist who holds it (or an admin). Reading is open to
+   * the team; writing is not.
+   */
+  private assertTicketOwner(t: TicketRow, asRole: StaffRole, user: Caller, what: string) {
+    if (asRole === 'support' && t.assigneeId !== user.sub) {
+      throw new AppError(
+        'NOT_ASSIGNEE',
+        403,
+        t.assigneeId
+          ? `Only the specialist holding this ticket (or an admin) can ${what}.`
+          : `Claim this ticket first — only its holder (or an admin) can ${what}.`,
+      );
+    }
+  }
+
   async setStatus(ticketId: string, to: TicketStatus, user: Caller, ctx: ReqCtx) {
     const t = await this.requireAccess(ticketId, user);
     const asRole = await this.roleOf(t, user);
+    this.assertTicketOwner(t, asRole, user, 'change its status');
     if (!canTransition(t.status, to, asRole)) {
       throw Err.invalid('STATUS_TRANSITION_INVALID', `Cannot move ${t.status} → ${to} as ${asRole}.`);
     }
@@ -566,8 +584,8 @@ export class SupportService {
 
   async updateSubject(ticketId: string, subject: string, user: Caller, ctx: ReqCtx) {
     const t = await this.requireAccess(ticketId, user);
-    const role = await this.actorRole(user);
-    if (role !== 'support' && role !== 'admin') throw Err.forbidden('SUPPORT_REQUIRED');
+    const asRole = await this.roleOf(t, user);
+    this.assertTicketOwner(t, asRole, user, 'rename this ticket');
     const [updated] = await this.db.update(supportTickets)
       .set({ subject: subject.trim(), updatedAt: new Date() })
       .where(eq(supportTickets.id, ticketId)).returning();
@@ -608,7 +626,9 @@ export class SupportService {
     const t = await this.requireAccess(ticketId, { sub: staffId, role: staffRole });
     const role = await this.actorRole({ sub: staffId, role: staffRole });
     if (role !== 'support' && role !== 'admin') throw Err.forbidden('SUPPORT_REQUIRED');
-    if (t.assigneeId !== staffId && role !== 'admin') throw Err.forbidden('NOT_ASSIGNEE');
+    if (t.assigneeId !== staffId && role !== 'admin') {
+      throw new AppError('NOT_ASSIGNEE', 403, 'Only the specialist holding this ticket (or an admin) can call an admin in.');
+    }
     if (t.status !== 'in_progress') {
       // Re-pressing Call admin while an admin is already being called is a
       // no-op (never a duplicate notification, never an error).
