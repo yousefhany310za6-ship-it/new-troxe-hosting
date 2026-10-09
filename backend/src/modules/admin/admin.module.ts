@@ -8,9 +8,10 @@ import { ServersModule } from '../servers/servers.module';
 import { NodesModule } from '../nodes/nodes.module';
 import { AuditModule } from '../audit/audit.module';
 import { EmailModule } from '../email/email.module';
+import { SupportModule } from '../support/support.module';
 
 @Module({
-  imports: [AuthModule, ServersModule, NodesModule, AuditModule, EmailModule],
+  imports: [AuthModule, ServersModule, NodesModule, AuditModule, EmailModule, SupportModule],
   controllers: [AdminController, EmailAdminController],
   providers: [AdminService, EmailCampaignService],
   exports: [AdminService],

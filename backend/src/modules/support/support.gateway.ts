@@ -124,6 +124,19 @@ export class SupportGateway implements OnGatewayConnection, OnGatewayDisconnect,
     }
   }
 
+  /**
+   * Drop every /ws-support socket of a user (role revoked, account suspended
+   * or deleted). Mirrors RealtimeGateway.closeUserSockets on the main
+   * namespace, so a privilege change never lingers in an open tab.
+   */
+  closeUserSockets(userId: string): void {
+    const ids = this.live.get(userId);
+    if (!ids) return;
+    const sockets = this.server?.sockets as unknown as Map<string, SupportSocket> | undefined;
+    if (!sockets) return;
+    for (const [socketId] of ids) sockets.get(socketId)?.disconnect(true);
+  }
+
   handleDisconnect(client: SupportSocket) {
     const userId = client.userId;
     if (!userId) return;

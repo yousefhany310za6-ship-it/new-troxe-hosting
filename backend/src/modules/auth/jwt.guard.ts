@@ -50,8 +50,12 @@ export class JwtAuthGuard implements CanActivate {
       });
       if (payload?.typ !== 'access' || typeof payload.sub !== 'string') throw new Error('bad typ');
       // single indexed PK lookup: revocation + deleted-account containment.
+      // role + status + token version all come from the account row, never
+      // from the token: a role change (or a suspension) must take effect on
+      // the very next request, not whenever the access token happens to
+      // expire. This is what makes AdminGuard/SupportGuard trustworthy.
       const [u] = await this.db
-        .select({ id: users.id, tokenVersion: users.tokenVersion, status: users.status })
+        .select({ id: users.id, tokenVersion: users.tokenVersion, status: users.status, role: users.role })
         .from(users)
         .where(eq(users.id, payload.sub))
         .limit(1);
@@ -64,7 +68,7 @@ export class JwtAuthGuard implements CanActivate {
         sub: payload.sub,
         sid: payload.sid ?? '',
         email: payload.email,
-        role: payload.role === 'admin' || payload.role === 'support' ? payload.role : 'user',
+        role: u.role === 'admin' || u.role === 'support' ? u.role : 'user',
         // surface impersonation so downstream code (and /users/me) can show
         // it; authorization still uses sub/role, which the guard verified.
         imp: typeof payload.imp === 'string' ? payload.imp : undefined,

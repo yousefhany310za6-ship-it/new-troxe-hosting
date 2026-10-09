@@ -10,6 +10,7 @@ import { BackupsService } from '../servers/backups.service';
 import { ProvisionerService } from '../servers/provisioning/provisioner.service';
 import { ExecGateway } from '../servers/exec.gateway';
 import { RealtimeGateway } from '../auth/realtime.gateway';
+import { SupportGateway } from '../support/support.gateway';
 import { hashPassword } from '../../common/password';
 import { AdminGrantService } from '../auth/admin-grant.service';
 import { AuditService } from '../audit/audit.module';
@@ -60,6 +61,7 @@ export class AdminService {
     private provisioner: ProvisionerService,
     private execGateway: ExecGateway,
     private realtime: RealtimeGateway,
+    private supportWs: SupportGateway,
     private grants: AdminGrantService,
     private audit: AuditService,
     private jwt: JwtService,
@@ -297,6 +299,7 @@ export class AdminService {
     // role revocation takes effect at the socket layer immediately (the
     // tokenVersion bump already kills HTTP access within one access TTL).
     this.realtime.closeUserSockets(userId);
+    this.supportWs.closeUserSockets(userId);
     await this.audit.record({
       actorId,
       actorEmail: actorEmail ?? null,
@@ -368,6 +371,7 @@ export class AdminService {
     // drop live console sessions too: a deleted account keeps nothing running
     this.execGateway.closeUserSessions(userId);
     this.realtime.closeUserSockets(userId);
+    this.supportWs.closeUserSockets(userId);
     await this.audit.record({
       actorId,
       actorEmail: actorEmail ?? null,
@@ -420,6 +424,7 @@ export class AdminService {
     await this.db.update(users).set({ status: 'suspended' }).where(eq(users.id, userId));
     this.execGateway.closeUserSessions(userId);
     this.realtime.closeUserSockets(userId);
+    this.supportWs.closeUserSockets(userId);
     await this.audit.record({
       actorId,
       actorEmail: actorEmail ?? null,
