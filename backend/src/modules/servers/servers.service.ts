@@ -1,4 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
+import { randomInt } from 'crypto';
 import { rm } from 'fs/promises';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { config } from '../../config/env';
@@ -332,31 +333,43 @@ export class ServersService {
       if (owned.length >= config.MAX_SERVERS_PER_USER)
         throw Err.quota('QUOTA_SERVERS', `Account limit of ${config.MAX_SERVERS_PER_USER} servers reached.`);
 
-      const [row] = await tx
-        .insert(servers)
-        .values({
-          ownerId,
-          nodeId,
-          name: dto.name,
-          runtime: dto.runtime,
-          runtimeVersion: version.image,
-          status: 'provisioning',
-          region,
-          planId: plan.id,
-          cpuMilli: plan.cpuMilli,
-          ramMb: plan.ramMb,
-          storageGb: plan.storageGb,
-          startup: startupRaw,
-          envEncrypted: storedEnv.length ? encryptEnv(storedEnv) : null,
-          autoRestart: dto.autoRestart ?? true,
-          autoBackup: dto.autoBackup ?? true,
-          autoBackupRetain: dto.autoBackupRetain ?? 7,
-        } as never)
-        .returning()
-        .catch((e: { code?: string }) => {
-          if (e?.code === '23505') throw Err.conflict('SERVER_NAME_TAKEN', 'You already have a server with this name');
+      const base: Record<string, unknown> = {
+        ownerId,
+        nodeId,
+        name: dto.name,
+        runtime: dto.runtime,
+        runtimeVersion: version.image,
+        status: 'provisioning',
+        region,
+        planId: plan.id,
+        cpuMilli: plan.cpuMilli,
+        ramMb: plan.ramMb,
+        storageGb: plan.storageGb,
+        startup: startupRaw,
+        envEncrypted: storedEnv.length ? encryptEnv(storedEnv) : null,
+        autoRestart: dto.autoRestart ?? true,
+        autoBackup: dto.autoBackup ?? true,
+        autoBackupRetain: dto.autoBackupRetain ?? 7,
+      };
+      // 8-digit public contact ID: crypto-random, unique-constrained, retried
+      // on collision (never sequential, never derived from user data).
+      let row: typeof servers.$inferSelect | undefined;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const code = String(randomInt(0, 100_000_000)).padStart(8, '0');
+        try {
+          [row] = await tx
+            .insert(servers)
+            .values({ ...base, contactCode: code } as never)
+            .returning();
+          break;
+        } catch (e: unknown) {
+          const pg = e as { code?: string; constraint?: string };
+          if (pg?.code === '23505' && pg?.constraint === 'servers_contact_code_unique') continue;
+          if (pg?.code === '23505') throw Err.conflict('SERVER_NAME_TAKEN', 'You already have a server with this name');
           throw e;
-        });
+        }
+      }
+      if (!row) throw Err.unavailable('CONTACT_CODE_COLLISION', 'Could not allocate a server contact ID, please retry');
       return { plan, row };
     });
 
@@ -1017,6 +1030,8 @@ export class ServersService {
       autoBackup: row.autoBackup,
       autoBackupRetain: row.autoBackupRetain,
       hasContainer: !!row.containerId,
+      // the public 8-digit contact ID the owner quotes in support tickets
+      contactCode: row.contactCode,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
       provisionedAt: row.provisionedAt,

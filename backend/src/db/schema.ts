@@ -2,7 +2,7 @@ import { bigint, boolean, index, integer, jsonb, pgEnum, pgTable, text, timestam
 import { sql } from 'drizzle-orm';
 
 // ---- Enums ------------------------------------------------------------------
-export const userRole = pgEnum('user_role', ['user', 'admin']);
+export const userRole = pgEnum('user_role', ['user', 'admin', 'support']);
 
 export const userStatus = pgEnum('user_status', [
   'active',      // normal
@@ -61,6 +61,8 @@ export const users = pgTable('users', {
    * (clients transparently recover via their intact refresh sessions).
    */
   tokenVersion: integer('token_version').default(0).notNull(),
+  /** last WS/auth activity — powers support presence + 'last seen' */
+  lastSeenAt: timestamp('last_seen_at'),
   /**
    * Email verification (password signups start false; OAuth with a verified
    * provider email starts true). Gating features on this flag is future work —
@@ -280,6 +282,13 @@ export const servers = pgTable('servers', {
   networkSubnet: varchar('network_subnet', { length: 64 }),
   volumeName: varchar('volume_name', { length: 64 }),
 
+  /**
+   * Public 8-digit contact ID shown to the owner (Overview/Console). Never a
+   * substitute for the internal uuid — ticket linking resolves it server-side
+   * and still requires ownership. Immutable once assigned.
+   */
+  contactCode: varchar('contact_code', { length: 8 }),
+
   autoRestart: boolean('auto_restart').default(true).notNull(),
   autoBackup: boolean('auto_backup').default(true).notNull(),
   /** keep the N newest automatic backups (manual ones are never pruned) */
@@ -289,6 +298,8 @@ export const servers = pgTable('servers', {
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (t) => [
   uniqueIndex('servers_owner_name_idx').on(t.ownerId, t.name),
+  uniqueIndex('servers_contact_code_unique').on(t.contactCode),
+  index('servers_contact_code_idx').on(t.contactCode),
   index('servers_owner_idx').on(t.ownerId),
   index('servers_status_idx').on(t.status),
   index('servers_node_idx').on(t.nodeId),
@@ -432,6 +443,110 @@ export const announcementInteractions = pgTable('announcement_interactions', {
   index('announcement_ix_user_idx').on(t.userId),
   index('announcement_ix_ann_idx').on(t.announcementId),
 ]);
+
+// ---- Support tickets --------------------------------------------------------
+export const ticketStatus = pgEnum('ticket_status', [
+  'open', 'in_progress', 'waiting_user', 'waiting_admin', 'resolved', 'closed',
+]);
+export const ticketCategory = pgEnum('ticket_category', [
+  'server_issue', 'server_crash', 'performance', 'billing', 'account', 'technical', 'other',
+]);
+export const ticketPriority = pgEnum('ticket_priority', ['low', 'medium', 'high', 'urgent']);
+export const escalationStatus = pgEnum('escalation_status', ['pending', 'acknowledged', 'resolved']);
+
+export const supportTickets = pgTable('support_tickets', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  /** human-facing sequential number (#000123), assigned by the database */
+  ticketNo: integer('ticket_no').default(sql`nextval('support_tickets_no_seq')`).notNull(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  subject: varchar('subject', { length: 140 }).notNull(),
+  category: ticketCategory('category').default('technical').notNull(),
+  description: text('description').notNull(),
+  priority: ticketPriority('priority').default('medium').notNull(),
+  status: ticketStatus('status').default('open').notNull(),
+  serverId: uuid('server_id').references(() => servers.id, { onDelete: 'set null' }),
+  assigneeId: uuid('assignee_id').references(() => users.id, { onDelete: 'set null' }),
+  resolvedAt: timestamp('resolved_at'),
+  closedAt: timestamp('closed_at'),
+  deletedAt: timestamp('deleted_at'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (t) => [
+  uniqueIndex('support_tickets_no_unique').on(t.ticketNo),
+  index('support_tickets_user_idx').on(t.userId, t.createdAt),
+  index('support_tickets_status_idx').on(t.status),
+  index('support_tickets_assignee_idx').on(t.assigneeId),
+  index('support_tickets_server_idx').on(t.serverId),
+]);
+
+export const ticketMessages = pgTable('ticket_messages', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  ticketId: uuid('ticket_id').notNull().references(() => supportTickets.id, { onDelete: 'cascade' }),
+  authorId: uuid('author_id').references(() => users.id, { onDelete: 'set null' }),
+  /** role at send time — badges never trust the client */
+  authorRole: varchar('author_role', { length: 16 }).default('user').notNull(),
+  body: text('body').notNull(),
+  /** client-generated idempotency key (nullable; NULLs never collide) */
+  clientMsgId: varchar('client_msg_id', { length: 64 }),
+  deliveredAt: timestamp('delivered_at'),
+  readAt: timestamp('read_at'),
+  readBy: uuid('read_by').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (t) => [
+  uniqueIndex('ticket_msg_idem_unique').on(t.ticketId, t.clientMsgId),
+  index('ticket_msg_ticket_idx').on(t.ticketId, t.createdAt),
+]);
+
+export const ticketAssignmentLog = pgTable('ticket_assignment_log', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  ticketId: uuid('ticket_id').notNull().references(() => supportTickets.id, { onDelete: 'cascade' }),
+  actorId: uuid('actor_id').references(() => users.id, { onDelete: 'set null' }),
+  action: varchar('action', { length: 32 }).notNull(), // claim | release | assign | status_change | escalate | reopen | delete
+  fromAssignee: uuid('from_assignee').references(() => users.id, { onDelete: 'set null' }),
+  toAssignee: uuid('to_assignee').references(() => users.id, { onDelete: 'set null' }),
+  fromStatus: varchar('from_status', { length: 24 }),
+  toStatus: varchar('to_status', { length: 24 }),
+  reason: varchar('reason', { length: 500 }),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (t) => [index('ticket_log_ticket_idx').on(t.ticketId, t.createdAt)]);
+
+export const ticketEscalations = pgTable('ticket_escalations', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  ticketId: uuid('ticket_id').notNull().references(() => supportTickets.id, { onDelete: 'cascade' }),
+  requestedBy: uuid('requested_by').references(() => users.id, { onDelete: 'set null' }),
+  reason: varchar('reason', { length: 500 }).notNull(),
+  status: escalationStatus('status').default('pending').notNull(),
+  responderId: uuid('responder_id').references(() => users.id, { onDelete: 'set null' }),
+  respondedAt: timestamp('responded_at'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (t) => [index('ticket_esc_ticket_idx').on(t.ticketId)]);
+
+export const ticketRatings = pgTable('ticket_ratings', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  ticketId: uuid('ticket_id').notNull().references(() => supportTickets.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  /** the staffer being rated, resolved server-side from assignment/activity */
+  supportId: uuid('support_id').references(() => users.id, { onDelete: 'set null' }),
+  stars: integer('stars').notNull(),
+  resolved: varchar('resolved', { length: 8 }).notNull(), // yes | partial | no
+  comment: varchar('comment', { length: 1000 }),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (t) => [
+  // exactly one rating per ticket — concurrent doubles die with 23505
+  uniqueIndex('ticket_rating_unique').on(t.ticketId),
+  index('ticket_rating_support_idx').on(t.supportId),
+]);
+
+export const notifications = pgTable('notifications', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  type: varchar('type', { length: 48 }).notNull(),
+  title: varchar('title', { length: 140 }).notNull(),
+  body: varchar('body', { length: 500 }).notNull(),
+  link: varchar('link', { length: 255 }),
+  readAt: timestamp('read_at'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (t) => [index('notifications_user_idx').on(t.userId, t.createdAt)]);
 
 // ---- Types ------------------------------------------------------------------
 export type EnvVar = { k: string; v: string };

@@ -316,7 +316,11 @@ export default function AdminUserDetail() {
                                     value={user.role}
                                     onChange={(v) => { if (v !== user.role) setRoleTarget(v); }}
                                     disabled={updateRole.isPending}
-                                    options={[{ value: 'user', label: 'user' }, { value: 'admin', label: 'admin' }]}
+                                    options={[
+                                        { value: 'user', label: 'user' },
+                                        { value: 'support', label: 'support' },
+                                        { value: 'admin', label: 'admin' },
+                                    ]}
                                     className="flex-1"
                                 />
                             </div>
@@ -399,7 +403,13 @@ export default function AdminUserDetail() {
                 open={!!roleTarget}
                 onClose={() => setRoleTarget(null)}
                 title="Change role"
-                description={roleTarget === 'admin' ? 'Admins can manage every user and server on the platform.' : 'The user loses admin access immediately.'}
+                description={
+                    roleTarget === 'admin'
+                        ? 'Admins can manage every user and server on the platform.'
+                        : roleTarget === 'support'
+                            ? 'Support members can handle tickets and reply to users. They can never use admin routes.'
+                            : 'The user loses any elevated access immediately.'
+                }
                 confirmLabel="Change role"
                 danger={roleTarget !== 'admin'}
                 onConfirm={changeRole}

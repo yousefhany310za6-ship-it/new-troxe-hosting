@@ -14,6 +14,7 @@ import {
   Database,
   Folder,
   HardDrive,
+  LifeBuoy,
   MemoryStick,
   Network,
   Play,
@@ -373,6 +374,33 @@ export default function ServerOverview({ server, status, stats, usage, backups, 
                 </span>
               ))}
           </div>
+        </div>
+      </section>
+
+      {/* ---- support contact id ---- */}
+      <section className="flex flex-wrap items-center gap-x-6 gap-y-3 rounded-2xl border border-hairline bg-card p-5">
+        <div className="min-w-0">
+          <p className="flex items-center gap-2 text-[0.82rem] font-semibold text-ink-secondary">
+            <LifeBuoy className="size-4 text-ink-muted" aria-hidden="true" />
+            Server contact ID
+          </p>
+          <p className="mt-1.5 font-mono text-[1.6rem] leading-none font-extrabold tracking-[0.22em] text-foreground tabular-nums">
+            {server.contactCode ?? '—'}
+          </p>
+          <p className="mt-2 max-w-md text-[0.78rem] text-ink-secondary">
+            Quote this number when you contact support. It stays the same for the life of the server and lets the
+            team open the right server without sharing internals.
+          </p>
+        </div>
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <CopyButton text={server.contactCode ?? ''} label="Copy" />
+          <Link
+            to="/dashboard/support"
+            className="inline-flex items-center gap-1.5 rounded-full border border-hairline px-3.5 py-1.5 text-[0.78rem] font-bold text-ink-secondary transition hover:border-hairline-hover hover:text-foreground"
+          >
+            <LifeBuoy className="size-3.5" aria-hidden="true" />
+            Open a ticket
+          </Link>
         </div>
       </section>
 

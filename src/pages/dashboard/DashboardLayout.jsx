@@ -1,16 +1,18 @@
 import { useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { Activity, Bell, Crown, LayoutDashboard, LogOut, Menu, Server, Settings, ShieldCheck, X } from 'lucide-react';
+import { Activity, Crown, Headset, LayoutDashboard, LogOut, Menu, Server, Settings, ShieldCheck, X } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { AvatarBadge } from '@/components/AvatarBadge.jsx';
 import { DashboardAnnouncements } from '@/components/DashboardAnnouncements.jsx';
+import { NotificationBell } from '@/components/support/NotificationBell.jsx';
 import { useAuth } from '@/context/AuthContext.jsx';
 
 const NAV = [
     { to: '/dashboard', label: 'Overview', Icon: LayoutDashboard, end: true },
     { to: '/dashboard/servers', label: 'Servers', Icon: Server },
     { to: '/dashboard/activity', label: 'Activity', Icon: Activity },
+    { to: '/dashboard/support', label: 'Support', Icon: Headset, staff: false },
     { to: '/dashboard/settings', label: 'Settings', Icon: Settings },
 ];
 
@@ -19,6 +21,9 @@ const CRUMBS = [
     [/^\/dashboard\/servers\/[^/]+$/, 'Server'],
     [/^\/dashboard\/servers$/, 'Servers'],
     [/^\/dashboard\/activity$/, 'Activity'],
+    [/^\/dashboard\/support\/queue$/, 'Support desk'],
+    [/^\/dashboard\/support\/[^/]+$/, 'Ticket'],
+    [/^\/dashboard\/support$/, 'Support'],
     [/^\/dashboard\/settings$/, 'Settings'],
     [/^\/dashboard\/?$/, 'Overview'],
 ];
@@ -69,6 +74,16 @@ function SidebarContent({ onNavigate }) {
                         {label}
                     </NavLink>
                 ))}
+                {(user?.role === 'support' || user?.role === 'admin') && (
+                    <NavLink
+                        to="/dashboard/support/queue"
+                        onClick={onNavigate}
+                        className={linkCls}
+                    >
+                        <Headset className="size-[18px]" />
+                        Support desk
+                    </NavLink>
+                )}
                 {user?.role === 'admin' && (
                     <NavLink
                         to="/admin"
@@ -166,6 +181,7 @@ export default function DashboardLayout() {
                         <span className="font-semibold text-foreground">{crumb}</span>
                     </div>
                     <div className="ml-auto flex items-center gap-2">
+                        <NotificationBell />
                         <AvatarBadge url={user?.avatarUrl} name={user?.name ?? user?.email} size="size-9" text="text-sm" />
                     </div>
                 </header>

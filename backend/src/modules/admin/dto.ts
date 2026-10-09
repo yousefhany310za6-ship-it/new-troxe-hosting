@@ -38,8 +38,8 @@ export class AdminAuditQuery {
 // ---- bodies -------------------------------------------------------------------
 
 export class UpdateRoleDto {
-  @IsIn(['user', 'admin'])
-  role!: 'user' | 'admin';
+  @IsIn(['user', 'support', 'admin'])
+  role!: 'user' | 'support' | 'admin';
 }
 
 export class UpdateUserPlanDto {

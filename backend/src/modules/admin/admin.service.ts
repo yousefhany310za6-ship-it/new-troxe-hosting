@@ -283,7 +283,7 @@ export class AdminService {
     };
   }
 
-  async updateUserRole(userId: string, role: 'user' | 'admin', actorId: string, actorEmail?: string) {
+  async updateUserRole(userId: string, role: 'user' | 'support' | 'admin', actorId: string, actorEmail?: string) {
     if (userId === actorId) throw new ForbiddenException('CANNOT_CHANGE_OWN_ROLE');
     // bump the token generation together with the role: outstanding access
     // JWTs carry a stale `role` claim otherwise (guard trusts the claim),
@@ -294,6 +294,9 @@ export class AdminService {
       .where(eq(users.id, userId))
       .returning({ id: users.id, role: users.role });
     if (!updated) throw new NotFoundException('USER_NOT_FOUND');
+    // role revocation takes effect at the socket layer immediately (the
+    // tokenVersion bump already kills HTTP access within one access TTL).
+    this.realtime.closeUserSockets(userId);
     await this.audit.record({
       actorId,
       actorEmail: actorEmail ?? null,

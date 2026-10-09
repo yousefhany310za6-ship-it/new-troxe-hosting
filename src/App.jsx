@@ -36,6 +36,9 @@ const Servers = lazy(() => import('./pages/dashboard/Servers.jsx'));
 const ServerDetail = lazy(() => import('./pages/dashboard/ServerDetail.jsx'));
 const CreateServer = lazy(() => import('./pages/dashboard/CreateServer.jsx'));
 const Settings = lazy(() => import('./pages/dashboard/Settings.jsx'));
+const MyTickets = lazy(() => import('./pages/dashboard/MyTickets.jsx'));
+const SupportDesk = lazy(() => import('./pages/dashboard/SupportDesk.jsx'));
+const TicketDetail = lazy(() => import('./pages/dashboard/TicketDetail.jsx'));
 
 // Admin console (role === 'admin', guarded by AdminGuard).
 const AdminGuard = lazy(() => import('./components/AdminGuard.jsx'));
@@ -50,6 +53,7 @@ const AdminPlans = lazy(() => import('./pages/admin/Plans.jsx'));
 const AdminAudit = lazy(() => import('./pages/admin/Audit.jsx'));
 const AdminEmail = lazy(() => import('./pages/admin/Email.jsx'));
 const AdminAnnouncements = lazy(() => import('./pages/admin/Announcements.jsx'));
+const AdminSupport = lazy(() => import('./pages/admin/AdminSupport.jsx'));
 
 // The WebGL globe (cobe) is only needed on the 404 route, so it stays out of
 // the landing page bundle.
@@ -87,6 +91,9 @@ export default function App() {
                             <Route path="servers/new" element={<CreateServer />} />
                             <Route path="servers/:id" element={<ServerDetail />} />
                             <Route path="activity" element={<Activity />} />
+                            <Route path="support" element={<MyTickets />} />
+                            <Route path="support/queue" element={<SupportDesk />} />
+                            <Route path="support/:id" element={<TicketDetail />} />
                             <Route path="settings" element={<Settings />} />
                         </Route>
                         <Route element={<AdminGuard />}>
@@ -102,6 +109,7 @@ export default function App() {
                                 <Route path="audit" element={<AdminAudit />} />
                                 <Route path="email" element={<AdminEmail />} />
                                 <Route path="announcements" element={<AdminAnnouncements />} />
+                                <Route path="support" element={<AdminSupport />} />
                             </Route>
                         </Route>
                     </Route>

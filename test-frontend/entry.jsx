@@ -26,6 +26,9 @@ import CreateServer from '../src/pages/dashboard/CreateServer.jsx';
 import ServerDetail from '../src/pages/dashboard/ServerDetail.jsx';
 import Activity from '../src/pages/dashboard/Activity.jsx';
 import Settings from '../src/pages/dashboard/Settings.jsx';
+import MyTickets from '../src/pages/dashboard/MyTickets.jsx';
+import SupportDesk from '../src/pages/dashboard/SupportDesk.jsx';
+import TicketDetail from '../src/pages/dashboard/TicketDetail.jsx';
 // NOTE: ServerFiles is not a route — it is a <ServerFiles server={...} />
 // tab inside ServerDetail (App.jsx has no files route), so it is covered
 // by the ServerDetail case rather than rendered without its parent.
@@ -38,6 +41,8 @@ import AdminServers from '../src/pages/admin/Servers.jsx';
 import AdminNodes from '../src/pages/admin/Nodes.jsx';
 import AdminPlans from '../src/pages/admin/Plans.jsx';
 import AdminAudit from '../src/pages/admin/Audit.jsx';
+import AdminAnnouncements from '../src/pages/admin/Announcements.jsx';
+import AdminSupport from '../src/pages/admin/AdminSupport.jsx';
 
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
@@ -93,6 +98,9 @@ export const cases = [
   { name: 'Dashboard/ServerDetail', path: `/dashboard/servers/${UID}`, el: dash('servers/:id', <ServerDetail />) },
   { name: 'Dashboard/Activity', path: '/dashboard/activity', el: dash('activity', <Activity />) },
   { name: 'Dashboard/Settings', path: '/dashboard/settings', el: dash('settings', <Settings />) },
+  { name: 'Dashboard/MyTickets', path: '/dashboard/support', el: dash('support', <MyTickets />) },
+  { name: 'Dashboard/SupportDesk', path: '/dashboard/support/queue', el: dash('support/queue', <SupportDesk />) },
+  { name: 'Dashboard/TicketDetail', path: `/dashboard/support/${UID}`, el: dash('support/:id', <TicketDetail />) },
 
   { name: 'Admin/Overview', path: '/admin', el: admin('index', <AdminOverview />) },
   { name: 'Admin/Users', path: '/admin/users', el: admin('users', <AdminUsers />) },
@@ -101,6 +109,8 @@ export const cases = [
   { name: 'Admin/Nodes', path: '/admin/nodes', el: admin('nodes', <AdminNodes />) },
   { name: 'Admin/Plans', path: '/admin/plans', el: admin('plans', <AdminPlans />) },
   { name: 'Admin/Audit', path: '/admin/audit', el: admin('audit', <AdminAudit />) },
+  { name: 'Admin/Announcements', path: '/admin/announcements', el: admin('announcements', <AdminAnnouncements />) },
+  { name: 'Admin/Support', path: '/admin/support', el: admin('support', <AdminSupport />) },
 ];
 
 /** Render every case server-side; returns [{ok,name,html|error}] and never throws. */
