@@ -47,6 +47,53 @@ export class AdminSupportController {
     return this.support.ackEscalation(id, u.sub, ctxOf(req));
   }
 
+  /**
+   * Accept an admin call. Exactly one admin can be the responder: the update
+   * only lands while the request is still pending, so a simultaneous click
+   * from a second admin is refused with 409 instead of double-counting.
+   */
+  @Post('escalations/:id/accept')
+  @HttpCode(200)
+  accept(@Param('id', UUID) id: string, @CurrentUser() u: ReqUser, @Req() req: { ip?: string; headers: Record<string, unknown> }) {
+    return this.support.acceptEscalation(id, u.sub, ctxOf(req));
+  }
+
+  /** Decline the call; it stays open for another administrator and is journaled. */
+  @Post('escalations/:id/decline')
+  @HttpCode(200)
+  decline(
+    @Param('id', UUID) id: string,
+    @Body() body: { reason?: string },
+    @CurrentUser() u: ReqUser,
+    @Req() req: { ip?: string; headers: Record<string, unknown> },
+  ) {
+    return this.support.declineEscalation(id, u.sub, body?.reason ?? '', ctxOf(req));
+  }
+
+  /**
+   * Support performance for the whole team (admin only). Every number comes
+   * from recorded events in the window; the per-member figures are the same
+   * ones the member sees about themselves, so nobody can curate them.
+   */
+  @Get('performance')
+  performance(
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @CurrentUser() u: ReqUser,
+  ) {
+    return this.support.teamPerformance({ requester: u, from, to });
+  }
+
+  @Get('performance/:supportId')
+  memberPerformance(
+    @Param('supportId', UUID) supportId: string,
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @CurrentUser() u: ReqUser,
+  ) {
+    return this.support.performance({ requester: u, supportId, from, to });
+  }
+
   @Get('team')
   team(@CurrentUser() u: ReqUser) {
     // admins may see every member's rating performance

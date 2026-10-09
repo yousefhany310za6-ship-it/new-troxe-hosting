@@ -469,6 +469,10 @@ export const supportTickets = pgTable('support_tickets', {
   resolvedAt: timestamp('resolved_at'),
   closedAt: timestamp('closed_at'),
   deletedAt: timestamp('deleted_at'),
+  /** first reply from a specialist/admin — drives the response-time metric */
+  firstResponseAt: timestamp('first_response_at'),
+  /** how often this ticket had to be reopened for more work */
+  reopenCount: integer('reopen_count').default(0).notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (t) => [
@@ -545,8 +549,17 @@ export const notifications = pgTable('notifications', {
   body: varchar('body', { length: 500 }).notNull(),
   link: varchar('link', { length: 255 }),
   readAt: timestamp('read_at'),
+  /**
+   * Logical identity of an event ("the same thing must not be recorded twice").
+   * Unique per recipient, so a reconnect or a double-click cannot create a
+   * second notification for one real event.
+   */
+  dedupeKey: varchar('dedupe_key', { length: 80 }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
-}, (t) => [index('notifications_user_idx').on(t.userId, t.createdAt)]);
+}, (t) => [
+  index('notifications_user_idx').on(t.userId, t.createdAt),
+  uniqueIndex('notifications_dedupe_unique').on(t.userId, t.dedupeKey),
+]);
 
 // ---- Types ------------------------------------------------------------------
 export type EnvVar = { k: string; v: string };

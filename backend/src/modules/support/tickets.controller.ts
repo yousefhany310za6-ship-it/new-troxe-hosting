@@ -131,6 +131,22 @@ export class TicketsController {
     return this.support.listNotifications(u.sub, page);
   }
 
+  /**
+   * "The panel was opened." Marks the notifications that existed at that
+   * moment as read. `asOf` is supplied by the client so anything that arrives
+   * while the request is in flight (or right after) stays unread — opening the
+   * panel must never silently consume a notification the user has not seen.
+   * Opening any other page does NOT call this.
+   */
+  @Post('notifications/seen')
+  @HttpCode(200)
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  seen(@Body() body: { asOf?: string }, @CurrentUser() u: ReqUser) {
+    const asOf = body?.asOf ? new Date(body.asOf) : new Date();
+    const bound = Number.isFinite(asOf.getTime()) ? asOf : new Date();
+    return this.support.markNotificationsSeen(u.sub, bound);
+  }
+
   @Post('notifications/read-all')
   @HttpCode(200)
   readAll(@CurrentUser() u: ReqUser) {

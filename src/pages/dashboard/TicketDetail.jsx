@@ -42,6 +42,7 @@ export default function TicketDetail() {
     const navigate = useNavigate();
     const { user } = useAuth();
     const { data: ticket, isLoading, error, refetch } = useTicket(id);
+    const isStaffView = user?.role === 'support' || user?.role === 'admin';
     const eligibility = useRatingEligibility(id);
     const remove = useDeleteTicket(id);
     const [confirmDelete, setConfirmDelete] = useState(false);
@@ -68,20 +69,27 @@ export default function TicketDetail() {
 
     if (error || !ticket) {
         const code = error instanceof ApiError ? error.code : null;
+        const staff = isStaffView;
         return (
             <div className="flex flex-col items-start gap-3 rounded-xl border border-hairline bg-card p-6" role="alert">
-                <p className="text-[0.95rem] font-bold text-foreground">This ticket is not available</p>
-                <p className="text-[0.84rem] text-ink-secondary">
-                    {code === 'TICKET_NOT_FOUND'
-                        ? 'It may have been deleted, or the link is wrong.'
-                        : 'You do not have access to this ticket.'}
+                <p className="text-[0.95rem] font-bold text-foreground">
+                    {code === 'TICKET_NOT_YOURS' ? 'This ticket is being handled by another specialist' : 'This ticket is not available'}
+                </p>
+                <p className="max-w-lg text-[0.84rem] text-ink-secondary">
+                    {code === 'TICKET_NOT_YOURS'
+                        ? staff
+                            ? 'The conversation stays private to the specialist who took it. You can see it in the queue as a summary, and it is visible to you again if it is released or reassigned to you.'
+                            : 'The conversation stays private to the specialist who took it.'
+                        : code === 'TICKET_NOT_FOUND'
+                            ? 'It may have been deleted, or the link is wrong.'
+                            : 'You do not have access to this ticket.'}
                 </p>
                 <Link
-                    to="/dashboard/support"
+                    to={staff ? '/dashboard/support/queue' : '/dashboard/support'}
                     className="inline-flex items-center gap-2 rounded-full border border-hairline px-4 py-2 text-[0.82rem] font-bold text-foreground transition hover:border-hairline-hover"
                 >
                     <ArrowLeft className="size-4" aria-hidden="true" />
-                    Back to tickets
+                    {staff ? 'Back to the queue' : 'Back to tickets'}
                 </Link>
             </div>
         );

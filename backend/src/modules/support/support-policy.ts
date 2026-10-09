@@ -64,6 +64,25 @@ export function canTransition(from: TicketStatus, to: TicketStatus, role: StaffR
 }
 
 /**
+ * Who may read a ticket's DETAILS (conversation, description, linked server).
+ *
+ *  - the owner, always;
+ *  - the CURRENT assignee (claiming is what opens the conversation);
+ *  - an admin, always.
+ *
+ * Everybody else on the support team sees the metadata summary the queue list
+ * returns (number, subject, category, priority, state, holder) — which is
+ * enough to know a ticket exists and who owns it, and nothing more.
+ */
+export function canReadDetails(input: {
+  isOwner: boolean;
+  isAssignee: boolean;
+  isAdmin: boolean;
+}): boolean {
+  return input.isOwner || input.isAssignee || input.isAdmin;
+}
+
+/**
  * Who may post into a ticket.
  *  - owner: whenever the ticket is not closed;
  *  - support: ONLY the current assignee (claiming is what grants write access);
@@ -137,6 +156,15 @@ export function redactSecrets(line: string): string {
   for (const [re, replacement] of SECRET_PATTERNS) out = out.replace(re, replacement);
   return out.slice(0, 2000);
 }
+
+/**
+ * Support policy used by the performance metrics: how long a first reply may
+ * take before a ticket counts as late, and how long resolution may take. Kept
+ * here (next to the other rules) so the numbers shown to admins describe the
+ * policy the queue actually runs on.
+ */
+export const FIRST_RESPONSE_SLA_HOURS = 24;
+export const RESOLUTION_SLA_HOURS = 72;
 
 export const MESSAGE_MAX = 4000;
 export const SUBJECT_MAX = 140;

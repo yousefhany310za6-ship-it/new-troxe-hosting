@@ -1,31 +1,54 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Bell, Check, Loader2 } from 'lucide-react';
+import { Bell, Check, Loader2, Ticket as TicketIcon } from 'lucide-react';
 
-import { useNotifications, useReadAllNotifications, useReadNotification } from '@/hooks/useSupportQueries.js';
+import { useNotifications, useReadNotification, useMarkSeen } from '@/hooks/useSupportQueries.js';
 import { useSupportSocket } from '@/hooks/useSupportSocket.js';
 import { timeAgo } from '@/pages/admin/components.jsx';
 
 /**
- * Ticket notification bell. The count is always derived from the stored
- * notifications (what the user actually has), and live socket events only add
- * to it — never replace it, so a dropped connection can never make the badge
- * lie about unread items.
+ * Ticket notification bell.
+ *
+ * Rules this implements:
+ * - the badge is the SERVER's unread count (plus anything genuinely new that
+ *   arrived over the socket since the last fetch) — never a local number;
+ * - opening the panel marks as read exactly the notifications that already
+ *   existed at that moment (`asOf`), so a notification arriving while the
+ *   panel is open stays unread and keeps the badge honest;
+ * - a failed "seen" call surfaces an error and can be retried — no fake
+ *   success, and the badge is not optimistically cleared;
+ * - the same notification arriving twice (reconnect, replayed push) is
+ *   de-duplicated by id, so it can never be counted twice;
+ * - read state lives in the database, so a second device sees the same badge.
  */
 export function NotificationBell() {
     const [open, setOpen] = useState(false);
     const [live, setLive] = useState([]);
+    const [seenPending, setSeenPending] = useState(false);
+    const [seenError, setSeenError] = useState(null);
     const ref = useRef(null);
     const { data, isFetching } = useNotifications(1);
-    const readAll = useReadAllNotifications();
     const readOne = useReadNotification();
+    const markSeen = useMarkSeen();
 
     const { connected } = useSupportSocket({
         listenOnly: true,
         onEvent: (type, payload) => {
-            if (type === 'notification' || type === 'admin:notification') {
-                setLive((prev) => [{ id: `live:${payload.ts}:${Math.random().toString(36).slice(2, 8)}`, ...payload, createdAt: new Date(payload.ts).toISOString() }, ...prev].slice(0, 20));
-            }
+            if (type !== 'notification' && type !== 'admin:notification') return;
+            setLive((prev) => {
+                // id-based de-duplication: a replayed push must not stack up
+                if (prev.some((n) => n.id === payload.id)) return prev;
+                const entry = {
+                    id: payload.id ?? `live:${payload.ts}:${Math.random().toString(36).slice(2, 8)}`,
+                    type: payload.type,
+                    title: payload.title,
+                    body: payload.body,
+                    link: payload.link ?? null,
+                    createdAt: new Date(payload.ts).toISOString(),
+                    live: true,
+                };
+                return [entry, ...prev].slice(0, 30);
+            });
         },
     });
 
@@ -42,14 +65,36 @@ export function NotificationBell() {
     }, [open]);
 
     const stored = data?.items ?? [];
-    const unread = (data?.unread ?? 0) + live.length;
-    const items = [...live.map((n) => ({ ...n, live: true })), ...stored.filter((n) => !n.readAt)];
+    const storedUnread = data?.unread ?? 0;
+    // items shown: live pushes that are not yet in the stored page + stored
+    const liveOnly = live.filter((n) => !stored.some((s) => s.id === n.id));
+    const unread = storedUnread + liveOnly.length;
+    const items = [...liveOnly, ...stored];
+
+    const openPanel = async () => {
+        const next = !open;
+        setOpen(next);
+        if (next) {
+            setSeenError(null);
+            setSeenPending(true);
+            try {
+                // everything that existed at THIS instant is what the user is
+                // looking at right now
+                await markSeen.mutateAsync(Date.now());
+                setLive([]);
+            } catch (e) {
+                setSeenError(e?.message ?? 'Could not mark the notifications as read.');
+            } finally {
+                setSeenPending(false);
+            }
+        }
+    };
 
     return (
         <div className="relative" ref={ref}>
             <button
                 type="button"
-                onClick={() => setOpen((v) => !v)}
+                onClick={openPanel}
                 aria-expanded={open}
                 aria-label={`Notifications${unread ? `, ${unread} unread` : ''}`}
                 className="relative rounded-full border border-hairline p-2 text-ink-secondary transition hover:border-hairline-hover hover:text-foreground"
@@ -64,20 +109,32 @@ export function NotificationBell() {
             </button>
 
             {open && (
-                <div className="absolute right-0 z-50 mt-2 w-[min(360px,calc(100vw-2rem))] overflow-hidden rounded-xl border border-hairline bg-card shadow-2xl" role="dialog" aria-label="Notifications">
+                <div className="absolute right-0 z-50 mt-2 w-[min(380px,calc(100vw-2rem))] overflow-hidden rounded-xl border border-hairline bg-card shadow-2xl" role="dialog" aria-label="Notifications">
                     <header className="flex items-center gap-2 border-b border-hairline px-3.5 py-2.5">
                         <p className="text-[0.85rem] font-bold text-foreground">Notifications</p>
-                        {isFetching && <Loader2 className="size-3.5 animate-spin text-ink-muted" aria-hidden="true" />}
-                        <button
-                            type="button"
-                            disabled={readAll.isPending || unread === 0}
-                            onClick={() => { readAll.mutate(); setLive([]); }}
-                            className="ml-auto inline-flex items-center gap-1 text-[0.72rem] font-bold text-ink-secondary transition hover:text-foreground disabled:opacity-40"
-                        >
-                            <Check className="size-3.5" aria-hidden="true" />
-                            Mark all read
-                        </button>
+                        {(isFetching || seenPending) && <Loader2 className="size-3.5 animate-spin text-ink-muted" aria-hidden="true" />}
+                        <span className="ml-auto font-mono text-[0.7rem] text-ink-muted tabular-nums">{unread} unread</span>
                     </header>
+
+                    {seenError && (
+                        <p className="flex flex-wrap items-center gap-2 border-b border-hairline px-3.5 py-2 text-[0.76rem] text-amber-300" role="alert">
+                            {seenError}
+                            <button
+                                type="button"
+                                className="underline decoration-dotted"
+                                onClick={async () => {
+                                    setSeenError(null);
+                                    setSeenPending(true);
+                                    try { await markSeen.mutateAsync(Date.now()); setLive([]); }
+                                    catch (e) { setSeenError(e?.message ?? 'Retry failed.'); }
+                                    finally { setSeenPending(false); }
+                                }}
+                            >
+                                Retry
+                            </button>
+                        </p>
+                    )}
+
                     <ul className="max-h-[60vh] overflow-y-auto">
                         {items.length === 0 && (
                             <li className="px-3.5 py-8 text-center text-[0.82rem] text-ink-secondary">Nothing new.</li>
@@ -86,12 +143,17 @@ export function NotificationBell() {
                             <li key={n.id} className="border-b border-hairline last:border-0">
                                 <Link
                                     to={n.link ?? '/dashboard/support'}
-                                    onClick={() => { setOpen(false); if (!n.live) readOne.mutate(n.id); }}
+                                    onClick={() => { setOpen(false); if (!n.live && !n.readAt) readOne.mutate(n.id); }}
                                     className="block px-3.5 py-2.5 transition hover:bg-white/[0.04]"
                                 >
-                                    <p className="text-[0.84rem] font-bold text-foreground">{n.title}</p>
+                                    <p className="flex items-center gap-1.5 text-[0.84rem] font-bold text-foreground">
+                                        <TicketIcon className="size-3.5 shrink-0 text-ink-muted" aria-hidden="true" />
+                                        {n.title}
+                                    </p>
                                     <p className="mt-0.5 line-clamp-2 text-[0.78rem] text-ink-secondary">{n.body}</p>
-                                    <p className="mt-1 font-mono text-[0.66rem] text-ink-muted">{timeAgo(n.createdAt)}</p>
+                                    <p className="mt-1 font-mono text-[0.66rem] text-ink-muted">
+                                        {timeAgo(n.createdAt)}{!n.readAt && !n.live ? ' · unread' : ''}
+                                    </p>
                                 </Link>
                             </li>
                         ))}

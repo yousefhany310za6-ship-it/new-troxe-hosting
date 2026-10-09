@@ -20,6 +20,7 @@ import { ProvisionerService } from '../servers/provisioning/provisioner.service'
 import { runtimeImage } from '../servers/provisioning/images';
 import {
   DEFAULT_PRIORITY,
+  FIRST_RESPONSE_SLA_HOURS,
   MESSAGE_MAX,
   canPost,
   canSetPriority,
@@ -95,6 +96,40 @@ function countersFor(viewerId: string) {
         and m.author_id <> ${viewerId}
         and m.read_at is null
     )`,
+  };
+}
+
+/**
+ * The ONE canonical destination for a ticket, used by every notification.
+ *
+ * `/admin/support/:id` used to be emitted for admin notifications, but no such
+ * route exists (the admin console lives at `/admin/support`, the ticket page
+ * at `/dashboard/support/:id`) — which is exactly why those notifications
+ * opened a 404. Every role lands on the same role-aware ticket page.
+ */
+export const TICKET_LINK_PREFIX = '/dashboard/support/';
+const ticketLink = (id: string) => `${TICKET_LINK_PREFIX}${id}`;
+
+/**
+ * Queue-list shape. Deliberately WITHOUT the description, the last message or
+ * any linked-server data: a ticket held by another specialist is visible as a
+ * summary only, so the team can see the workload without reading the problem.
+ */
+function queueView(r: TicketRow) {
+  return {
+    id: r.id,
+    ticketNo: r.ticketNo,
+    subject: r.subject,
+    category: r.category,
+    priority: r.priority,
+    status: r.status,
+    assigneeId: r.assigneeId,
+    createdAt: r.createdAt,
+    updatedAt: r.updatedAt,
+    resolvedAt: r.resolvedAt,
+    closedAt: r.closedAt,
+    serverId: r.serverId ? true : false,
+    firstResponseAt: r.firstResponseAt,
   };
 }
 
@@ -188,18 +223,51 @@ export class SupportService {
   }
 
   /**
-   * Who may OPEN a ticket (read). The support team works as one queue, so any
-   * current support member (and every admin) may look at any ticket — that is
-   * what makes the read-only "Team" view possible. WRITING is a different
-   * question, answered by `canPost`: only the owner, the current assignee and
-   * an admin may post, so visibility never turns into authority.
+   * Who may open a ticket's DETAILS.
+   *
+   * A claimed ticket is private to its holder (and to admins): the queue shows
+   * everybody a short summary so the team knows what is in flight, but the
+   * description, the conversation and the linked server belong to the
+   * specialist working it. An unassigned ticket is open to every support
+   * member (that is what makes it claimable), and an admin may always look.
    */
   async requireAccess(ticketId: string, user: Caller): Promise<TicketRow> {
     const t = await this.getTicket(ticketId);
-    if (t.userId === user.sub) return t;
-    const role = await this.actorRole(user);
-    if (role === 'admin' || role === 'support') return t;
-    throw Err.forbidden('TICKET_ACCESS_DENIED');
+    const isOwner = t.userId === user.sub;
+    const isAssignee = !!t.assigneeId && t.assigneeId === user.sub;
+    const isAdmin = (await this.actorRole(user)) === 'admin';
+    const isOpenToTeam = !t.assigneeId;
+    const mayRead = isOwner || isAdmin || isAssignee || (isOpenToTeam && (await this.actorRole(user)) === 'support');
+    if (!mayRead) {
+      throw new AppError(
+        'TICKET_NOT_YOURS',
+        403,
+        isOwner || isAdmin || isAssignee
+          ? 'TICKET_ACCESS_DENIED'
+          : 'This ticket is being handled by another specialist.',
+      );
+    }
+    return t;
+  }
+
+  /**
+   * The row a non-participant is allowed to see: enough to know the ticket
+   * exists and who owns it, and nothing about the problem itself.
+   */
+  private summaryView(t: TicketRow) {
+    return {
+      id: t.id,
+      ticketNo: t.ticketNo,
+      subject: t.subject,
+      category: t.category,
+      priority: t.priority,
+      status: t.status,
+      assigneeId: t.assigneeId,
+      createdAt: t.createdAt,
+      updatedAt: t.updatedAt,
+      resolvedAt: t.resolvedAt,
+      closedAt: t.closedAt,
+    };
   }
 
   private async roleOf(ticket: TicketRow, user: Caller): Promise<StaffRole> {
@@ -252,7 +320,7 @@ export class SupportService {
       type: 'ticket_created',
       title: `New ticket #${String(row.ticketNo).padStart(6, '0')}`,
       body: `${row.subject} (${row.category})`,
-      link: `/admin/support/${row.id}`,
+      link: ticketLink(row.id),
     });
     // The staff dashboard must show the ticket WITHOUT a page reload: the
     // queue channel is pushed to every connected support/admin socket.
@@ -369,18 +437,23 @@ export class SupportService {
       : [];
     const byId = new Map(profiles.map((p) => [p.id, p]));
     const presence = this.onlineMap(ids);
+    // a row is "mine" when I am the customer or the specialist holding it
+    const mineRow = (t: TicketRow, viewer: string) => t.userId === viewer || t.assigneeId === viewer || isAdmin;
     const enriched = visible.map((r) => {
       const owner = byId.get(r.t.userId) ?? null;
       const assignee = r.t.assigneeId ? (byId.get(r.t.assigneeId) ?? null) : null;
       const ago = r.lastMessageAt ? new Date(r.lastMessageAt) : null;
       return {
-        ...ticketView(r.t),
+        ...queueView(r.t),
         owner: owner ? { id: owner.id, name: owner.name, avatarUrl: owner.avatarUrl } : null,
         assignee: assignee ? { id: assignee.id, name: assignee.name, avatarUrl: assignee.avatarUrl, role: assignee.role } : null,
-        lastMessage: r.lastMessage && ago
+        // the conversation preview is private: only the holder (owner) or an
+        // admin sees it in a list row
+        mine: mineRow(r.t, user.sub),
+        lastMessage: mineRow(r.t, user.sub) && r.lastMessage && ago
           ? { body: String(r.lastMessage).slice(0, 160), authorRole: r.lastAuthorRole, createdAt: ago }
           : null,
-        unreadCount: Number(r.unreadCount ?? 0),
+        unreadCount: mineRow(r.t, user.sub) ? Number(r.unreadCount ?? 0) : 0,
         presence: assignee ? (presence[assignee.id] ?? { online: false, lastSeenAt: null }) : null,
       };
     });
@@ -418,7 +491,7 @@ export class SupportService {
     await this.notify([claimed.userId], {
       type: 'ticket_claimed', title: 'Support is on it',
       body: 'A support specialist picked up your ticket and started working on it.',
-      link: `/dashboard/support/${ticketId}`,
+      link: ticketLink(ticketId),
     });
     const [t] = await this.db.select().from(supportTickets).where(eq(supportTickets.id, ticketId)).limit(1);
     this.events?.ticketRefresh(ticketId, 'claimed');
@@ -470,7 +543,7 @@ export class SupportService {
     });
     await this.notify([supportId], {
       type: 'ticket_assigned', title: `Ticket #${String(t.ticketNo).padStart(6, '0')} assigned to you`,
-      body: t.subject, link: `/dashboard/support/${ticketId}`,
+      body: t.subject, link: ticketLink(ticketId),
     });
     this.events?.ticketRefresh(ticketId, 'assigned');
     this.queueChanged('assigned', ticketId);
@@ -505,7 +578,12 @@ export class SupportService {
     if (to === 'resolved') patch.resolvedAt = new Date();
     if (to === 'closed') patch.closedAt = new Date();
     if (to === 'open') { patch.resolvedAt = null; patch.closedAt = null; }
-    const [updated] = await this.db.update(supportTickets).set(patch).where(eq(supportTickets.id, ticketId)).returning();
+    // reopening (resolved → in_progress) is counted: repeatedly closing and
+    // reopening must not look like extra solved tickets in the metrics.
+    const reopenBump = to === 'in_progress' && t.status === 'resolved' ? sql`reopen_count + 1` : undefined;
+    const [updated] = await this.db.update(supportTickets)
+      .set(reopenBump ? { ...patch, reopenCount: reopenBump } : patch)
+      .where(eq(supportTickets.id, ticketId)).returning();
     await this.db.insert(ticketAssignmentLog).values({
       ticketId, actorId: user.sub, action: 'status_change', fromStatus: t.status, toStatus: to,
     });
@@ -520,12 +598,12 @@ export class SupportService {
       await this.notify([t.userId], {
         type: 'ticket_resolved', title: `Ticket #${String(t.ticketNo).padStart(6, '0')} resolved`,
         body: 'Your issue was marked resolved — please rate the support you received.',
-        link: `/dashboard/support/${ticketId}`,
+        link: ticketLink(ticketId),
       });
     } else {
       await this.notify([t.userId], {
         type: 'ticket_status', title: `Ticket #${String(t.ticketNo).padStart(6, '0')}: ${to.replace('_', ' ')}`,
-        body: t.subject, link: `/dashboard/support/${ticketId}`,
+        body: t.subject, link: ticketLink(ticketId),
       });
     }
     this.events?.ticketRefresh(ticketId, 'status');
@@ -570,7 +648,7 @@ export class SupportService {
         type: 'ticket_priority',
         title: `Ticket #${String(t.ticketNo).padStart(6, '0')} priority: ${to}`,
         body: t.subject,
-        link: `/dashboard/support/${ticketId}`,
+        link: ticketLink(ticketId),
       });
     }
     this.events?.ticketRefresh(ticketId, 'priority');
@@ -658,19 +736,87 @@ export class SupportService {
       ticketId, actorId: staffId, action: 'escalate', fromStatus: 'in_progress', toStatus: 'waiting_admin', reason: reason.trim().slice(0, 500),
     });
     const [staff] = await this.db.select({ name: users.name }).from(users).where(eq(users.id, staffId)).limit(1);
+    const staffName = staff?.name ?? 'A support specialist';
+    const no = `#${String(t.ticketNo).padStart(6, '0')}`;
+    const reasonText = reason.trim().slice(0, 200);
     await this.audit.record({
       actorId: staffId, action: 'support.ticket.escalate', targetType: 'support_ticket', targetId: ticketId,
       ip: ctx.ip, userAgent: ctx.device, meta: { reason: reason.trim().slice(0, 200) },
     });
+    // A direct, readable call: who needs the admin, which ticket, why, when.
     await this.notifyAdmins({
       type: 'ticket_escalated',
-      title: `Escalation: ticket #${String(t.ticketNo).padStart(6, '0')}`,
-      body: `${staff?.name ?? 'Support'}: ${reason.trim().slice(0, 200)}`,
-      link: `/admin/support/${ticketId}`,
+      title: `You were called in ticket ${no}`,
+      body: `${staffName} (support) called you in on "${t.subject}"${reasonText ? ` — ${reasonText}` : ''}. Join when you are ready.`,
+      link: ticketLink(ticketId),
+      dedupeKey: `ticket_escalated:${esc.id}`,
     });
     this.events?.ticketRefresh(ticketId, 'escalated');
     this.queueChanged('escalated', ticketId);
     return { escalation: esc, deduped: false as const };
+  }
+
+  /**
+   * An admin accepts a call. The UPDATE is conditional on the request still
+   * being pending, so two admins clicking at the same moment cannot both be
+   * "the" responder: exactly one row updates, the other gets a clear 409.
+   */
+  async acceptEscalation(escalationId: string, adminId: string, ctx: ReqCtx) {
+    const [esc] = await this.db.select().from(ticketEscalations).where(eq(ticketEscalations.id, escalationId)).limit(1);
+    if (!esc) throw Err.notFound('ESCALATION_NOT_FOUND');
+    if (esc.status !== 'pending') {
+      throw new AppError('ESCALATION_ALREADY_HANDLED', 409, 'Another administrator has already picked up this call.');
+    }
+    await this.getTicket(esc.ticketId);
+    const [updated] = await this.db.update(ticketEscalations)
+      .set({ status: 'acknowledged', responderId: adminId, respondedAt: new Date() })
+      .where(and(eq(ticketEscalations.id, escalationId), eq(ticketEscalations.status, 'pending')))
+      .returning();
+    if (!updated) throw new AppError('ESCALATION_ALREADY_HANDLED', 409, 'Another administrator has already picked up this call.');
+    await this.audit.record({
+      actorId: adminId, action: 'support.escalation.accept', targetType: 'support_ticket', targetId: esc.ticketId,
+      ip: ctx.ip, userAgent: ctx.device, meta: { escalationId, requestedBy: esc.requestedBy },
+    });
+    // the specialist who called gets told an admin answered, with who/when
+    if (esc.requestedBy) {
+      const [admin] = await this.db.select({ name: users.name }).from(users).where(eq(users.id, adminId)).limit(1);
+      await this.notify([esc.requestedBy], {
+        type: 'ticket_escalation_answered',
+        title: 'An administrator joined your call',
+        body: `${admin?.name ?? 'An administrator'} is on the ticket now.`,
+        link: ticketLink(esc.ticketId),
+        dedupeKey: `escalation_answered:${esc.id}:${adminId}`,
+      });
+    }
+    this.events?.ticketRefresh(esc.ticketId, 'escalation-accepted');
+    this.queueChanged('escalation', esc.ticketId);
+    return updated;
+  }
+
+  /**
+   * An admin declines the call. The request stays pending (another admin may
+   * take it) and the decline is journaled — nobody is silently dropped.
+   */
+  async declineEscalation(escalationId: string, adminId: string, reason: string, ctx: ReqCtx) {
+    const [esc] = await this.db.select().from(ticketEscalations).where(eq(ticketEscalations.id, escalationId)).limit(1);
+    if (!esc || esc.status !== 'pending') throw Err.notFound('ESCALATION_NOT_FOUND');
+    await this.getTicket(esc.ticketId);
+    const [admin] = await this.db.select({ name: users.name }).from(users).where(eq(users.id, adminId)).limit(1);
+    await this.audit.record({
+      actorId: adminId, action: 'support.escalation.decline', targetType: 'support_ticket', targetId: esc.ticketId,
+      ip: ctx.ip, userAgent: ctx.device,
+      meta: { escalationId, reason: reason.slice(0, 300), requestedBy: esc.requestedBy },
+    });
+    if (esc.requestedBy) {
+      await this.notify([esc.requestedBy], {
+        type: 'ticket_escalation_declined',
+        title: 'Your admin call was declined',
+        body: `${admin?.name ?? 'An administrator'} could not take it${reason.trim() ? `: ${reason.trim().slice(0, 160)}` : ''}. The request is still open for another administrator.`,
+        link: ticketLink(esc.ticketId),
+        dedupeKey: `escalation_declined:${esc.id}:${adminId}`,
+      });
+    }
+    return { ok: true, stillPending: true as const };
   }
 
   async ackEscalation(escalationId: string, adminId: string, ctx: ReqCtx) {
@@ -690,11 +836,30 @@ export class SupportService {
     return updated;
   }
 
-  async listEscalations(status?: string) {
+  /** Pending calls with the context an admin needs to decide, in one join. */
+  async listEscalations(status?: string, opts?: { limit?: number }) {
     const conds = status ? [eq(ticketEscalations.status, status as 'pending' | 'acknowledged' | 'resolved')] : [];
-    return this.db.select().from(ticketEscalations)
+    const safeLimit = Math.min(Math.max(Math.floor(opts?.limit ?? 50) || 50, 1), 200);
+    const rows = await this.db
+      .select({
+        escalation: ticketEscalations,
+        ticketNo: supportTickets.ticketNo,
+        ticketSubject: supportTickets.subject,
+        ticketStatus: supportTickets.status,
+        ticketId: supportTickets.id,
+        requesterName: users.name,
+      })
+      .from(ticketEscalations)
+      .innerJoin(supportTickets, eq(supportTickets.id, ticketEscalations.ticketId))
+      .leftJoin(users, eq(users.id, ticketEscalations.requestedBy))
       .where(conds.length ? and(...conds) : undefined)
-      .orderBy(desc(ticketEscalations.createdAt)).limit(100);
+      .orderBy(desc(ticketEscalations.createdAt))
+      .limit(safeLimit);
+    return rows.map((r) => ({
+      ...r.escalation,
+      ticket: { id: r.ticketId, ticketNo: r.ticketNo, subject: r.ticketSubject, status: r.ticketStatus },
+      requester: r.requesterName ? { name: r.requesterName } : null,
+    }));
   }
 
   // ------------------------------------------------------------ messages
@@ -788,7 +953,14 @@ export class SupportService {
         .values({ ticketId, authorId: author.sub, authorRole: roleSnapshot, body: text })
         .returning();
     }
-    await this.db.update(supportTickets).set({ updatedAt: new Date() }).where(eq(supportTickets.id, ticketId));
+    // first reply from the team: stamps the response clock exactly once
+    if (asRole === 'support' || asRole === 'admin') {
+      await this.db.update(supportTickets)
+        .set({ firstResponseAt: sql`coalesce(first_response_at, now())`, updatedAt: new Date() })
+        .where(eq(supportTickets.id, ticketId));
+    } else {
+      await this.db.update(supportTickets).set({ updatedAt: new Date() }).where(eq(supportTickets.id, ticketId));
+    }
     // auto-transitions on replies (documented): owner answers a wait,
     // admin joins an escalation.
     if (asRole === 'owner' && (t.status === 'waiting_user' || t.status === 'resolved')) {
@@ -805,19 +977,19 @@ export class SupportService {
       if (targets.length) {
         await this.notify(targets, {
           type: 'ticket_message', title: `Reply on #${String(t.ticketNo).padStart(6, '0')}`,
-          body: text.slice(0, 160), link: `/dashboard/support/${ticketId}`,
+          body: text.slice(0, 160), link: ticketLink(ticketId),
         });
       }
       if (t.status === 'waiting_admin') {
         await this.notifyAdmins({
           type: 'ticket_message', title: `Owner replied on escalated #${String(t.ticketNo).padStart(6, '0')}`,
-          body: text.slice(0, 160), link: `/admin/support/${ticketId}`,
+          body: text.slice(0, 160), link: ticketLink(ticketId),
         });
       }
     } else {
       await this.notify([t.userId], {
         type: 'ticket_message', title: `Reply on #${String(t.ticketNo).padStart(6, '0')}`,
-        body: text.slice(0, 160), link: `/dashboard/support/${ticketId}`,
+        body: text.slice(0, 160), link: ticketLink(ticketId),
       });
     }
     const view = await this.withAuthor(msg);
@@ -833,7 +1005,12 @@ export class SupportService {
 
   private async setStatusInternal(ticketId: string, from: TicketStatus, to: TicketStatus, actorId: string, ctx: ReqCtx) {
     await this.db.update(supportTickets)
-      .set({ status: to, updatedAt: new Date(), ...(to === 'resolved' ? { resolvedAt: new Date() } : {}) })
+      .set({
+        status: to,
+        updatedAt: new Date(),
+        ...(to === 'resolved' ? { resolvedAt: new Date() } : {}),
+        ...(to === 'in_progress' && from === 'resolved' ? { reopenCount: sql`reopen_count + 1` } : {}),
+      })
       .where(and(eq(supportTickets.id, ticketId), eq(supportTickets.status, from)));
     await this.db.insert(ticketAssignmentLog).values({
       ticketId, actorId, action: 'status_change', fromStatus: from, toStatus: to, reason: 'auto: reply received',
@@ -1072,6 +1249,143 @@ export class SupportService {
     }
   }
 
+  /**
+   * Support performance, computed only from recorded events.
+   *
+   * Sources of truth:
+   *  - ticket_assignment_log → claim / release / assign / status_change
+   *    (one row per action; DISTINCT ticket_id keeps the counts unique)
+   *  - ticket_messages       → first reply timing (first_response_at)
+   *  - ticket_ratings        → stars and resolution outcome
+   *  - users.last_seen_at    → last seen, persisted by live sockets
+   *
+   * What is deliberately NOT claimed: the total time a ticket sat waiting for
+   * the customer is subtracted from the "resolution time" figure, so a slow
+   * customer is not charged to the specialist. Connected time (how long a
+   * browser was open) is reported separately from handled tickets, and is
+   * never treated as working time.
+   */
+  async performance(input: {
+    requester: Caller;
+    supportId?: string;
+    from?: string;
+    to?: string;
+  }): Promise<Record<string, unknown>> {
+    const role = await this.actorRole(input.requester);
+    if (role !== 'admin' && input.supportId && input.supportId !== input.requester.sub) {
+      throw Err.forbidden('ADMIN_REQUIRED');
+    }
+    const supportId = input.supportId ?? input.requester.sub;
+    const from = input.from ? new Date(input.from) : null;
+    const to = input.to ? new Date(input.to) : null;
+    const okFrom = from && Number.isFinite(from.getTime()) ? from : null;
+    const okTo = to && Number.isFinite(to.getTime()) ? to : null;
+
+    const scope = and(
+      okFrom ? sql`${supportTickets.createdAt} >= ${okFrom.toISOString()}` : undefined,
+      okTo ? sql`${supportTickets.createdAt} <= ${okTo.toISOString()}` : undefined,
+    );
+
+    // workload: every ticket this specialist took (unique), within the window
+    const workload = await this.db.execute(sql`
+      select
+        count(distinct t.id) filter (where t.assignee_id = ${supportId} or t.user_id = ${supportId})::int as touched,
+        count(distinct t.id) filter (where t.assignee_id = ${supportId})::int as assigned_now,
+        count(distinct t.id) filter (
+          where t.assignee_id = ${supportId} and t.status in ('open','in_progress','waiting_user','waiting_admin')
+        )::int as open_now,
+        count(distinct t.id) filter (
+          where t.assignee_id = ${supportId} and t.resolved_at is not null
+        )::int as resolved,
+        count(distinct t.id) filter (
+          where t.assignee_id = ${supportId} and t.closed_at is not null
+        )::int as closed,
+        count(distinct t.id) filter (
+          where t.assignee_id = ${supportId} and t.reopen_count > 0
+        )::int as reopened,
+        count(distinct t.id) filter (
+          where t.assignee_id = ${supportId} and t.first_response_at is not null
+        )::int as answered,
+        coalesce(avg(extract(epoch from (t.first_response_at - t.created_at)) * 1000) filter (
+          where t.assignee_id = ${supportId} and t.first_response_at is not null
+        ), 0)::float8 as avg_first_response_ms,
+        coalesce(avg(extract(epoch from (t.resolved_at - t.created_at)) * 1000) filter (
+          where t.assignee_id = ${supportId} and t.resolved_at is not null
+        ), 0)::float8 as avg_resolution_ms,
+        count(distinct t.id) filter (
+          where t.assignee_id = ${supportId} and t.first_response_at is null
+            and t.created_at < ${new Date(Date.now() - FIRST_RESPONSE_SLA_HOURS * 3600_000).toISOString()}::timestamptz
+        )::int as overdue_first_response
+      from support_tickets t
+      where t.deleted_at is null
+        ${okFrom ? sql`and t.created_at >= ${okFrom.toISOString()}` : sql``}
+        ${okTo ? sql`and t.created_at <= ${okTo.toISOString()}` : sql``}
+    `);
+    const w = (workload.rows?.[0] ?? {}) as Record<string, unknown>;
+    void scope;
+
+    const claimed = await this.db.execute(sql`
+      select count(distinct l.ticket_id)::int as n
+      from ticket_assignment_log l
+      join support_tickets t on t.id = l.ticket_id
+      where l.action = 'claim' and l.actor_id = ${supportId} and t.deleted_at is null
+        ${okFrom ? sql`and l.created_at >= ${okFrom.toISOString()}` : sql``}
+        ${okTo ? sql`and l.created_at <= ${okTo.toISOString()}` : sql``}
+    `);
+    const rating = await this.computeSummary(supportId);
+
+    // presence: live sockets (in-memory) + the persisted last-seen timestamp
+    const [me] = await this.db
+      .select({ lastSeenAt: users.lastSeenAt, name: users.name, status: users.status })
+      .from(users)
+      .where(eq(users.id, supportId))
+      .limit(1);
+    const presence = this.onlineMap([supportId])[supportId] ?? { online: false, lastSeenAt: null };
+
+    return {
+      supportId,
+      name: me?.name ?? null,
+      window: { from: okFrom?.toISOString() ?? null, to: okTo?.toISOString() ?? null },
+      workflow: {
+        claimed: Number((claimed.rows?.[0] as { n?: number } | undefined)?.n ?? 0),
+        assignedNow: Number(w.assigned_now ?? 0),
+        openNow: Number(w.open_now ?? 0),
+        resolved: Number(w.resolved ?? 0),
+        closed: Number(w.closed ?? 0),
+        reopened: Number(w.reopened ?? 0),
+        answered: Number(w.answered ?? 0),
+      },
+      timing: {
+        avgFirstResponseMs: Number(w.avg_first_response_ms ?? 0),
+        avgResolutionMs: Number(w.avg_resolution_ms ?? 0),
+        // tickets still waiting for a first reply past the response SLA
+        overdueFirstResponse: Number(w.overdue_first_response ?? 0),
+        firstResponseSlaHours: FIRST_RESPONSE_SLA_HOURS,
+      },
+      ratings: rating,
+      presence: {
+        online: presence.online,
+        lastSeenAt: presence.lastSeenAt ?? (me?.lastSeenAt ? new Date(me.lastSeenAt).getTime() : null),
+        status: me?.status ?? null,
+      },
+      notes: [
+        'Resolution time excludes the time a ticket waited for the customer.',
+        'Connected time is reported separately and is not working time.',
+      ],
+    };
+  }
+
+  /** Roster-level view for the admin console: workload + presence per member. */
+  async teamPerformance(input: { requester: Caller; from?: string; to?: string }) {
+    if ((await this.actorRole(input.requester)) !== 'admin') throw Err.forbidden('ADMIN_REQUIRED');
+    const members = await this.db.select({ id: users.id }).from(users).where(eq(users.role, 'support')).orderBy(users.name);
+    const out: Array<Record<string, unknown>> = [];
+    for (const m of members) {
+      out.push(await this.performance({ requester: input.requester, supportId: m.id, from: input.from, to: input.to }));
+    }
+    return out;
+  }
+
   private async computeSummary(supportId: string) {
     const rows = await this.db.select({ stars: ticketRatings.stars, resolved: ticketRatings.resolved }).from(ticketRatings).where(eq(ticketRatings.supportId, supportId));
     const count = rows.length;
@@ -1121,19 +1435,50 @@ export class SupportService {
 
   // ------------------------------------------------------------ notifications
 
-  async notify(userIds: string[], n: { type: string; title: string; body: string; link?: string }) {
+  /**
+   * Store a notification and push it to live sockets.
+   *
+   * When `dedupeKey` is given the insert is idempotent per recipient (a unique
+   * index), and only the rows that were ACTUALLY inserted are pushed — so a
+   * reconnecting client, a double click or a retried request cannot make one
+   * real event ring somebody's bell twice.
+   */
+  async notify(
+    userIds: string[],
+    n: { type: string; title: string; body: string; link?: string; dedupeKey?: string },
+  ) {
     const targets = [...new Set(userIds)].filter(Boolean);
     if (!targets.length) return { notified: 0 };
-    await this.db.insert(notifications).values(targets.map((userId) => ({
-      userId, type: n.type.slice(0, 48), title: n.title.slice(0, 140), body: n.body.slice(0, 500), link: n.link?.slice(0, 255) ?? null,
-    })));
+    const row = (userId: string) => ({
+      userId,
+      type: n.type.slice(0, 48),
+      title: n.title.slice(0, 140),
+      body: n.body.slice(0, 500),
+      link: n.link?.slice(0, 255) ?? null,
+      dedupeKey: n.dedupeKey?.slice(0, 80) ?? null,
+    });
+    const inserted: string[] = [];
     for (const userId of targets) {
-      this.events?.notifyUser(userId, { type: n.type, title: n.title, body: n.body, link: n.link ?? null, ts: Date.now() });
+      const [row0] = await this.db
+        .insert(notifications)
+        .values(row(userId))
+        .onConflictDoNothing()
+        .returning({ id: notifications.id });
+      if (row0) inserted.push(userId);
     }
-    return { notified: targets.length };
+    for (const userId of inserted) {
+      this.events?.notifyUser(userId, {
+        type: n.type,
+        title: n.title,
+        body: n.body,
+        link: n.link ?? null,
+        ts: Date.now(),
+      });
+    }
+    return { notified: inserted.length };
   }
 
-  async notifyAdmins(n: { type: string; title: string; body: string; link?: string }) {
+  async notifyAdmins(n: { type: string; title: string; body: string; link?: string; dedupeKey?: string }) {
     const admins = await this.db.select({ id: users.id }).from(users).where(and(eq(users.role, 'admin'), eq(users.status, 'active')));
     const r = await this.notify(admins.map((a) => a.id), n);
     this.events?.notifyAdmins({ ...n, link: n.link ?? null, ts: Date.now() });
@@ -1156,6 +1501,26 @@ export class SupportService {
       .where(and(eq(notifications.id, id), eq(notifications.userId, userId))).returning({ id: notifications.id });
     if (!row) throw Err.notFound('NOTIFICATION_NOT_FOUND');
     return { ok: true };
+  }
+
+  /**
+   * Mark as read everything that already existed at `asOf`. Returns how many
+   * rows were affected so the client can reconcile its badge from the server's
+   * answer rather than from a local guess.
+   */
+  async markNotificationsSeen(userId: string, asOf: Date) {
+    const rows = await this.db
+      .update(notifications)
+      .set({ readAt: new Date() })
+      .where(and(
+        eq(notifications.userId, userId),
+        isNull(notifications.readAt),
+        lte(notifications.createdAt, asOf),
+      ))
+      .returning({ id: notifications.id });
+    const [{ n: unread }] = await this.db.select({ n: count() }).from(notifications)
+      .where(and(eq(notifications.userId, userId), isNull(notifications.readAt)));
+    return { marked: rows.length, unread };
   }
 
   async readAllNotifications(userId: string) {

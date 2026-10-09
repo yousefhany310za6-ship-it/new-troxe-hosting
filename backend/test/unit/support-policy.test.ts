@@ -3,9 +3,11 @@ import { strict as assert } from 'node:assert';
 import {
   CONTACT_CODE_RE,
   DEFAULT_PRIORITY,
+  FIRST_RESPONSE_SLA_HOURS,
   MESSAGE_MAX,
   PRIORITIES,
   canPost,
+  canReadDetails,
   canSetPriority,
   canTransition,
   isValidContactCode,
@@ -85,12 +87,36 @@ describe('exclusive posting', () => {
   });
 });
 
+describe('assigned-ticket privacy (details belong to the holder)', () => {
+  const base = { isOwner: false, isAssignee: false, isAdmin: false };
+
+  it('the owner and the holder and an admin may read details', () => {
+    assert.equal(canReadDetails({ ...base, isOwner: true }), true);
+    assert.equal(canReadDetails({ ...base, isAssignee: true }), true);
+    assert.equal(canReadDetails({ ...base, isAdmin: true }), true);
+  });
+
+  it('another specialist may not — even on the same team', () => {
+    assert.equal(canReadDetails(base), false);
+    assert.equal(canReadDetails({ isOwner: false, isAssignee: false, isAdmin: false }), false);
+  });
+
+  it('reading is not writing: the peer still cannot post', () => {
+    // a summary in the queue must never become authority to answer
+    assert.equal(canPost({ role: 'support', status: 'in_progress', assigneeId: 'staff-a', authorId: 'staff-b' }), false);
+  });
+});
+
 describe('priority authority', () => {
   it('only the assignee or an admin may set it', () => {
     assert.equal(canSetPriority({ role: 'support', isAssignee: true }), true);
     assert.equal(canSetPriority({ role: 'support', isAssignee: false }), false);
     assert.equal(canSetPriority({ role: 'admin', isAssignee: false }), true);
     assert.equal(canSetPriority({ role: 'owner', isAssignee: true }), false);
+  });
+
+  it('the response SLA is a documented, visible policy', () => {
+    assert.equal(FIRST_RESPONSE_SLA_HOURS, 24);
   });
 
   it('users never pick a priority: tickets open at the default', () => {

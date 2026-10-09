@@ -230,7 +230,7 @@ export default function SupportDesk() {
                 <ul className="flex flex-col gap-2.5">
                     {items.map((t) => (
                         <li key={t.id}>
-                            <QueueRow ticket={t} readOnly={tab === 'team' && t.assigneeId && t.assigneeId !== t.assigneeId} />
+                            <QueueRow ticket={t} readOnly={tab === 'team' && !!t.assigneeId} me={null} />
                         </li>
                     ))}
                 </ul>
@@ -266,8 +266,9 @@ export default function SupportDesk() {
     );
 }
 
-function QueueRow({ ticket, readOnly }) {
-    const unread = ticket.unreadCount ?? 0;
+function QueueRow({ ticket, readOnly, me }) {
+    const mine = ticket.mine ?? false;
+    const unread = mine ? (ticket.unreadCount ?? 0) : 0;
     const last = ticket.lastMessage;
     const lastFrom = last?.authorRole === 'user' ? 'Customer' : last?.authorRole === 'admin' ? 'Admin' : 'Specialist';
     return (
@@ -315,7 +316,11 @@ function QueueRow({ ticket, readOnly }) {
                 ) : (
                     <span className="text-ink-muted">unassigned</span>
                 )}
-                {last ? (
+                {!mine && ticket.assignee ? (
+                    <span className="min-w-0 flex-1 basis-48 truncate text-ink-muted">
+                        handled by {ticket.assignee.name} · conversation is private to them
+                    </span>
+                ) : last ? (
                     <span className="min-w-0 flex-1 basis-48 truncate text-ink-muted">
                         <span className="text-ink-secondary">{lastFrom}:</span> {last.body}
                         <span className="ml-1.5 font-mono text-[0.68rem]">{relative(last.createdAt)}</span>
@@ -323,7 +328,7 @@ function QueueRow({ ticket, readOnly }) {
                 ) : (
                     <span className="text-ink-muted">no messages yet</span>
                 )}
-                {readOnly && <span className="text-ink-muted">view only</span>}
+                {readOnly && <span className="text-ink-muted">summary only</span>}
             </div>
         </Link>
     );

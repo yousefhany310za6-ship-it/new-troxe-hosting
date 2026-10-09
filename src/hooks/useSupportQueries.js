@@ -222,6 +222,27 @@ export function useEscalations(status) {
     });
 }
 
+/** Accept an admin call (exactly one admin wins; the loser gets 409). */
+export function useAcceptEscalation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id) => apiPost(`/admin/support/escalations/${id}/accept`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['support', 'escalations'] });
+      qc.invalidateQueries({ queryKey: ['support'] });
+    },
+  });
+}
+
+/** Decline an admin call: it stays open for another administrator. */
+export function useDeclineEscalation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, reason }) => apiPost(`/admin/support/escalations/${id}/decline`, { reason }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['support', 'escalations'] }),
+  });
+}
+
 export function useAckEscalation() {
     const qc = useQueryClient();
     return useMutation({
@@ -251,6 +272,33 @@ export function useAdminRatings(params = {}) {
 
 /* ---------------------------- notifications ----------------------------- */
 
+/** Support performance for one member (admin: anyone, staff: themselves). */
+export function useSupportPerformance(supportId, params = {}) {
+  const q = new URLSearchParams();
+  if (params.from) q.set('from', params.from);
+  if (params.to) q.set('to', params.to);
+  const qs = q.toString();
+  return useQuery({
+    queryKey: ['support', 'performance', supportId ?? 'me', params],
+    queryFn: () => apiGet(`/admin/support/performance/${supportId}${qs ? `?${qs}` : ''}`),
+    enabled: !!supportId,
+    staleTime: 60_000,
+  });
+}
+
+/** Team-wide performance (admin only). */
+export function useTeamPerformance(params = {}) {
+  const q = new URLSearchParams();
+  if (params.from) q.set('from', params.from);
+  if (params.to) q.set('to', params.to);
+  const qs = q.toString();
+  return useQuery({
+    queryKey: ['support', 'performance', 'team', params],
+    queryFn: () => apiGet(`/admin/support/performance${qs ? `?${qs}` : ''}`),
+    staleTime: 60_000,
+  });
+}
+
 export function useNotifications(page = 1) {
     return useQuery({
         queryKey: supportKeys.notifications(page),
@@ -266,6 +314,18 @@ export function useReadNotification() {
         mutationFn: (id) => apiPost(`/support/notifications/${id}/read`),
         onSuccess: () => qc.invalidateQueries({ queryKey: ['support', 'notifications'] }),
     });
+}
+
+/**
+ * "The panel was opened": marks everything that existed at `asOf` as read and
+ * returns the authoritative unread count from the server.
+ */
+export function useMarkSeen() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (asOf) => apiPost('/support/notifications/seen', { asOf: new Date(asOf).toISOString() }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['support', 'notifications'] }),
+  });
 }
 
 export function useReadAllNotifications() {
