@@ -126,9 +126,13 @@ export class QueueController {
   }
 
   /** Staff see only their own aggregates — never a colleague's. */
+  /**
+   * My own performance. Deliberately NOT under /admin/support: a specialist
+   * may see their own workload and response times (never a colleague's).
+   */
   @Get('performance/me')
   myPerformance(@CurrentUser() u: ReqUser) {
-    return this.support.ratingSummary(u.sub, u);
+    return this.support.performance({ requester: u, supportId: u.sub });
   }
 
   @Get('performance/ratings')

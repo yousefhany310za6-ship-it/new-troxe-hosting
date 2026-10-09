@@ -1284,14 +1284,21 @@ export class SupportService {
     to?: string;
   }): Promise<Record<string, unknown>> {
     const role = await this.actorRole(input.requester);
-    if (role !== 'admin' && input.supportId && input.supportId !== input.requester.sub) {
+    // Policy: a support member may read their OWN performance (and nothing
+    // else); admins read everybody's.
+    if (role !== 'admin' && (!input.supportId || input.supportId !== input.requester.sub)) {
       throw Err.forbidden('ADMIN_REQUIRED');
     }
     const supportId = input.supportId ?? input.requester.sub;
-    const from = input.from ? new Date(input.from) : null;
-    const to = input.to ? new Date(input.to) : null;
-    const okFrom = from && Number.isFinite(from.getTime()) ? from : null;
-    const okTo = to && Number.isFinite(to.getTime()) ? to : null;
+    // No window given means "the last 30 days", never "everything since the
+    // beginning of time": the reported figure always says what it covers, and
+    // older data cannot silently change today's numbers.
+    const parsedFrom = input.from ? new Date(input.from) : null;
+    const parsedTo = input.to ? new Date(input.to) : null;
+    const okFrom = parsedFrom && Number.isFinite(parsedFrom.getTime())
+      ? parsedFrom
+      : new Date(Date.now() - 30 * 86400_000);
+    const okTo = parsedTo && Number.isFinite(parsedTo.getTime()) ? parsedTo : null;
 
     const scope = and(
       okFrom ? sql`${supportTickets.createdAt} >= ${okFrom.toISOString()}` : undefined,
@@ -1357,7 +1364,7 @@ export class SupportService {
     return {
       supportId,
       name: me?.name ?? null,
-      window: { from: okFrom?.toISOString() ?? null, to: okTo?.toISOString() ?? null },
+      window: { from: okFrom.toISOString(), to: okTo?.toISOString() ?? null, days: 30 },
       workflow: {
         claimed: Number((claimed.rows?.[0] as { n?: number } | undefined)?.n ?? 0),
         assignedNow: Number(w.assigned_now ?? 0),

@@ -251,8 +251,12 @@ export class SupportGateway implements OnGatewayConnection, OnGatewayDisconnect,
     try {
       // re-verified on every join: knowing the id grants nothing
       await this.support.requireAccess(id, { sub: client.userId, role: client.role ?? 'user' });
-    } catch {
-      return { ok: false, error: 'TICKET_ACCESS_DENIED' };
+    } catch (e) {
+      // the service's own code (TICKET_NOT_YOURS, TICKET_NOT_FOUND) is what the
+      // client needs to show the right message
+      const res = (e as { getResponse?: () => unknown })?.getResponse?.();
+      const code = res && typeof res === 'object' && 'code' in res ? String((res as { code: unknown }).code) : 'TICKET_ACCESS_DENIED';
+      return { ok: false, error: code };
     }
     void client.join(TICKET_ROOM(id));
     client.tickets.add(id);
