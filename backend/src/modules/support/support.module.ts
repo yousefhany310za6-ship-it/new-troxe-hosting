@@ -27,6 +27,8 @@ import { SupportGuard } from './support.guard';
   imports: [ServersModule],
   controllers: [TicketsController, QueueController, AdminSupportController],
   providers: [SupportService, SupportGateway, SupportGuard, WsAuthGuard, WsTicketService],
-  exports: [SupportService],
+  // SupportGateway is exported so admin actions (role change / suspension /
+  // deletion) can drop a user's live support sockets immediately.
+  exports: [SupportService, SupportGateway],
 })
 export class SupportModule {}
