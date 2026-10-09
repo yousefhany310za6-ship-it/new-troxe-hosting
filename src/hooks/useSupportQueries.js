@@ -234,6 +234,15 @@ export function useAcceptEscalation() {
   });
 }
 
+/** Accept the pending admin call for a ticket (used by the Join button). */
+export function useAcceptCallForTicket() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (ticketId) => apiPost(`/admin/support/tickets/${ticketId}/escalation/accept`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['support'] }),
+  });
+}
+
 /** Decline an admin call: it stays open for another administrator. */
 export function useDeclineEscalation() {
   const qc = useQueryClient();

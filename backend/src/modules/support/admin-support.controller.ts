@@ -31,6 +31,18 @@ const UUID = new ParseUUIDPipe({ version: '4' });
 export class AdminSupportController {
   constructor(private support: SupportService) {}
 
+  /**
+   * Accept the pending admin call for a TICKET — what the notification's
+   * "Join ticket" button calls. Admin-only, single responder, then the client
+   * opens the ticket with the admin identity.
+   */
+  @Post('tickets/:id/escalation/accept')
+  @HttpCode(200)
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  acceptCall(@Param('id', UUID) id: string, @CurrentUser() u: ReqUser, @Req() req: { ip?: string; headers: Record<string, unknown> }) {
+    return this.support.acceptEscalationForTicket(id, u.sub, ctxOf(req));
+  }
+
   @Get('tickets')
   tickets(@Query() q: QueueQueryDto, @CurrentUser() u: ReqUser) {
     return this.support.listQueue(u, q.view ?? 'all', q);

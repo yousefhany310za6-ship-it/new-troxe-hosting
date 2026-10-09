@@ -806,6 +806,20 @@ export class SupportService {
   }
 
   /**
+   * Accept the pending call for a TICKET (no escalation id needed). This is
+   * what a notification's "Join ticket" button calls: the admin is taken from
+   * the session, the pending request is found by ticket, and the same
+   * single-responder rule applies.
+   */
+  async acceptEscalationForTicket(ticketId: string, adminId: string, ctx: ReqCtx) {
+    const [esc] = await this.db.select().from(ticketEscalations)
+      .where(and(eq(ticketEscalations.ticketId, ticketId), eq(ticketEscalations.status, 'pending')))
+      .orderBy(desc(ticketEscalations.createdAt)).limit(1);
+    if (!esc) throw new AppError('ESCALATION_ALREADY_HANDLED', 409, 'There is no pending admin call for this ticket.');
+    return this.acceptEscalation(esc.id, adminId, ctx);
+  }
+
+  /**
    * An admin declines the call. The request stays pending (another admin may
    * take it) and the decline is journaled — nobody is silently dropped.
    */

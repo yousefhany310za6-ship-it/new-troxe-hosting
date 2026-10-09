@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Bell, Check, Loader2, Ticket as TicketIcon } from 'lucide-react';
+import { Bell, Check, Loader2, LogIn, Ticket as TicketIcon } from 'lucide-react';
 
-import { useNotifications, useReadNotification, useMarkSeen } from '@/hooks/useSupportQueries.js';
+import { useNavigate } from 'react-router-dom';
+import { useNotifications, useReadNotification, useMarkSeen, useAcceptCallForTicket } from '@/hooks/useSupportQueries.js';
 import { useSupportSocket } from '@/hooks/useSupportSocket.js';
 import { timeAgo } from '@/pages/admin/components.jsx';
 
@@ -21,6 +22,12 @@ import { timeAgo } from '@/pages/admin/components.jsx';
  *   de-duplicated by id, so it can never be counted twice;
  * - read state lives in the database, so a second device sees the same badge.
  */
+/** Extract the ticket id from a canonical notification link. */
+function ticketIdFromLink(link) {
+    const m = String(link ?? '').match(/\/dashboard\/support\/([0-9a-fA-F-]{36})/);
+    return m ? m[1] : null;
+}
+
 export function NotificationBell() {
     const [open, setOpen] = useState(false);
     const [live, setLive] = useState([]);
@@ -31,6 +38,8 @@ export function NotificationBell() {
     const readOne = useReadNotification();
     const markSeen = useMarkSeen();
 
+    const navigate = useNavigate();
+    const acceptCall = useAcceptCallForTicket();
     const { connected } = useSupportSocket({
         listenOnly: true,
         onEvent: (type, payload) => {
@@ -141,6 +150,7 @@ export function NotificationBell() {
                         )}
                         {items.map((n) => (
                             <li key={n.id} className="border-b border-hairline last:border-0">
+                                <div className="relative">
                                 <Link
                                     to={n.link ?? '/dashboard/support'}
                                     onClick={() => { setOpen(false); if (!n.live && !n.readAt) readOne.mutate(n.id); }}
@@ -155,6 +165,29 @@ export function NotificationBell() {
                                         {timeAgo(n.createdAt)}{!n.readAt && !n.live ? ' · unread' : ''}
                                     </p>
                                 </Link>
+                                {n.type === 'ticket_escalated' && ticketIdFromLink(n.link) && (
+                                    <div className="px-3.5 pb-2.5">
+                                        <button
+                                            type="button"
+                                            disabled={acceptCall.isPending}
+                                            onClick={async () => {
+                                                setOpen(false);
+                                                try {
+                                                    await acceptCall.mutateAsync(ticketIdFromLink(n.link));
+                                                    navigate(n.link ?? '/dashboard/support');
+                                                } catch (e) {
+                                                    // the call may already be handled: still open the ticket
+                                                    navigate(n.link ?? '/dashboard/support', { state: { escalationError: e?.message ?? null } });
+                                                }
+                                            }}
+                                            className="inline-flex items-center gap-1.5 rounded-full bg-white px-3.5 py-1.5 text-[0.74rem] font-bold text-black transition hover:bg-white/90 disabled:opacity-60"
+                                        >
+                                            <LogIn className="size-3.5" aria-hidden="true" />
+                                            {acceptCall.isPending ? 'Joining…' : 'Join ticket'}
+                                        </button>
+                                    </div>
+                                )}
+                                </div>
                             </li>
                         ))}
                     </ul>
