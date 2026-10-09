@@ -31,7 +31,7 @@ function newKey() {
  * is new. A failed send stays visible as pending and can be retried with the
  * SAME idempotency key, so a retry can never become a duplicate message.
  */
-export function TicketChat({ ticket, me }) {
+export function TicketChat({ ticket, me, allowedToPost = true }) {
     const [page, setPage] = useState(1);
     const [text, setText] = useState('');
     const [pending, setPending] = useState(null); // { key, body }
@@ -115,7 +115,15 @@ export function TicketChat({ ticket, me }) {
         emit('ticket:read', { ticketId: ticket.id, upToId: last.id });
     }, [rows, connected, me?.id, ticket.id, emit, markRead]);
 
-    const canWrite = ticket.status !== 'closed' && !ticket.deletedAt;
+    // The composer follows the same rule as the backend (canPost): the owner
+    // always, an admin always, and a support member only while they hold the
+    // ticket. The server still enforces it — this is only the honest UI.
+    const mayWrite =
+        allowedToPost &&
+        ticket.status !== 'closed' &&
+        !ticket.deletedAt &&
+        (ticket.myRole !== 'support' || !ticket.assigneeId || ticket.assigneeId === me?.id);
+    const canWrite = mayWrite;
 
     const doSend = async (body, key) => {
         const trimmed = body.trim();
@@ -143,7 +151,9 @@ export function TicketChat({ ticket, me }) {
     };
 
     const statusLine = () => {
-        if (!canWrite) return 'This ticket is closed. Reopen it (or ask an admin to) to keep talking.';
+        if (!canWrite) return ticket.status === 'closed'
+            ? 'This ticket is closed — the conversation is archived for the record.'
+            : 'Only the specialist holding this ticket can reply here.';
         if (ticket.status === 'waiting_user') return 'Support is waiting for your reply.';
         if (ticket.status === 'in_progress') return 'A specialist is working on this ticket.';
         if (ticket.status === 'waiting_admin') return 'An administrator has been called in — they will join here.';
@@ -251,7 +261,13 @@ export function TicketChat({ ticket, me }) {
                         rows={2}
                         maxLength={4000}
                         disabled={!canWrite}
-                        placeholder={canWrite ? 'Write a message… (Enter to send, Shift+Enter for a new line)' : 'This ticket is closed.'}
+                        placeholder={
+                            ticket.status === 'closed'
+                                ? 'This ticket is closed.'
+                                : ticket.myRole === 'support' && ticket.assigneeId && ticket.assigneeId !== me?.id
+                                    ? 'Only the specialist holding this ticket can reply here.'
+                                    : 'Write a message… (Enter to send, Shift+Enter for a new line)'
+                        }
                         aria-label="Message"
                         className="input-field resize-y"
                     />

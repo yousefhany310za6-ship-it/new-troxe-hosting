@@ -3,12 +3,16 @@
  * The service enforces these; any rule change MUST update the tests.
  *
  * Status machine (documented transitions, enforced by canTransition):
- *   open          → in_progress | waiting_user | waiting_admin | resolved | closed
- *   in_progress   → waiting_user | waiting_admin | resolved | closed(admin)
- *   waiting_user  → in_progress | resolved | closed(admin)
- *   waiting_admin → in_progress | resolved | closed(admin)
- *   resolved      → open (owner/admin reopen) | in_progress (support rework) | closed
+ *   open          → in_progress | waiting_user | waiting_admin | resolved
+ *   in_progress   → waiting_user | waiting_admin | resolved
+ *   waiting_user  → in_progress | resolved
+ *   waiting_admin → in_progress (admin) | resolved
+ *   resolved      → in_progress (staff rework) | closed (staff) | open (admin reopen)
  *   closed        → open (admin only)
+ *
+ * The ticket OWNER never changes the status: no closing, no resolving, no
+ * reopening. Their only lifecycle powers are creating, replying (which may
+ * move the ticket back to in_progress) and rating once it is resolved/closed.
  * Deleted tickets accept no transitions at all.
  *
  * Rating fairness (documented):
@@ -29,28 +33,27 @@ const TRANSITIONS: Record<TicketStatus, Array<{ to: TicketStatus; by: StaffRole[
     { to: 'waiting_user', by: ['support', 'admin'] },
     { to: 'waiting_admin', by: ['support', 'admin'] },
     { to: 'resolved', by: ['support', 'admin'] },
-    { to: 'closed', by: ['owner', 'admin'] },
   ],
   in_progress: [
     { to: 'waiting_user', by: ['support', 'admin'] },
     { to: 'waiting_admin', by: ['support', 'admin'] },
     { to: 'resolved', by: ['support', 'admin'] },
-    { to: 'closed', by: ['admin'] },
+    { to: 'closed', by: ['support', 'admin'] },
   ],
   waiting_user: [
     { to: 'in_progress', by: ['support', 'admin'] },
     { to: 'resolved', by: ['support', 'admin'] },
-    { to: 'closed', by: ['admin'] },
+    { to: 'closed', by: ['support', 'admin'] },
   ],
   waiting_admin: [
     { to: 'in_progress', by: ['admin'] },
     { to: 'resolved', by: ['support', 'admin'] },
-    { to: 'closed', by: ['admin'] },
+    { to: 'closed', by: ['support', 'admin'] },
   ],
   resolved: [
-    { to: 'open', by: ['owner', 'admin'] },
     { to: 'in_progress', by: ['support', 'admin'] },
-    { to: 'closed', by: ['owner', 'admin'] },
+    { to: 'closed', by: ['support', 'admin'] },
+    { to: 'open', by: ['admin'] },
   ],
   closed: [{ to: 'open', by: ['admin'] }],
 };
@@ -59,6 +62,37 @@ export function canTransition(from: TicketStatus, to: TicketStatus, role: StaffR
   if (from === to) return true;
   return (TRANSITIONS[from] ?? []).some((t) => t.to === to && t.by.includes(role));
 }
+
+/**
+ * Who may post into a ticket.
+ *  - owner: whenever the ticket is not closed;
+ *  - support: ONLY the current assignee (claiming is what grants write access);
+ *  - admin: always (they join with an explicit admin identity).
+ */
+export function canPost(input: {
+  role: StaffRole;
+  status: TicketStatus;
+  assigneeId: string | null;
+  authorId: string;
+}): boolean {
+  if (input.status === 'closed') return false;
+  if (input.role === 'admin') return true;
+  if (input.role === 'owner') return true;
+  return input.assigneeId !== null && input.assigneeId === input.authorId;
+}
+
+/**
+ * Priority is a staff decision: the assignee who holds the ticket, or an admin.
+ * An unassigned ticket keeps its priority until somebody claims it.
+ */
+export function canSetPriority(input: { role: StaffRole; isAssignee: boolean }): boolean {
+  if (input.role === 'admin') return true;
+  return input.role === 'support' && input.isAssignee;
+}
+
+/** Priority tiers. Users never pick one: tickets open at MEDIUM by default. */
+export const PRIORITIES = ['low', 'medium', 'high', 'urgent'] as const;
+export const DEFAULT_PRIORITY = 'medium';
 
 /** Owner may delete only a fresh, untouched, non-escalated open ticket. */
 export function ownerCanDelete(status: TicketStatus, staffReplied: boolean, pendingEscalation: boolean): boolean {
@@ -119,8 +153,6 @@ export const TICKET_CATEGORIES = [
   'technical',
   'other',
 ] as const;
-
-export const USER_PRIORITIES = ['low', 'medium', 'high'] as const;
 
 /** Which statuses each role may list without extra filters. */
 export function visibleToRole(role: 'user' | 'support' | 'admin'): 'own' | 'queue' | 'all' {

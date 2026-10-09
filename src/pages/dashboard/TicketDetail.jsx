@@ -9,7 +9,6 @@ import {
     Headset,
     Loader2,
     Mail,
-    ShieldAlert,
     Trash2,
     UserRound,
     X,
@@ -23,7 +22,8 @@ import { ServerCard } from '@/components/support/ServerCard.jsx';
 import { TicketChat } from '@/components/support/TicketChat.jsx';
 import { RatingForm } from '@/components/support/RatingForm.jsx';
 import { StaffTicketActions } from '@/components/support/StaffTicketActions.jsx';
-import { useTicket, useRatingEligibility, useDeleteTicket, useSetTicketStatus, useTimeline } from '@/hooks/useSupportQueries.js';
+import { PriorityControl } from '@/components/support/PriorityControl.jsx';
+import { useTicket, useRatingEligibility, useDeleteTicket, useTimeline } from '@/hooks/useSupportQueries.js';
 import { useAuth } from '@/context/AuthContext.jsx';
 import { ApiError } from '@/lib/api.js';
 
@@ -44,7 +44,6 @@ export default function TicketDetail() {
     const { data: ticket, isLoading, error, refetch } = useTicket(id);
     const eligibility = useRatingEligibility(id);
     const remove = useDeleteTicket(id);
-    const setStatus = useSetTicketStatus(id);
     const [confirmDelete, setConfirmDelete] = useState(false);
     const [actionError, setActionError] = useState(null);
 
@@ -160,6 +159,16 @@ export default function TicketDetail() {
                     )}
                 </div>
 
+                {isStaff && !isAdmin && ticket.assigneeId && ticket.assigneeId !== user?.id && (
+                    <p className="flex flex-wrap items-center gap-2 rounded-lg border border-hairline bg-veil px-3 py-2 text-[0.8rem] text-ink-secondary">
+                        <Eye className="size-4 shrink-0" aria-hidden="true" />
+                        <span>
+                            This ticket belongs to <span className="font-bold text-foreground">{ticket.assignee?.name ?? 'another specialist'}</span> — you
+                            can read it and help in person, but only they (or an admin) can reply here.
+                        </span>
+                    </p>
+                )}
+
                 {ticket.pendingEscalation && (
                     <p className="flex items-start gap-2 rounded-lg border border-violet-500/25 bg-violet-500/10 px-3 py-2 text-[0.8rem] text-violet-200">
                         <Bell className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
@@ -173,36 +182,16 @@ export default function TicketDetail() {
                 )}
 
                 <div className="flex flex-wrap items-center gap-2">
-                    {/* owner-side lifecycle actions */}
-                    {ticket.myRole === 'owner' && ticket.status === 'open' && (
-                        <button
-                            type="button"
-                            disabled={setStatus.isPending}
-                            onClick={async () => {
-                                setActionError(null);
-                                try { await setStatus.mutateAsync('closed'); refetch(); }
-                                catch (e) { setActionError(e?.message ?? 'Could not close the ticket.'); }
-                            }}
-                            className="inline-flex items-center gap-1.5 rounded-full border border-hairline px-3.5 py-1.5 text-[0.78rem] font-bold text-ink-secondary transition hover:text-foreground"
-                        >
-                            <X className="size-3.5" aria-hidden="true" />
-                            Close ticket
-                        </button>
-                    )}
-                    {ticket.myRole === 'owner' && ticket.status === 'resolved' && (
-                        <button
-                            type="button"
-                            disabled={setStatus.isPending}
-                            onClick={async () => {
-                                setActionError(null);
-                                try { await setStatus.mutateAsync('open'); refetch(); }
-                                catch (e) { setActionError(e?.message ?? 'Could not reopen the ticket.'); }
-                            }}
-                            className="inline-flex items-center gap-1.5 rounded-full border border-hairline px-3.5 py-1.5 text-[0.78rem] font-bold text-foreground transition hover:border-hairline-hover"
-                        >
-                            <ShieldAlert className="size-3.5" aria-hidden="true" />
-                            Still broken — reopen
-                        </button>
+                    {/*
+                      The ticket status belongs to the support team: the owner
+                      can reply (which reopens a resolved ticket for rework) and
+                      can delete a ticket nobody has touched yet, but they can
+                      never close, resolve or reopen one themselves.
+                    */}
+                    {ticket.myRole === 'owner' && ticket.status === 'resolved' && !ticket.rating && (
+                        <p className="text-[0.76rem] text-ink-muted">
+                            Marked resolved? Reply below and the ticket goes back to the team automatically.
+                        </p>
                     )}
                     {ticket.myRole === 'owner' && ticket.status === 'open' && (
                         <button
@@ -215,6 +204,7 @@ export default function TicketDetail() {
                         </button>
                     )}
                     <StaffTicketActions ticket={ticket} onChanged={refetch} isStaff={isStaff} isAdmin={isAdmin} />
+                    <PriorityControl ticket={ticket} onChanged={refetch} isStaff={isStaff} />
                     {actionError && <span className="text-[0.76rem] text-red-300">{actionError}</span>}
                 </div>
             </header>
@@ -237,7 +227,7 @@ export default function TicketDetail() {
 
             <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
                 <div className="flex min-w-0 flex-col gap-4">
-                    <TicketChat ticket={ticket} me={user} />
+                    <TicketChat ticket={ticket} me={user} allowedToPost={ticket.myRole !== 'support' || !ticket.assigneeId || ticket.assigneeId === user?.id || ticket.myRole === 'admin'} />
                 </div>
                 <aside className="flex min-w-0 flex-col gap-4">
                     {isStaff && <ServerCard ticketId={ticket.id} />}

@@ -2,7 +2,11 @@ import { describe, it } from 'node:test';
 import { strict as assert } from 'node:assert';
 import {
   CONTACT_CODE_RE,
+  DEFAULT_PRIORITY,
   MESSAGE_MAX,
+  PRIORITIES,
+  canPost,
+  canSetPriority,
   canTransition,
   isValidContactCode,
   ownerCanDelete,
@@ -10,35 +14,88 @@ import {
   redactSecrets,
 } from '../../src/modules/support/support-policy.ts';
 
-describe('ticket transitions', () => {
-  it('open accepts staff progress + owner close', () => {
-    assert.equal(canTransition('open', 'in_progress', 'support'), true);
-    assert.equal(canTransition('open', 'closed', 'owner'), true);
-    assert.equal(canTransition('open', 'closed', 'support'), false);
-    assert.equal(canTransition('open', 'open', 'owner'), true);
+describe('ticket transitions (staff-only lifecycle)', () => {
+  it('the owner can never change the status', () => {
+    assert.equal(canTransition('open', 'closed', 'owner'), false);
+    assert.equal(canTransition('open', 'resolved', 'owner'), false);
+    assert.equal(canTransition('resolved', 'open', 'owner'), false);
+    assert.equal(canTransition('waiting_user', 'in_progress', 'owner'), false);
+    assert.equal(canTransition('closed', 'open', 'owner'), false);
   });
 
-  it('waiting_admin only clears toward in_progress by admin', () => {
+  it('staff can progress, wait, resolve and close', () => {
+    assert.equal(canTransition('open', 'in_progress', 'support'), true);
+    assert.equal(canTransition('open', 'resolved', 'support'), true);
+    assert.equal(canTransition('in_progress', 'closed', 'support'), true);
+    assert.equal(canTransition('waiting_user', 'closed', 'admin'), true);
+    assert.equal(canTransition('resolved', 'closed', 'support'), true);
+  });
+
+  it('waiting_admin clears back to in_progress only by an admin', () => {
     assert.equal(canTransition('waiting_admin', 'in_progress', 'admin'), true);
     assert.equal(canTransition('waiting_admin', 'in_progress', 'support'), false);
     assert.equal(canTransition('waiting_admin', 'resolved', 'support'), true);
   });
 
-  it('resolved reopens for owner, reworks for support, closes for both', () => {
-    assert.equal(canTransition('resolved', 'open', 'owner'), true);
-    assert.equal(canTransition('resolved', 'open', 'support'), false);
+  it('resolved can be reworked by staff, reopened by admin only', () => {
     assert.equal(canTransition('resolved', 'in_progress', 'support'), true);
-    assert.equal(canTransition('resolved', 'closed', 'owner'), true);
+    assert.equal(canTransition('resolved', 'open', 'admin'), true);
+    assert.equal(canTransition('resolved', 'open', 'support'), false);
   });
 
   it('closed reopens for admin only', () => {
     assert.equal(canTransition('closed', 'open', 'admin'), true);
-    assert.equal(canTransition('closed', 'open', 'owner'), false);
+    assert.equal(canTransition('closed', 'open', 'support'), false);
     assert.equal(canTransition('closed', 'resolved', 'admin'), false);
   });
 
   it('unknown targets are rejected', () => {
     assert.equal(canTransition('open', 'archived' as never, 'admin'), false);
+  });
+
+  it('a transition to the same state is a no-op', () => {
+    assert.equal(canTransition('open', 'open', 'owner'), true);
+  });
+});
+
+describe('exclusive posting', () => {
+  const base = { status: 'in_progress' as const, assigneeId: 'staff-a', authorId: 'staff-a' };
+
+  it('the assigned specialist can post', () => {
+    assert.equal(canPost({ ...base, role: 'support' }), true);
+  });
+
+  it('another support member cannot, even while unassigned', () => {
+    assert.equal(canPost({ ...base, authorId: 'staff-b' }), false);
+    assert.equal(canPost({ ...base, assigneeId: null, authorId: 'staff-b' }), false);
+  });
+
+  it('an admin can always post', () => {
+    assert.equal(canPost({ ...base, authorId: 'admin-x', role: 'admin' }), true);
+  });
+
+  it('the owner posts while the ticket is open to conversation', () => {
+    assert.equal(canPost({ ...base, role: 'owner', authorId: 'user-x' }), true);
+    assert.equal(canPost({ ...base, role: 'owner', authorId: 'user-x', status: 'resolved' }), true);
+  });
+
+  it('nobody posts into a closed ticket', () => {
+    assert.equal(canPost({ ...base, status: 'closed', role: 'admin' }), false);
+    assert.equal(canPost({ ...base, status: 'closed', role: 'owner', authorId: 'user-x' }), false);
+  });
+});
+
+describe('priority authority', () => {
+  it('only the assignee or an admin may set it', () => {
+    assert.equal(canSetPriority({ role: 'support', isAssignee: true }), true);
+    assert.equal(canSetPriority({ role: 'support', isAssignee: false }), false);
+    assert.equal(canSetPriority({ role: 'admin', isAssignee: false }), true);
+    assert.equal(canSetPriority({ role: 'owner', isAssignee: true }), false);
+  });
+
+  it('users never pick a priority: tickets open at the default', () => {
+    assert.equal(DEFAULT_PRIORITY, 'medium');
+    assert.equal(PRIORITIES.includes(DEFAULT_PRIORITY), true);
   });
 });
 
@@ -47,7 +104,7 @@ describe('owner delete rule', () => {
     assert.equal(ownerCanDelete('open', false, false), true);
     assert.equal(ownerCanDelete('open', true, false), false);
     assert.equal(ownerCanDelete('open', false, true), false);
-    assert.equal(ownerCanDelete('resolved', false, false), false);
+    assert.equal(ownerCanDelete('closed', false, false), false);
   });
 });
 

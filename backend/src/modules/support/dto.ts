@@ -23,14 +23,6 @@ export class CreateTicketDto {
   @MaxLength(DESCRIPTION_MAX)
   description!: string;
 
-  /**
-   * Users may raise urgency but never claim "critical": that tier is staff-only
-   * and drives support ordering.
-   */
-  @IsOptional()
-  @IsIn(['low', 'medium', 'high'])
-  priority?: 'low' | 'medium' | 'high';
-
   /** public 8-digit server contact ID; resolved + ownership-checked server-side */
   @IsOptional()
   @IsString()
@@ -70,6 +62,16 @@ export class EscalateDto {
   reason!: string;
 }
 
+/**
+ * Priority is a staff decision (the assigned specialist or an admin). The
+ * service re-checks authority and records the change; this DTO only shapes
+ * the value.
+ */
+export class SetPriorityDto {
+  @IsIn(['low', 'medium', 'high', 'urgent'])
+  priority!: 'low' | 'medium' | 'high' | 'urgent';
+}
+
 export class AssignTicketDto {
   @IsString()
   @Matches(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, { message: 'Invalid assignee id' })
@@ -93,8 +95,8 @@ export class RateTicketDto {
 }
 
 export class QueueQueryDto {
-  @IsIn(['available', 'mine', 'waiting', 'escalated', 'resolved', 'all'])
-  view!: 'available' | 'mine' | 'waiting' | 'escalated' | 'resolved' | 'all';
+  @IsIn(['available', 'mine', 'team', 'waiting', 'escalated', 'resolved', 'all'])
+  view!: 'available' | 'mine' | 'team' | 'waiting' | 'escalated' | 'resolved' | 'all';
 
   @IsOptional()
   @IsIn(['open', 'in_progress', 'waiting_user', 'waiting_admin', 'resolved', 'closed'])

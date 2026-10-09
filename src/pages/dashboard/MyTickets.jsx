@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Inbox, LifeBuoy, Loader2, Plus, Server } from 'lucide-react';
+import { BellRing, Inbox, LifeBuoy, Loader2, Plus, Server } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { AvatarBadge } from '@/components/AvatarBadge.jsx';
@@ -114,7 +114,10 @@ export default function MyTickets() {
                         <li key={t.id}>
                             <Link
                                 to={`/dashboard/support/${t.id}`}
-                                className="block rounded-xl border border-hairline bg-card p-4 transition hover:border-hairline-hover sm:p-5"
+                                className={cn(
+                                    'block rounded-xl border bg-card p-4 transition hover:border-hairline-hover sm:p-5',
+                                    t.unreadCount > 0 ? 'border-white/20' : 'border-hairline',
+                                )}
                             >
                                 <div className="flex flex-wrap items-center gap-2">
                                     <span className="font-mono text-[0.72rem] text-ink-muted">{ticketNo(t.ticketNo)}</span>
@@ -122,8 +125,16 @@ export default function MyTickets() {
                                     <span className="rounded-full border border-hairline bg-veil px-2 py-0.5 text-[0.68rem] font-bold text-ink-secondary">
                                         {categoryLabel(t.category)}
                                     </span>
-                                    <span className="ml-auto font-mono text-[0.7rem] text-ink-muted">
-                                        {new Date(t.updatedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
+                                    {t.unreadCount > 0 && (
+                                        <span className="inline-flex items-center gap-1 rounded-full bg-white px-2 py-0.5 text-[0.66rem] font-extrabold text-black tabular-nums">
+                                            <BellRing className="size-3" aria-hidden="true" />
+                                            {t.unreadCount} new
+                                        </span>
+                                    )}
+                                    <span className="ml-auto text-right font-mono text-[0.7rem] text-ink-muted">
+                                        {t.lastMessage
+                                            ? `last reply ${new Date(t.lastMessage.createdAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`
+                                            : `opened ${new Date(t.createdAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`}
                                     </span>
                                 </div>
                                 <p className="mt-2 truncate text-[0.95rem] font-bold text-foreground">{t.subject}</p>

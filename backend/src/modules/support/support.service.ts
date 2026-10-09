@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { and, count, desc, eq, ilike, inArray, isNull, lte, ne, or, sql, type SQL } from 'drizzle-orm';
+import { and, count, desc, eq, ilike, inArray, isNotNull, isNull, lte, ne, or, sql, type SQL } from 'drizzle-orm';
 import { AppError, Err } from '../../common/errors';
 import type { ReqCtx } from '../../common/request-context';
 import { DB, Db } from '../../db/db.module';
@@ -19,7 +19,10 @@ import { DockerService } from '../servers/provisioning/docker.service';
 import { ProvisionerService } from '../servers/provisioning/provisioner.service';
 import { runtimeImage } from '../servers/provisioning/images';
 import {
+  DEFAULT_PRIORITY,
   MESSAGE_MAX,
+  canPost,
+  canSetPriority,
   canTransition,
   ownerCanDelete,
   ratingAllowed,
@@ -47,6 +50,12 @@ export interface Caller {
 export interface SupportEvents {
   /** clients should refetch the ticket (claim/release/assign/status/delete) */
   ticketRefresh(ticketId: string, reason: string): void;
+  /**
+   * The staff queue changed (ticket created / claimed / released / status /
+   * priority / assignment / delete). Emitted to the team room so a support
+   * dashboard refreshes WITHOUT anyone reloading the page.
+   */
+  queueChanged(reason: string, ticketId?: string): void;
   ticketMessage(ticketId: string, message: unknown): void;
   ticketRead(ticketId: string, payload: { readBy: string; upToId: string; marked: number }): void;
   notifyUser(userId: string, payload: { type: string; title: string; body: string; link: string | null; ts: number }): void;
@@ -56,6 +65,38 @@ export interface SupportEvents {
 }
 
 type TicketRow = typeof supportTickets.$inferSelect;
+
+/**
+ * "Is there anything new for this viewer?" — evaluated as correlated
+ * sub-selects in the same round trip (no N+1, and the numbers always match
+ * what the chat itself shows). `viewerId` is bound as a parameter, never
+ * interpolated.
+ */
+function countersFor(viewerId: string) {
+  return {
+    lastMessage: sql<string | null>`(
+      select m.body from ticket_messages m
+      where m.ticket_id = ${supportTickets.id}
+      order by m.created_at desc limit 1
+    )`,
+    lastMessageAt: sql<Date | null>`(
+      select m.created_at from ticket_messages m
+      where m.ticket_id = ${supportTickets.id}
+      order by m.created_at desc limit 1
+    )`,
+    lastAuthorRole: sql<string | null>`(
+      select m.author_role from ticket_messages m
+      where m.ticket_id = ${supportTickets.id}
+      order by m.created_at desc limit 1
+    )`,
+    unreadCount: sql<number>`(
+      select count(*)::int from ticket_messages m
+      where m.ticket_id = ${supportTickets.id}
+        and m.author_id <> ${viewerId}
+        and m.read_at is null
+    )`,
+  };
+}
 
 /** Serialize a ticket for its audience: owners never see staff-only fields. */
 function ticketView(r: TicketRow) {
@@ -92,6 +133,11 @@ export class SupportService {
   /** Called by SupportGateway on module init (no DI cycle). */
   attachEvents(events: SupportEvents) {
     this.events = events;
+  }
+
+  /** Tell every connected member of the support team that the queue moved. */
+  private queueChanged(reason: string, ticketId?: string) {
+    this.events?.queueChanged(reason, ticketId);
   }
 
   private onlineMap(userIds: Array<string | null | undefined>): Record<string, { online: boolean; lastSeenAt: number | null }> {
@@ -142,19 +188,17 @@ export class SupportService {
   }
 
   /**
-   * Who may open a ticket: the owner, the assignee, any admin, or support
-   * with a live stake (unassigned-open queue, escalation watch, or history).
+   * Who may OPEN a ticket (read). The support team works as one queue, so any
+   * current support member (and every admin) may look at any ticket — that is
+   * what makes the read-only "Team" view possible. WRITING is a different
+   * question, answered by `canPost`: only the owner, the current assignee and
+   * an admin may post, so visibility never turns into authority.
    */
   async requireAccess(ticketId: string, user: Caller): Promise<TicketRow> {
     const t = await this.getTicket(ticketId);
     if (t.userId === user.sub) return t;
     const role = await this.actorRole(user);
-    if (role === 'admin') return t;
-    if (role !== 'support') throw Err.forbidden('TICKET_ACCESS_DENIED');
-    if (t.assigneeId === user.sub) return t;
-    if (!t.assigneeId && t.status === 'open') return t;
-    if (t.status === 'waiting_admin') return t;
-    if (await this.staffHistory(ticketId, user.sub)) return t;
+    if (role === 'admin' || role === 'support') return t;
     throw Err.forbidden('TICKET_ACCESS_DENIED');
   }
 
@@ -177,17 +221,18 @@ export class SupportService {
 
   async createTicket(
     userId: string,
-    dto: { subject: string; category: string; description: string; priority?: string; serverContactCode?: string },
+    dto: { subject: string; category: string; description: string; serverContactCode?: string },
     ctx: ReqCtx,
   ) {
     const [u] = await this.db.select({ id: users.id, status: users.status }).from(users).where(eq(users.id, userId)).limit(1);
     if (!u || u.status !== 'active') throw Err.forbidden('ACCOUNT_INACTIVE');
+    // Priority is a staff decision. A client that still sends the field (an
+    // older build, a hand-written request) gets it ignored — never honoured.
+    if ('priority' in dto && (dto as { priority?: unknown }).priority !== undefined) {
+      void ctx;
+    }
     let serverId: string | null = null;
     if (dto.serverContactCode) serverId = await this.resolveServerByCode(dto.serverContactCode, userId);
-    const priority = dto.priority ?? 'medium';
-    if (!['low', 'medium', 'high'].includes(priority)) {
-      throw Err.invalid('PRIORITY_INVALID', 'Choose low, medium or high — critical priority is set by staff.');
-    }
     const [row] = await this.db
       .insert(supportTickets)
       .values({
@@ -195,7 +240,7 @@ export class SupportService {
         subject: dto.subject.trim(),
         category: dto.category as TicketRow['category'],
         description: dto.description.trim(),
-        priority: priority as TicketRow['priority'],
+        priority: DEFAULT_PRIORITY,
         serverId,
       })
       .returning();
@@ -209,6 +254,9 @@ export class SupportService {
       body: `${row.subject} (${row.category})`,
       link: `/admin/support/${row.id}`,
     });
+    // The staff dashboard must show the ticket WITHOUT a page reload: the
+    // queue channel is pushed to every connected support/admin socket.
+    this.queueChanged('created', row.id);
     return ticketView(row);
   }
 
@@ -217,21 +265,26 @@ export class SupportService {
     const safeLimit = Math.min(Math.max(Math.floor(limit) || 20, 1), 100);
     const conds = [eq(supportTickets.userId, userId), isNull(supportTickets.deletedAt)];
     if (status) conds.push(eq(supportTickets.status, status as TicketRow['status']));
-    const rows = await this.db.select().from(supportTickets)
-      .where(and(...conds)).orderBy(desc(supportTickets.updatedAt))
-      .limit(safeLimit).offset((safePage - 1) * safeLimit);
     const [{ n }] = await this.db.select({ n: count() }).from(supportTickets).where(and(...conds));
+    const counters = countersFor(userId);
+    const rows = await this.db
+      .select({ t: supportTickets, ...counters })
+      .from(supportTickets)
+      .where(and(...conds))
+      .orderBy(desc(supportTickets.updatedAt))
+      .limit(safeLimit)
+      .offset((safePage - 1) * safeLimit);
     const items = await Promise.all(rows.map(async (r) => {
-      const [assignee] = r.assigneeId
-        ? await this.db.select({ id: users.id, name: users.name, avatarUrl: users.avatarUrl, role: users.role }).from(users).where(eq(users.id, r.assigneeId)).limit(1)
+      const [assignee] = r.t.assigneeId
+        ? await this.db.select({ id: users.id, name: users.name, avatarUrl: users.avatarUrl, role: users.role }).from(users).where(eq(users.id, r.t.assigneeId)).limit(1)
         : [null];
-      const [last] = await this.db.select({ body: ticketMessages.body, authorRole: ticketMessages.authorRole, createdAt: ticketMessages.createdAt }).from(ticketMessages)
-        .where(eq(ticketMessages.ticketId, r.id)).orderBy(desc(ticketMessages.createdAt)).limit(1);
-      const [rating] = await this.db.select({ id: ticketRatings.id }).from(ticketRatings).where(eq(ticketRatings.ticketId, r.id)).limit(1);
+      const [rating] = await this.db.select({ id: ticketRatings.id }).from(ticketRatings).where(eq(ticketRatings.ticketId, r.t.id)).limit(1);
+      const ago = r.lastMessageAt ? new Date(r.lastMessageAt) : null;
       return {
-        ...ticketView(r),
+        ...ticketView(r.t),
         assignee: assignee ? { id: assignee.id, name: assignee.name, avatarUrl: assignee.avatarUrl, role: assignee.role } : null,
-        lastMessage: last ? { body: last.body.slice(0, 160), authorRole: last.authorRole, createdAt: last.createdAt } : null,
+        lastMessage: r.lastMessage && ago ? { body: String(r.lastMessage).slice(0, 160), authorRole: r.lastAuthorRole, createdAt: ago } : null,
+        unreadCount: Number(r.unreadCount ?? 0),
         rated: !!rating,
       };
     }));
@@ -251,12 +304,17 @@ export class SupportService {
     const safeLimit = Math.min(Math.max(Math.floor(opts.limit ?? 20) || 20, 1), 100);
     const conds = [isNull(supportTickets.deletedAt)];
     const q = (opts.search ?? '').trim();
+    let rows_team = false;
     if (view === 'available') conds.push(eq(supportTickets.status, 'open'), isNull(supportTickets.assigneeId));
     else if (view === 'mine') conds.push(eq(supportTickets.assigneeId, user.sub));
     else if (view === 'waiting') conds.push(eq(supportTickets.status, 'waiting_user'));
     else if (view === 'escalated') conds.push(eq(supportTickets.status, 'waiting_admin'));
     else if (view === 'resolved') conds.push(inArray(supportTickets.status, ['resolved', 'closed'] as TicketRow['status'][]));
-    else if (view === 'all') {
+    else if (view === 'team') {
+      // tickets some OTHER specialist currently holds: read-only visibility
+      conds.push(isNotNull(supportTickets.assigneeId), ne(supportTickets.assigneeId, user.sub));
+      rows_team = true;
+    } else if (view === 'all') {
       if (!isAdmin) throw Err.forbidden('ADMIN_REQUIRED');
     } else throw Err.invalid('QUEUE_VIEW_INVALID', 'Unknown queue view');
     if (opts.status) conds.push(eq(supportTickets.status, opts.status as TicketRow['status']));
@@ -278,28 +336,54 @@ export class SupportService {
       const d = new Date(opts.to);
       if (Number.isFinite(d.getTime())) conds.push(sql`${supportTickets.createdAt} <= ${d.toISOString()}`);
     }
-    const rows = await this.db.select().from(supportTickets)
-      .where(and(...conds)).orderBy(desc(supportTickets.updatedAt))
-      .limit(safeLimit).offset((safePage - 1) * safeLimit);
+    // one query: ticket + last message + unread count for THIS viewer
+    const rows = await this.db
+      .select({ t: supportTickets, ...countersFor(user.sub) })
+      .from(supportTickets)
+      .where(and(...conds))
+      .orderBy(desc(supportTickets.updatedAt))
+      .limit(safeLimit)
+      .offset((safePage - 1) * safeLimit);
     // non-admin staff: intersect with their accessible set (defense in depth —
     // the guards above already scope views, this drops nothing legitimate)
     let visible = rows;
     if (!isAdmin) {
       const checks = await Promise.all(rows.map(async (r) => {
-        if (r.assigneeId === user.sub) return true;
-        if (!r.assigneeId && r.status === 'open') return true;
-        if (r.status === 'waiting_admin') return true;
-        return this.staffHistory(r.id, user.sub);
+        if (r.t.assigneeId === user.sub) return true;
+        if (rows_team && r.t.assigneeId) return true; // the team view is read-only visibility
+        if (!r.t.assigneeId && r.t.status === 'open') return true;
+        if (r.t.status === 'waiting_admin') return true;
+        return this.staffHistory(r.t.id, user.sub);
       }));
       visible = rows.filter((_, i) => checks[i]);
     }
-    const enriched = await Promise.all(visible.map(async (r) => {
-      const [owner] = await this.db.select({ id: users.id, name: users.name, avatarUrl: users.avatarUrl }).from(users).where(eq(users.id, r.userId)).limit(1);
-      const [assignee] = r.assigneeId
-        ? await this.db.select({ id: users.id, name: users.name, avatarUrl: users.avatarUrl }).from(users).where(eq(users.id, r.assigneeId)).limit(1)
-        : [null];
-      return { ...ticketView(r), owner: owner ?? null, assignee: assignee ?? null };
-    }));
+    // profiles for owner + assignee in one pass, keyed by id
+    const ids = [
+      ...new Set([
+        ...visible.map((r) => r.t.userId),
+        ...visible.map((r) => r.t.assigneeId).filter(Boolean),
+      ]),
+    ] as string[];
+    const profiles = ids.length
+      ? await this.db.select({ id: users.id, name: users.name, avatarUrl: users.avatarUrl, role: users.role }).from(users).where(inArray(users.id, ids))
+      : [];
+    const byId = new Map(profiles.map((p) => [p.id, p]));
+    const presence = this.onlineMap(ids);
+    const enriched = visible.map((r) => {
+      const owner = byId.get(r.t.userId) ?? null;
+      const assignee = r.t.assigneeId ? (byId.get(r.t.assigneeId) ?? null) : null;
+      const ago = r.lastMessageAt ? new Date(r.lastMessageAt) : null;
+      return {
+        ...ticketView(r.t),
+        owner: owner ? { id: owner.id, name: owner.name, avatarUrl: owner.avatarUrl } : null,
+        assignee: assignee ? { id: assignee.id, name: assignee.name, avatarUrl: assignee.avatarUrl, role: assignee.role } : null,
+        lastMessage: r.lastMessage && ago
+          ? { body: String(r.lastMessage).slice(0, 160), authorRole: r.lastAuthorRole, createdAt: ago }
+          : null,
+        unreadCount: Number(r.unreadCount ?? 0),
+        presence: assignee ? (presence[assignee.id] ?? { online: false, lastSeenAt: null }) : null,
+      };
+    });
     const [{ n }] = await this.db.select({ n: count() }).from(supportTickets).where(and(...conds));
     return { items: enriched, page: safePage, limit: safeLimit, total: n, pages: Math.max(1, Math.ceil(n / safeLimit)) };
   }
@@ -338,6 +422,7 @@ export class SupportService {
     });
     const [t] = await this.db.select().from(supportTickets).where(eq(supportTickets.id, ticketId)).limit(1);
     this.events?.ticketRefresh(ticketId, 'claimed');
+    this.queueChanged('claimed', ticketId);
     return ticketView(t);
   }
 
@@ -358,6 +443,7 @@ export class SupportService {
       ip: ctx.ip, userAgent: ctx.device,
     });
     this.events?.ticketRefresh(ticketId, 'released');
+    this.queueChanged('released', ticketId);
     return ticketView(updated);
   }
 
@@ -387,6 +473,7 @@ export class SupportService {
       body: t.subject, link: `/dashboard/support/${ticketId}`,
     });
     this.events?.ticketRefresh(ticketId, 'assigned');
+    this.queueChanged('assigned', ticketId);
     return ticketView(updated);
   }
 
@@ -424,6 +511,52 @@ export class SupportService {
       });
     }
     this.events?.ticketRefresh(ticketId, 'status');
+    this.queueChanged('status', ticketId);
+    return ticketView(updated);
+  }
+
+  /**
+   * Priority is set by the specialist who holds the ticket (or an admin), and
+   * every change is journaled with the old/new value and the actor — so the
+   * ordering of the support queue is auditable, never silent.
+   */
+  async setPriority(ticketId: string, to: 'low' | 'medium' | 'high' | 'urgent', user: Caller, ctx: ReqCtx) {
+    const t = await this.requireAccess(ticketId, user);
+    const role = await this.actorRole(user);
+    const asRole = role === 'admin' ? 'admin' : t.userId === user.sub ? 'owner' : 'support';
+    if (!canSetPriority({ role: asRole, isAssignee: t.assigneeId === user.sub })) {
+      throw new AppError(
+        'PRIORITY_FORBIDDEN',
+        403,
+        asRole === 'support'
+          ? 'Only the specialist holding this ticket (or an admin) can set its priority.'
+          : 'Priority is set by the support team.',
+      );
+    }
+    if (t.priority === to) return ticketView(t);
+    const [updated] = await this.db
+      .update(supportTickets)
+      .set({ priority: to, updatedAt: new Date() })
+      .where(eq(supportTickets.id, ticketId))
+      .returning();
+    await this.db.insert(ticketAssignmentLog).values({
+      ticketId, actorId: user.sub, action: 'priority_change',
+      fromStatus: t.priority, toStatus: to, reason: 'priority updated',
+    });
+    await this.audit.record({
+      actorId: user.sub, action: 'support.ticket.priority', targetType: 'support_ticket', targetId: ticketId,
+      ip: ctx.ip, userAgent: ctx.device, meta: { from: t.priority, to },
+    });
+    if (t.userId !== user.sub) {
+      await this.notify([t.userId], {
+        type: 'ticket_priority',
+        title: `Ticket #${String(t.ticketNo).padStart(6, '0')} priority: ${to}`,
+        body: t.subject,
+        link: `/dashboard/support/${ticketId}`,
+      });
+    }
+    this.events?.ticketRefresh(ticketId, 'priority');
+    this.queueChanged('priority', ticketId);
     return ticketView(updated);
   }
 
@@ -461,6 +594,7 @@ export class SupportService {
     await this.db.update(supportTickets).set({ deletedAt: new Date(), updatedAt: new Date() }).where(eq(supportTickets.id, ticketId));
     await this.db.insert(ticketAssignmentLog).values({ ticketId, actorId: user.sub, action: 'delete' });
     this.events?.ticketRefresh(ticketId, 'deleted');
+    this.queueChanged('deleted', ticketId);
     await this.audit.record({
       actorId: user.sub, action: 'support.ticket.delete', targetType: 'support_ticket', targetId: ticketId,
       ip: ctx.ip, userAgent: ctx.device, meta: { ticketNo: t.ticketNo },
@@ -515,6 +649,7 @@ export class SupportService {
       link: `/admin/support/${ticketId}`,
     });
     this.events?.ticketRefresh(ticketId, 'escalated');
+    this.queueChanged('escalated', ticketId);
     return { escalation: esc, deduped: false as const };
   }
 
@@ -589,13 +724,23 @@ export class SupportService {
     if (t.status === 'closed') throw Err.invalid('TICKET_CLOSED', 'This ticket is closed.');
     const text = body?.trim() ?? '';
     if (!text || text.length > MESSAGE_MAX) throw Err.invalid('MESSAGE_INVALID', `Message must be 1–${MESSAGE_MAX} characters.`);
-    // Sender must be a participant: owner, assignee, or admin. A support
-    // member may answer a ticket that is still available (nobody holds it);
-    // once somebody claimed it, only they (or an admin) may reply, so two
-    // specialists cannot answer the same ticket at once.
+    // Exclusive write access (canPost in support-policy): the owner always,
+    // an admin always, and a support member ONLY while they are the current
+    // assignee. Holding the Support role alone grants read access, never the
+    // right to answer somebody else's ticket.
+    // (a closed ticket has already been rejected above, so a failure here is
+    // always an authority problem)
     const asRole = await this.roleOf(t, author);
-    if (asRole === 'support' && t.assigneeId && t.assigneeId !== author.sub) {
-      throw new AppError('NOT_ASSIGNEE', 403, 'Another specialist holds this ticket. Ask them, or an admin, to reassign it.');
+    if (!canPost({ role: asRole, status: t.status, assigneeId: t.assigneeId, authorId: author.sub })) {
+      throw new AppError(
+        'NOT_ASSIGNEE',
+        403,
+        asRole === 'support' && t.assigneeId
+          ? 'Another specialist holds this ticket. They (or an admin) can reassign it to you.'
+          : asRole === 'support'
+            ? 'Claim this ticket before replying, so only one specialist answers the customer.'
+            : 'You cannot post in this ticket.',
+      );
     }
     if (clientMsgId && !/^[A-Za-z0-9_-]{8,64}$/.test(clientMsgId)) {
       throw Err.invalid('IDEMPOTENCY_KEY_INVALID', 'Bad idempotency key.');
@@ -626,8 +771,8 @@ export class SupportService {
     await this.db.update(supportTickets).set({ updatedAt: new Date() }).where(eq(supportTickets.id, ticketId));
     // auto-transitions on replies (documented): owner answers a wait,
     // admin joins an escalation.
-    if (asRole === 'owner' && t.status === 'waiting_user') {
-      await this.setStatusInternal(ticketId, 'waiting_user', 'in_progress', author.sub, ctx);
+    if (asRole === 'owner' && (t.status === 'waiting_user' || t.status === 'resolved')) {
+      await this.setStatusInternal(ticketId, t.status, 'in_progress', author.sub, ctx);
     } else if (asRole === 'admin' && t.status === 'waiting_admin') {
       await this.setStatusInternal(ticketId, 'waiting_admin', 'in_progress', author.sub, ctx);
       await this.db.update(ticketEscalations)

@@ -19,7 +19,7 @@ import { CurrentUser } from '../auth/current-user';
 import { ctxOf } from '../../common/request-context';
 import { SupportService } from './support.service';
 import { SupportGuard } from './support.guard';
-import { AssignTicketDto, EscalateDto, QueueQueryDto, UpdateSubjectDto } from './dto';
+import { AssignTicketDto, EscalateDto, QueueQueryDto, SetPriorityDto, UpdateSubjectDto } from './dto';
 
 const UUID = new ParseUUIDPipe({ version: '4' });
 
@@ -69,6 +69,21 @@ export class QueueController {
     @Req() req: { ip?: string; headers: Record<string, unknown> },
   ) {
     return this.support.updateSubject(id, dto.subject, u, ctxOf(req));
+  }
+
+  /**
+   * Set the ticket priority. Only the current assignee (or an admin) passes:
+   * the service re-checks authority against the database, never the claim.
+   */
+  @Patch('tickets/:id/priority')
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  setPriority(
+    @Param('id', UUID) id: string,
+    @Body() dto: SetPriorityDto,
+    @CurrentUser() u: ReqUser,
+    @Req() req: { ip?: string; headers: Record<string, unknown> },
+  ) {
+    return this.support.setPriority(id, dto.priority, u, ctxOf(req));
   }
 
   /**

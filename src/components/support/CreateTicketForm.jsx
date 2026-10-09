@@ -17,11 +17,6 @@ const CATEGORIES = [
     { value: 'other', label: 'Other' },
 ];
 
-const PRIORITIES = [
-    { value: 'low', label: 'Low — general question' },
-    { value: 'medium', label: 'Medium — degraded but usable' },
-    { value: 'high', label: 'High — service down' },
-];
 
 /**
  * Ticket composer. The linked server is resolved from the owner's own list
@@ -37,7 +32,6 @@ export function CreateTicketForm({ onDone, onCancel }) {
         subject: '',
         category: 'technical',
         description: '',
-        priority: 'medium',
         serverId: '',
         manualCode: '',
     });
@@ -70,7 +64,6 @@ export function CreateTicketForm({ onDone, onCancel }) {
             subject: form.subject.trim(),
             category: form.category,
             description: form.description.trim(),
-            priority: form.priority,
         };
         if (picked?.contactCode) body.serverContactCode = picked.contactCode;
         else if (form.manualCode.trim()) body.serverContactCode = form.manualCode.trim();
@@ -102,7 +95,7 @@ export function CreateTicketForm({ onDone, onCancel }) {
                 {touched && subjectError && <p id="t-subject-err" className="text-[0.74rem] text-red-300">{subjectError}</p>}
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-4">
                 <div className="flex flex-col gap-1.5">
                     <label htmlFor="t-category" className="text-[0.78rem] font-bold text-ink-secondary">Category</label>
                     <select
@@ -115,20 +108,6 @@ export function CreateTicketForm({ onDone, onCancel }) {
                             <option key={c.value} value={c.value}>{c.label}</option>
                         ))}
                     </select>
-                </div>
-                <div className="flex flex-col gap-1.5">
-                    <label htmlFor="t-priority" className="text-[0.78rem] font-bold text-ink-secondary">Priority</label>
-                    <select
-                        id="t-priority"
-                        value={form.priority}
-                        onChange={(e) => setForm({ ...form, priority: e.target.value })}
-                        className="input-field"
-                    >
-                        {PRIORITIES.map((p) => (
-                            <option key={p.value} value={p.value}>{p.label}</option>
-                        ))}
-                    </select>
-                    <p className="text-[0.7rem] text-ink-muted">Critical priority is set by the support team, not by the requester.</p>
                 </div>
             </div>
 

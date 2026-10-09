@@ -31,6 +31,8 @@ interface Presence {
 const TICKET_ROOM = (id: string) => `ticket:${id}`;
 const USER_ROOM = (id: string) => `user:${id}`;
 const ADMIN_ROOM = 'admin:notifications';
+/** every support member and admin is in this room: queue changes go here */
+const TEAM_ROOM = 'support:team';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** per-socket send budgets (sliding window) */
@@ -113,6 +115,9 @@ export class SupportGateway implements OnGatewayConnection, OnGatewayDisconnect,
       client.role = actor.role;
       void client.join(USER_ROOM(actor.id));
       if (actor.role === 'admin') void client.join(ADMIN_ROOM);
+      // support + admin sockets follow the shared queue, so a new ticket or a
+      // status change shows up in every open support dashboard instantly.
+      if (actor.role === 'support' || actor.role === 'admin') void client.join(TEAM_ROOM);
       this.touch(actor.id);
       this.markLive(actor.id, client.id);
       client.emit('connected', { userId: actor.id, role: actor.role });
@@ -388,6 +393,11 @@ export class SupportGateway implements OnGatewayConnection, OnGatewayDisconnect,
   /** Emitted for any change clients should refetch (claim/release/assign/status/delete). */
   ticketRefresh(ticketId: string, reason: string) {
     this.server.to(TICKET_ROOM(ticketId)).emit('ticket:refresh', { ticketId, reason, at: Date.now() });
+  }
+
+  /** The staff queue changed: every connected dashboard refetches its list. */
+  queueChanged(reason: string, ticketId?: string) {
+    this.server.to(TEAM_ROOM).emit('queue:changed', { reason, ticketId: ticketId ?? null, at: Date.now() });
   }
 
   ticketMessage(ticketId: string, message: unknown) {
