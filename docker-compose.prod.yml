@@ -52,6 +52,13 @@ services:
       # and intentionally unset here — do not re-add it).
       - FRONTEND_URLS=https://${DOMAIN},https://www.${DOMAIN}
       - LOG_LEVEL=log
+      # Email (Resend). Empty = disabled (same as before); set via .env.prod
+      # (auto-exported by deploy.sh's `set -a`) — never commit real values.
+      - RESEND_API_KEY=${RESEND_API_KEY:-}
+      - RESEND_FROM_EMAIL=${RESEND_FROM_EMAIL:-}
+      - RESEND_FROM_NAME=${RESEND_FROM_NAME:-Troxe}
+      - RESEND_WEBHOOK_SECRET=${RESEND_WEBHOOK_SECRET:-}
+      - APP_URL=${APP_URL:-}
       # Caddy always sets X-Forwarded-For: trust it so rate limits and
       # audit IPs see real clients (never enable without a proxy in front).
       - TRUST_PROXY=true
