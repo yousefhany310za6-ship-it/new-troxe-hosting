@@ -55,9 +55,9 @@ import { languageFor } from './CodeEditor.jsx';
 
 // Modern controls: soft pills, normal-case labels.
 const btnSecondary =
-    'inline-flex min-h-10 items-center gap-1.5 rounded-full border border-hairline bg-white/[0.06] px-4 py-2 text-[0.8rem] font-semibold text-ink-secondary transition hover:border-hairline-hover hover:bg-white/[0.1] hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40';
+    'inline-flex min-h-10 items-center gap-1.5 rounded-xl border border-hairline bg-white/[0.06] px-4 py-2 text-[0.8rem] font-semibold text-ink-secondary transition hover:border-hairline-hover hover:bg-white/[0.1] hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40';
 const btnPrimary =
-    'inline-flex min-h-10 items-center gap-1.5 rounded-full bg-white px-4 py-2 text-[0.8rem] font-bold text-black transition hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-50';
+    'inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-white px-4 py-2 text-[0.8rem] font-bold text-black shadow-[0_10px_36px_-12px_rgba(255,255,255,0.5)] transition hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none';
 const btnIcon =
     'inline-flex min-h-9 min-w-9 items-center justify-center rounded-xl p-2 text-ink-secondary transition hover:bg-white/10 hover:text-foreground hover:shadow disabled:opacity-40';
 const inputClass =
@@ -253,7 +253,7 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
     const [previewUrl, setPreviewUrl] = useState(null);
     const [previewLoading, setPreviewLoading] = useState(false);
     const [previewError, setPreviewError] = useState('');
-    const [wrap, setWrap] = useState(false);
+    const [wrap, setWrap] = useState(() => (typeof window !== 'undefined' && window.innerWidth < 640));
     const [fullscreen, setFullscreen] = useState(false);
     const editorRef = useRef(null);
 
@@ -682,12 +682,12 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
         const lang = languageFor(editing.split('/').pop());
         return (
             <div className={fullscreen ? 'fixed inset-0 z-[70] flex flex-col bg-[#0a0a0d]' : 'flex min-h-[70vh] flex-col overflow-hidden rounded-2xl border border-hairline bg-[#0a0a0d]'}>
-                <div className="flex items-center gap-2 border-b border-hairline bg-card px-3 py-2.5 sm:px-4">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-2 border-b border-hairline bg-card px-3 py-2.5 sm:px-4">
                     <button type="button" onClick={closeEditor} aria-label="Back to files" title="Back to files" className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg text-ink-secondary transition hover:bg-white/10 hover:text-foreground">
                         <ArrowLeft size={17} />
                     </button>
                     {icon ? <img src={icon} alt="" aria-hidden="true" className="size-5 shrink-0" draggable={false} /> : null}
-                    <div className="min-w-0 flex-1 leading-tight">
+                    <div className="min-w-0 flex-1 basis-40 leading-tight">
                         <p className="truncate font-mono text-[0.85rem] font-semibold">{editing.split('/').pop()}</p>
                         <p className="truncate font-mono text-[0.68rem] text-ink-muted">{editing}</p>
                     </div>
@@ -697,7 +697,7 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
                         </span>
                     )}
                     {dirty
-                        ? <span className="shrink-0 rounded-full bg-amber-500/15 px-2.5 py-0.5 text-[0.68rem] font-bold uppercase tracking-wide text-amber-400">unsaved</span>
+                        ? <span className="flex shrink-0 items-center gap-1.5 rounded-full bg-amber-500/15 px-2.5 py-0.5 text-[0.68rem] font-bold uppercase tracking-wide text-amber-400"><span className="size-1.5 animate-pulse rounded-full bg-amber-400" />unsaved</span>
                         : <span className="hidden shrink-0 items-center gap-1 text-[0.7rem] text-ink-muted sm:inline-flex"><Check size={14} /> saved</span>}
                     <div className="ml-auto flex shrink-0 items-center gap-1">
                         <button type="button" onClick={() => editorRef.current?.openSearch()} title="Find in file (Ctrl+F)" aria-label="Find in file" className={btnIcon}>
@@ -774,10 +774,11 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
             onDragLeave={() => { dragDepth.current = Math.max(0, dragDepth.current - 1); if (!dragDepth.current) setDragActive(false); }}
             onDrop={onDrop}
         >
+            <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 z-10 h-px bg-gradient-to-r from-transparent via-white/30 to-transparent" />
             {/* ============================ header ============================ */}
             <div className="flex flex-col gap-3 border-b border-hairline px-4 py-3.5 sm:px-5">
                 <div className="flex items-center gap-2">
-                    <nav aria-label="Breadcrumb" className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                    <nav aria-label="Breadcrumb" className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto rounded-xl bg-veil/40 px-2 py-1 whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                         <button type="button" onClick={() => { setDir([]); setQuery(''); }} aria-label="Root directory" className="flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1.5 font-mono text-[0.85rem] font-bold transition hover:bg-veil">
                             <Home size={15} className="text-ink-secondary" />
                             <span className="hidden sm:inline">root</span>
@@ -1008,8 +1009,8 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
                                         }}
                                         title={entry.name}
                                         className={cn(
-                                            'group relative flex flex-col rounded-2xl border p-3.5 pt-2.5 transition select-none',
-                                            checked ? 'border-blue-400/50 bg-blue-500/10' : 'border-hairline/60 bg-white/[0.02] hover:border-hairline-hover hover:bg-white/[0.05]',
+                                            'group relative flex flex-col rounded-2xl border p-3.5 pt-2.5 transition duration-200 select-none hover:-translate-y-0.5',
+                                            checked ? 'border-blue-400/50 bg-blue-500/10 shadow-[0_16px_40px_-18px_rgba(96,165,250,0.4)]' : 'border-hairline/60 bg-white/[0.02] hover:border-hairline-hover hover:bg-white/[0.05] hover:shadow-[0_16px_40px_-18px_rgba(255,255,255,0.2)]',
                                             (isDir || selectOn) && 'cursor-pointer',
                                         )}
                                     >
@@ -1022,10 +1023,10 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
                                                 aria-label={`Select ${entry.name}`}
                                                 className={cn(
                                                     'size-4 cursor-pointer accent-white transition-opacity',
-                                                    selectOn || checked ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+                                                    selectOn || checked ? 'opacity-100' : 'opacity-0 focus-visible:opacity-100 group-hover:opacity-100 max-sm:opacity-100',
                                                 )}
                                             />
-                                            <span onClick={(e) => e.stopPropagation()} className={cn(!(selectOn || checked) && 'opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity')}>
+                                            <span onClick={(e) => e.stopPropagation()} className={cn(!(selectOn || checked) && 'opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 max-sm:opacity-100')}>
                                                 <RowMenu
                                                     label={`Actions for ${entry.name}`}
                                                     items={rowMenuItems(entry, isDir, isArch)}
@@ -1064,8 +1065,8 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
                                             if (isDir) openEntry(entry);
                                         }}
                                         className={cn(
-                                            'group flex items-center gap-3 rounded-xl border border-transparent px-2.5 py-2 transition select-none',
-                                            checked ? 'border-blue-400/50 bg-blue-500/10' : 'hover:border-hairline hover:bg-white/[0.04]',
+                                            'group flex items-center gap-3 rounded-xl border border-transparent px-2.5 py-2 transition duration-150 select-none',
+                                            checked ? 'border-blue-400/50 bg-blue-500/10' : 'hover:border-hairline hover:bg-white/[0.05]',
                                             (isDir || selectOn) && 'cursor-pointer',
                                         )}
                                     >
@@ -1077,7 +1078,7 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
                                             aria-label={`Select ${entry.name}`}
                                             className={cn(
                                                 'size-[18px] shrink-0 cursor-pointer accent-white transition-opacity',
-                                                selectOn || checked ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+                                                selectOn || checked ? 'opacity-100' : 'opacity-0 focus-visible:opacity-100 group-hover:opacity-100 max-sm:opacity-100',
                                             )}
                                         />
                                         <button
@@ -1108,7 +1109,7 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
                                                 <Eye size={15} />
                                             </button>
                                         )}
-                                        <span onClick={(e) => e.stopPropagation()} className={cn('shrink-0', !(selectOn || checked) && 'opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity')}>
+                                        <span onClick={(e) => e.stopPropagation()} className={cn('shrink-0', !(selectOn || checked) && 'opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 max-sm:opacity-100')}>
                                             <RowMenu
                                                 label={`Actions for ${entry.name}`}
                                                 items={rowMenuItems(entry, isDir, isArch)}
@@ -1229,10 +1230,12 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
 
             {/* ============================ drop overlay ============================ */}
             {!readOnly && dragActive && (
-                <div className="pointer-events-none absolute inset-0 z-30 flex flex-col items-center justify-center gap-2 bg-black/70 backdrop-blur-sm">
-                    <Upload size={30} className="text-white" />
-                    <p className="text-[0.95rem] font-bold">Drop to upload</p>
-                    <p className="font-mono text-[0.75rem] text-ink-secondary">into {dirPath || '/ (root)'}</p>
+                <div className="pointer-events-none absolute inset-0 z-30 bg-black/70 backdrop-blur-sm">
+                    <div className="absolute inset-3 flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-white/30">
+                        <Upload size={30} className="text-white" />
+                        <p className="text-[0.95rem] font-bold">Drop to upload</p>
+                        <p className="font-mono text-[0.75rem] text-ink-secondary">into {dirPath || '/ (root)'}</p>
+                    </div>
                 </div>
             )}
 
