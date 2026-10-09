@@ -7,6 +7,7 @@ import { RequestContextInterceptor } from './common/interceptors/request-context
 import { DbModule } from './db/db.module';
 import { GeoIpModule } from './common/geoip/geoip.module';
 import { AdminModule } from './modules/admin/admin.module';
+import { AnnouncementsModule } from './modules/announcements/announcements.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { HealthModule } from './modules/health/health.module';
@@ -33,6 +34,7 @@ import { UsersModule } from './modules/users/users.module';
     HealthModule,
     NodesModule,
     AdminModule,
+    AnnouncementsModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

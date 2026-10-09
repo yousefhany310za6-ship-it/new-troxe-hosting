@@ -358,3 +358,51 @@ export function useAdminCampaignRecipients(id, params) {
     keepPreviousData: true,
   });
 }
+// ---- announcements ----
+export function useAdminAnnouncements(params) {
+  return useQuery({ queryKey: ['admin', 'announcements', params], queryFn: () => apiGet(`/admin/announcements${qs(params)}`), keepPreviousData: true });
+}
+
+export function useAdminAnnouncement(id) {
+  return useQuery({ queryKey: ['admin', 'announcements', id], queryFn: () => apiGet(`/admin/announcements/${id}`), enabled: !!id });
+}
+
+export function useAdminAnnouncementStats(id) {
+  return useQuery({ queryKey: ['admin', 'announcements', id, 'stats'], queryFn: () => apiGet(`/admin/announcements/${id}/stats`), enabled: !!id });
+}
+
+function invalidateAnnouncements(qc) {
+  qc.invalidateQueries({ queryKey: ['admin', 'announcements'] });
+}
+
+export function useAdminAnnouncementCreate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data) => apiPost('/admin/announcements', data),
+    onSuccess: () => invalidateAnnouncements(qc),
+  });
+}
+
+export function useAdminAnnouncementUpdate(id) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data) => apiPatch(`/admin/announcements/${id}`, data),
+    onSuccess: () => invalidateAnnouncements(qc),
+  });
+}
+
+export function useAdminAnnouncementAction(id) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ action, body }) => apiPost(`/admin/announcements/${id}/${action}`, body),
+    onSuccess: () => invalidateAnnouncements(qc),
+  });
+}
+
+export function useAdminAnnouncementDelete(id) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiDelete(`/admin/announcements/${id}`),
+    onSuccess: () => invalidateAnnouncements(qc),
+  });
+}

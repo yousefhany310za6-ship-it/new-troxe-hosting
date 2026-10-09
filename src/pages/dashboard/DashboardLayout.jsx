@@ -4,6 +4,7 @@ import { Activity, Bell, Crown, LayoutDashboard, LogOut, Menu, Server, Settings,
 
 import { cn } from '@/lib/utils';
 import { AvatarBadge } from '@/components/AvatarBadge.jsx';
+import { DashboardAnnouncements } from '@/components/DashboardAnnouncements.jsx';
 import { useAuth } from '@/context/AuthContext.jsx';
 
 const NAV = [
@@ -189,6 +190,7 @@ export default function DashboardLayout() {
                     </div>
                 )}
                 <main className="mx-auto w-full max-w-[1100px] p-4 sm:p-6 lg:p-8">
+                    <DashboardAnnouncements />
                     <Outlet />
                 </main>
             </div>

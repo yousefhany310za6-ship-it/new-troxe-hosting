@@ -8,6 +8,7 @@ import {
   LayoutDashboard,
   LogOut,
   Mail,
+  Megaphone,
   Menu,
   Network,
   Server,
@@ -54,7 +55,10 @@ const GROUPS = [
   },
   {
     label: 'Communication',
-    items: [{ to: '/admin/email', label: 'Email', Icon: Mail }],
+    items: [
+      { to: '/admin/email', label: 'Email', Icon: Mail },
+      { to: '/admin/announcements', label: 'Announcements', Icon: Megaphone },
+    ],
   },
   {
     label: 'Security',
@@ -72,6 +76,7 @@ const CRUMBS = [
   [/^\/admin\/nodes$/, 'Nodes'],
   [/^\/admin\/plans$/, 'Plans'],
   [/^\/admin\/email$/, 'Email'],
+  [/^\/admin\/announcements$/, 'Announcements'],
   [/^\/admin\/audit$/, 'Audit log'],
 ];
 

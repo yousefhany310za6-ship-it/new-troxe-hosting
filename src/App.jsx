@@ -49,6 +49,7 @@ const AdminNodes = lazy(() => import('./pages/admin/Nodes.jsx'));
 const AdminPlans = lazy(() => import('./pages/admin/Plans.jsx'));
 const AdminAudit = lazy(() => import('./pages/admin/Audit.jsx'));
 const AdminEmail = lazy(() => import('./pages/admin/Email.jsx'));
+const AdminAnnouncements = lazy(() => import('./pages/admin/Announcements.jsx'));
 
 // The WebGL globe (cobe) is only needed on the 404 route, so it stays out of
 // the landing page bundle.
@@ -100,6 +101,7 @@ export default function App() {
                                 <Route path="plans" element={<AdminPlans />} />
                                 <Route path="audit" element={<AdminAudit />} />
                                 <Route path="email" element={<AdminEmail />} />
+                                <Route path="announcements" element={<AdminAnnouncements />} />
                             </Route>
                         </Route>
                     </Route>

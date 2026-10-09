@@ -12,6 +12,7 @@ export const keys = {
   serverBackups: (id) => ['servers', id, 'backups'],
   authSessions: () => ['auth', 'sessions'],
   activeSessions: () => ['auth', 'active-sessions'],
+  announcements: () => ['announcements'],
 };
 
 // User
@@ -323,4 +324,28 @@ export function useActivity(page = 1) {
 
 export function useActiveSessions() {
   return useQuery({ queryKey: keys.activeSessions(), queryFn: () => apiGet('/auth/active-sessions') });
+}
+// Announcements (user-facing; server enforces visibility per policy)
+export function useAnnouncements() {
+  return useQuery({ queryKey: keys.announcements(), queryFn: () => apiGet('/announcements'), staleTime: 60_000 });
+}
+
+export function useReportAnnouncementShown() {
+  return useMutation({ mutationFn: (id) => apiPost(`/announcements/${id}/shown`) });
+}
+
+export function useAckAnnouncement() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id) => apiPost(`/announcements/${id}/ack`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.announcements() }),
+  });
+}
+
+export function useDismissAnnouncement() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id) => apiPost(`/announcements/${id}/dismiss`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.announcements() }),
+  });
 }

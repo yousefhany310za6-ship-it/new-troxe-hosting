@@ -380,6 +380,59 @@ export const mfaChallenges = pgTable('mfa_challenges', {
   index('mfa_challenges_expires_idx').on(t.expiresAt),
 ]);
 
+// ---- Announcements ------------------------------------------------------------
+export const announcementKind = pgEnum('announcement_kind', ['info', 'success', 'warning', 'critical']);
+export const announcementStatus = pgEnum('announcement_status', ['draft', 'scheduled', 'published', 'paused', 'archived']);
+export const displayPolicy = pgEnum('display_policy', ['once', 'every_visit', 'interval', 'until_ack']);
+
+export const announcements = pgTable('announcements', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  /** internal admin-only name, never sent to users */
+  name: varchar('name', { length: 100 }).notNull(),
+  title: varchar('title', { length: 140 }).notNull(),
+  /** plain text only — the client renders it as text, never HTML */
+  body: text('body').notNull(),
+  kind: announcementKind('kind').default('info').notNull(),
+  status: announcementStatus('status').default('draft').notNull(),
+  policy: displayPolicy('policy').default('once').notNull(),
+  requireAck: boolean('require_ack').default(false).notNull(),
+  /** required when policy = interval */
+  intervalHours: integer('interval_hours'),
+  audience: jsonb('audience').default({ type: 'all' }).notNull(),
+  actionLabel: varchar('action_label', { length: 40 }),
+  actionUrl: varchar('action_url', { length: 500 }),
+  eventStart: timestamp('event_start'),
+  eventEnd: timestamp('event_end'),
+  publishAt: timestamp('publish_at'),
+  expiresAt: timestamp('expires_at'),
+  contentVersion: integer('content_version').default(1).notNull(),
+  createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+  publishedAt: timestamp('published_at'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (t) => [
+  index('announcements_status_idx').on(t.status),
+  index('announcements_publish_idx').on(t.publishAt),
+]);
+
+export const announcementInteractions = pgTable('announcement_interactions', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  announcementId: uuid('announcement_id').notNull().references(() => announcements.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  version: integer('version').notNull(),
+  lastShownAt: timestamp('last_shown_at'),
+  showCount: integer('show_count').default(0).notNull(),
+  ackedAt: timestamp('acked_at'),
+  dismissedAt: timestamp('dismissed_at'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (t) => [
+  // one row per (announcement, user, version): concurrent upserts converge
+  uniqueIndex('announcement_ix_unique').on(t.announcementId, t.userId, t.version),
+  index('announcement_ix_user_idx').on(t.userId),
+  index('announcement_ix_ann_idx').on(t.announcementId),
+]);
+
 // ---- Types ------------------------------------------------------------------
 export type EnvVar = { k: string; v: string };
 export type User = typeof users.$inferSelect;
