@@ -11,26 +11,37 @@ import { cn } from '@/lib/utils.js';
  */
 export function Modal({ open, onClose, title, description, children, footer, size = 'md', danger = false, busy = false, closeOnOverlay = true }) {
   const panelRef = useRef(null);
+  // Latest-callback refs: parents pass fresh inline closures every render, so
+  // depending on them would re-run the effect below on EVERY keystroke and
+  // yank focus out of the field being typed in (on mobile that closes the
+  // keyboard after each letter). The effect is therefore keyed on `open`
+  // only and always reads through these refs.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
 
   useEffect(() => {
     if (!open) return;
     const onKey = (e) => {
-      if (e.key === 'Escape' && !busy) onClose?.();
+      if (e.key === 'Escape' && !busyRef.current) onCloseRef.current?.();
     };
     document.addEventListener('keydown', onKey);
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-    // focus the first focusable element for keyboard users
+    // focus once, when the dialog opens: prefer the first field so keyboard
+    // users (and mobile keyboards) land where they type, not on Close.
     const t = setTimeout(() => {
-      const el = panelRef.current?.querySelector('input,button:not([disabled]),textarea,select');
-      el?.focus();
+      const root = panelRef.current;
+      const field = root?.querySelector('input:not([disabled]),textarea:not([disabled]),select:not([disabled])');
+      (field ?? root?.querySelector('button:not([disabled])'))?.focus();
     }, 30);
     return () => {
       document.removeEventListener('keydown', onKey);
       document.body.style.overflow = prev;
       clearTimeout(t);
     };
-  }, [open, busy, onClose]);
+  }, [open]);
 
   if (!open) return null;
 
