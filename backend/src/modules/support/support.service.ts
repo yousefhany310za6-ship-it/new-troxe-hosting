@@ -778,6 +778,18 @@ export class SupportService {
       ip: ctx.ip, userAgent: ctx.device, meta: { escalationId, requestedBy: esc.requestedBy },
     });
     // the specialist who called gets told an admin answered, with who/when
+    // The admin is now on the ticket: it stops waiting and returns to work.
+    const [ticketRow] = await this.db
+      .update(supportTickets)
+      .set({ status: 'in_progress', updatedAt: new Date() })
+      .where(and(eq(supportTickets.id, esc.ticketId), eq(supportTickets.status, 'waiting_admin')))
+      .returning({ id: supportTickets.id });
+    if (ticketRow) {
+      await this.db.insert(ticketAssignmentLog).values({
+        ticketId: esc.ticketId, actorId: adminId, action: 'status_change',
+        fromStatus: 'waiting_admin', toStatus: 'in_progress', reason: 'admin joined after the call',
+      });
+    }
     if (esc.requestedBy) {
       const [admin] = await this.db.select({ name: users.name }).from(users).where(eq(users.id, adminId)).limit(1);
       await this.notify([esc.requestedBy], {
