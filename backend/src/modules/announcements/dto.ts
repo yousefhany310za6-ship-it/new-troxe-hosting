@@ -3,6 +3,7 @@ import {
   ArrayUnique,
   IsArray,
   IsBoolean,
+  IsDate,
   IsIn,
   IsInt,
   IsOptional,
@@ -143,6 +144,7 @@ export class AnnouncementListQuery {
 }
 
 export class ScheduleAnnouncementDto {
+  @IsDate()
   @Type(() => Date)
   publishAt!: Date;
 }
