@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  HttpCode,
   Param,
   ParseUUIDPipe,
   Post,
@@ -31,8 +32,8 @@ export class AdminSupportController {
   constructor(private support: SupportService) {}
 
   @Get('tickets')
-  tickets(@Query() q: QueueQueryDto) {
-    return this.support.listQueue({ sub: '', role: 'admin' }, q.view ?? 'all', q);
+  tickets(@Query() q: QueueQueryDto, @CurrentUser() u: ReqUser) {
+    return this.support.listQueue(u, q.view ?? 'all', q);
   }
 
   @Get('escalations')
@@ -41,6 +42,7 @@ export class AdminSupportController {
   }
 
   @Post('escalations/:id/ack')
+  @HttpCode(200)
   ack(@Param('id', UUID) id: string, @CurrentUser() u: ReqUser, @Req() req: { ip?: string; headers: Record<string, unknown> }) {
     return this.support.ackEscalation(id, u.sub, ctxOf(req));
   }
@@ -53,6 +55,7 @@ export class AdminSupportController {
 
   /** Assign (or reassign) a ticket to a support member / admin. */
   @Post('tickets/:id/assign')
+  @HttpCode(200)
   assign(
     @Param('id', UUID) id: string,
     @Body() dto: AssignTicketDto,

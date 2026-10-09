@@ -309,12 +309,21 @@ export class SupportService {
     if ((await this.actorRole({ sub: staffId, role: staffRole })) === null) {
       throw Err.forbidden('SUPPORT_REQUIRED');
     }
-    const rows = await this.db.execute(sql`
-      UPDATE support_tickets SET assignee_id = ${staffId}, status = 'in_progress', updated_at = now()
-      WHERE id = ${ticketId} AND assignee_id IS NULL AND status = 'open' AND deleted_at IS NULL
-      RETURNING id, user_id`);
-    const won = (rows as unknown as Array<{ id: string; user_id: string }>)[0];
-    if (!won) throw Err.conflict('TICKET_TAKEN', 'Another specialist just took this ticket');
+    // Atomic by construction: one conditional UPDATE whose WHERE is the
+    // arbitration rule. Two concurrent claims produce one affected row; the
+    // loser sees zero rows and gets 409. No SELECT-then-UPDATE race window.
+    const won = await this.db
+      .update(supportTickets)
+      .set({ assigneeId: staffId, status: 'in_progress', updatedAt: new Date() })
+      .where(and(
+        eq(supportTickets.id, ticketId),
+        isNull(supportTickets.assigneeId),
+        eq(supportTickets.status, 'open'),
+        isNull(supportTickets.deletedAt),
+      ))
+      .returning({ id: supportTickets.id, userId: supportTickets.userId });
+    const [claimed] = won;
+    if (!claimed) throw Err.conflict('TICKET_TAKEN', 'Another specialist just took this ticket');
     await this.db.insert(ticketAssignmentLog).values({
       ticketId, actorId: staffId, action: 'claim', toAssignee: staffId, fromStatus: 'open', toStatus: 'in_progress',
     });
@@ -322,7 +331,7 @@ export class SupportService {
       actorId: staffId, action: 'support.ticket.claim', targetType: 'support_ticket', targetId: ticketId,
       ip: ctx.ip, userAgent: ctx.device,
     });
-    await this.notify([won.user_id], {
+    await this.notify([claimed.userId], {
       type: 'ticket_claimed', title: 'Support is on it',
       body: 'A support specialist picked up your ticket and started working on it.',
       link: `/dashboard/support/${ticketId}`,
@@ -466,7 +475,15 @@ export class SupportService {
     const role = await this.actorRole({ sub: staffId, role: staffRole });
     if (role !== 'support' && role !== 'admin') throw Err.forbidden('SUPPORT_REQUIRED');
     if (t.assigneeId !== staffId && role !== 'admin') throw Err.forbidden('NOT_ASSIGNEE');
-    if (t.status !== 'in_progress') throw Err.invalid('ESCALATE_STATE_INVALID', 'Only in-progress tickets can be escalated.');
+    if (t.status !== 'in_progress') {
+      // Re-pressing Call admin while an admin is already being called is a
+      // no-op (never a duplicate notification, never an error).
+      const [pending] = await this.db.select().from(ticketEscalations)
+        .where(and(eq(ticketEscalations.ticketId, ticketId), eq(ticketEscalations.status, 'pending')))
+        .orderBy(desc(ticketEscalations.createdAt)).limit(1);
+      if (t.status === 'waiting_admin' && pending) return { escalation: pending, deduped: true as const };
+      throw Err.invalid('ESCALATE_STATE_INVALID', 'Only in-progress tickets can be escalated.');
+    }
     let esc: typeof ticketEscalations.$inferSelect;
     try {
       [esc] = await this.db.insert(ticketEscalations)
@@ -572,10 +589,14 @@ export class SupportService {
     if (t.status === 'closed') throw Err.invalid('TICKET_CLOSED', 'This ticket is closed.');
     const text = body?.trim() ?? '';
     if (!text || text.length > MESSAGE_MAX) throw Err.invalid('MESSAGE_INVALID', `Message must be 1–${MESSAGE_MAX} characters.`);
-    // sender must be a participant: owner, assignee, or admin. Support staff
-    // who haven't claimed (or been assigned) cannot post.
+    // Sender must be a participant: owner, assignee, or admin. A support
+    // member may answer a ticket that is still available (nobody holds it);
+    // once somebody claimed it, only they (or an admin) may reply, so two
+    // specialists cannot answer the same ticket at once.
     const asRole = await this.roleOf(t, author);
-    if (asRole === 'support' && t.assigneeId !== author.sub) throw Err.forbidden('NOT_ASSIGNEE');
+    if (asRole === 'support' && t.assigneeId && t.assigneeId !== author.sub) {
+      throw new AppError('NOT_ASSIGNEE', 403, 'Another specialist holds this ticket. Ask them, or an admin, to reassign it.');
+    }
     if (clientMsgId && !/^[A-Za-z0-9_-]{8,64}$/.test(clientMsgId)) {
       throw Err.invalid('IDEMPOTENCY_KEY_INVALID', 'Bad idempotency key.');
     }
@@ -664,13 +685,16 @@ export class SupportService {
     const [target] = await this.db.select().from(ticketMessages)
       .where(and(eq(ticketMessages.ticketId, ticketId), eq(ticketMessages.id, upToId))).limit(1);
     if (!target) throw Err.notFound('MESSAGE_NOT_FOUND');
+    // The boundary is resolved by the database (a sub-query on the target row),
+    // NOT by a JS Date: Postgres stores microseconds, Date keeps milliseconds,
+    // so a client-side comparison silently misses the boundary message itself.
     const updated = await this.db.update(ticketMessages)
       .set({ readAt: new Date(), readBy: reader.sub })
       .where(and(
         eq(ticketMessages.ticketId, ticketId),
         ne(ticketMessages.authorId, reader.sub),
-        lte(ticketMessages.createdAt, target.createdAt),
         isNull(ticketMessages.readAt),
+        lte(ticketMessages.createdAt, sql`(select created_at from ticket_messages where id = ${upToId})`),
       ))
       .returning({ id: ticketMessages.id });
     this.events?.ticketRead(ticketId, { readBy: reader.sub, upToId, marked: updated.length });
@@ -862,6 +886,7 @@ export class SupportService {
     const check = ratingAllowed({
       isOwner: true, status: t.status, staffEngaged: await this.staffEngaged(ticketId), alreadyRated: !!existing,
     });
+    if (existing) throw new AppError('RATING_EXISTS', 409, 'This ticket already has a rating.');
     if (!check.ok) throw Err.invalid('RATING_NOT_ALLOWED', check.reason ?? 'Rating not allowed.');
     const rateeId = await this.rateeFor(ticketId);
     if (!rateeId) throw Err.invalid('RATING_NOT_ALLOWED', 'No staff interaction to rate yet.');
