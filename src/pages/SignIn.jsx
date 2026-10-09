@@ -1,7 +1,7 @@
 import Navbar from '../components/Navbar.jsx';
 import Footer from '../components/Footer.jsx';
 import { SignIn1 } from '../components/ui/modern-stunning-sign-in.jsx';
-import { AntiGravityCanvas } from '../components/ui/particle-effect-for-hero.jsx';
+import TopoField from '@/components/ui/topo-field.jsx';
 import { useAuth } from '@/context/AuthContext.jsx';
 import { TwoFactorChallenge } from '@/components/TwoFactorChallenge.jsx';
 import { useState } from 'react';
@@ -43,7 +43,9 @@ export default function SignIn() {
   if (mfaChallenge) {
     return (
       <div className="relative min-h-screen overflow-hidden bg-background text-foreground">
-        <AntiGravityCanvas />
+        <div className="pointer-events-none fixed inset-0 z-0" aria-hidden="true">
+        <TopoField className="absolute inset-0" opacity={0.85} />
+      </div>
         <Navbar />
         <main className="container-page relative z-10 flex min-h-screen items-center justify-center pt-28 pb-16">
           <div className="w-full max-w-md rounded-xl border border-hairline bg-card p-8">
@@ -64,7 +66,9 @@ export default function SignIn() {
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-background text-foreground">
-      <AntiGravityCanvas />
+      <div className="pointer-events-none fixed inset-0 z-0" aria-hidden="true">
+        <TopoField className="absolute inset-0" opacity={0.85} />
+      </div>
       <Navbar />
       {/* pt accounts for the fixed navbar height */}
       <main className="container-page relative z-10 flex min-h-[calc(100vh-7rem)] items-center justify-center pt-28 pb-16">
