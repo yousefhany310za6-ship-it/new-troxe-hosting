@@ -5,6 +5,12 @@
  * from the registry (that would be remote code execution on the host's Docker
  * daemon with root-equivalent pull rights).
  *
+ * Node.js uses the Debian (glibc) slim variants, NOT alpine/musl: native npm
+ * addons (canvas, better-sqlite3, sharp, @napi-rs/*, bcrypt…) ship prebuilt
+ * glibc binaries. On musl there is no prebuild, the sandbox has no
+ * Python/make/g++ to compile one, and the install fails. Verified: canvas@3,
+ * @napi-rs/canvas and better-sqlite3 all install and load on bookworm-slim.
+ *
  * Images are pinned by DIGEST (`name@sha256:...`), never by mutable tag: a
  * republished tag (upstream rebuild, registry compromise) must not change
  * the bytes we execute — as root in helpers, as uid 1000 in sandboxes.
@@ -99,18 +105,18 @@ const PHP_STARTER = [
 export const RUNTIME_IMAGES: Record<Runtime, RuntimeImage> = {
   'Node.js': {
     runtime: 'Node.js',
-    image: 'node@sha256:bf77dc26e48ea95fca9d1aceb5acfa69d2e546b765ec2abfb502975f1a2d4def', // node:20.11-alpine
+    image: 'node@sha256:357deca6eb61149534d32faaf5e4b2e4fa3549c2be610ee1019bf340ea8c51ec', // node:20.11-bookworm-slim
     label: 'Node.js 20.11',
     versions: [
       {
         version: '20',
         label: 'Node.js 20',
-        image: 'node@sha256:bf77dc26e48ea95fca9d1aceb5acfa69d2e546b765ec2abfb502975f1a2d4def', // node:20.11-alpine
+        image: 'node@sha256:357deca6eb61149534d32faaf5e4b2e4fa3549c2be610ee1019bf340ea8c51ec', // node:20.11-bookworm-slim
       },
       {
         version: '22',
         label: 'Node.js 22',
-        image: 'node@sha256:51eff88af6dff26f59316b6e356188ffa2c422bd3c3b76f2556a2e7e89d080bd', // node:22.12-alpine
+        image: 'node@sha256:35531c52ce27b6575d69755c73e65d4468dba93a25644eed56dc12879cae9213', // node:22.12-bookworm-slim
       },
     ],
     variables: [

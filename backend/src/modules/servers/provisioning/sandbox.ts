@@ -79,10 +79,17 @@ function jsPrelude(pkgMgr: 'npm' | 'bun'): string {
   // and package.json are out of sync") and the sandbox would crash-loop.
   // `install` reconciles the lock instead, and the marker still skips it
   // entirely when nothing changed.
+  // On failure the user gets the reason, not just the node-gyp wall: this
+  // runtime ships glibc PREBUILT binaries for native addons, but it has no
+  // C/Python toolchain, so a package that must be compiled still fails.
+  const hint =
+    ` || { echo "[troxe] dependency install FAILED."; ` +
+    `echo "[troxe] native modules are used from their prebuilt binaries; this dependency has none for this Node version."; ` +
+    `echo "[troxe] check the log above for the package name, then use a newer version that ships prebuilt binaries."; exit 1; }`;
   const install =
     pkgMgr === 'npm'
-      ? `timeout ${INSTALL_TIMEOUT_SECS} npm install --no-audit --no-fund --no-update-notifier`
-      : `timeout ${INSTALL_TIMEOUT_SECS} bun install`;
+      ? `timeout ${INSTALL_TIMEOUT_SECS} npm install --no-audit --no-fund --no-update-notifier${hint}`
+      : `timeout ${INSTALL_TIMEOUT_SECS} bun install${hint}`;
   return (
     `if [ -f package.json ]; then h=$(sha256sum package.json | cut -d' ' -f1); ` +
     `if [ ! -f ".troxe-deps-$h" ]; then echo "[troxe] package.json changed, installing dependencies..." && ` +
