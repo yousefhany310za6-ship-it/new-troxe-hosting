@@ -119,8 +119,23 @@ if (warnings.length) {
 const mod = require_(outFile);
 const results = mod.run();
 
+const probes = mod.probes ?? {};
+
 let failed = 0;
 for (const r of results) {
+  // content probes assert structural facts about the markup (sections present,
+  // honest copy, no claims the product does not have) — not just "it rendered"
+  const probe = probes[r.probe];
+  if (r.ok && probe) {
+    const facts = probe(r.html);
+    const broken = Object.entries(facts).filter(([, v]) => v === false).map(([k]) => k);
+    if (broken.length) {
+      failed++;
+      console.log(`FAIL - ${r.name} content: ${broken.join(', ')}`);
+      continue;
+    }
+    console.log(`ok   - ${r.name} content (${Object.keys(facts).length} facts verified)`);
+  }
   if (r.ok) {
     console.log(`ok   - ${r.name} (${r.ms}ms, ${r.html.length} bytes)`);
   } else {
