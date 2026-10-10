@@ -49,13 +49,19 @@ export interface RuntimeVersion {
  * SAME commit that changes the pinned image above.
  */
 export const RETIRED_IMAGES: Readonly<Record<string, string>> = Object.freeze({
-  // node:20.11-alpine / node:22.12-alpine → the glibc slim variants
-  // (native npm addons only ship prebuilt glibc binaries; musl cannot build
-  // them in a sandbox with no toolchain)
+  // the original alpine images: native npm addons ship prebuilt GLIBC binaries
+  // only, and musl cannot build them in a sandbox with no toolchain
   'node@sha256:bf77dc26e48ea95fca9d1aceb5acfa69d2e546b765ec2abfb502975f1a2d4def':
-    'node@sha256:357deca6eb61149534d32faaf5e4b2e4fa3549c2be610ee1019bf340ea8c51ec',
+    'node@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0',
   'node@sha256:51eff88af6dff26f59316b6e356188ffa2c422bd3c3b76f2556a2e7e89d080bd':
-    'node@sha256:35531c52ce27b6575d69755c73e65d4468dba93a25644eed56dc12879cae9213',
+    'node@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392',
+  // the first glibc pins: better-sqlite3@13 ships a prebuilt binary for that
+  // exact Node patch which segfaults on open (on both distros), so rows move to
+  // the newer patch of the same major line
+  'node@sha256:357deca6eb61149534d32faaf5e4b2e4fa3549c2be610ee1019bf340ea8c51ec':
+    'node@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0',
+  'node@sha256:35531c52ce27b6575d69755c73e65d4468dba93a25644eed56dc12879cae9213':
+    'node@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392',
 });
 
 /** True when the digest is one this platform may run right now. */
@@ -147,18 +153,18 @@ const PHP_STARTER = [
 export const RUNTIME_IMAGES: Record<Runtime, RuntimeImage> = {
   'Node.js': {
     runtime: 'Node.js',
-    image: 'node@sha256:357deca6eb61149534d32faaf5e4b2e4fa3549c2be610ee1019bf340ea8c51ec', // node:20.11-bookworm-slim
-    label: 'Node.js 20.11',
+    image: 'node@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0', // node:20-bookworm-slim (20.20)
+    label: 'Node.js 20',
     versions: [
       {
         version: '20',
         label: 'Node.js 20',
-        image: 'node@sha256:357deca6eb61149534d32faaf5e4b2e4fa3549c2be610ee1019bf340ea8c51ec', // node:20.11-bookworm-slim
+        image: 'node@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0', // node:20-bookworm-slim (20.20)
       },
       {
         version: '22',
         label: 'Node.js 22',
-        image: 'node@sha256:35531c52ce27b6575d69755c73e65d4468dba93a25644eed56dc12879cae9213', // node:22.12-bookworm-slim
+        image: 'node@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392', // node:22-bookworm-slim (22.23)
       },
     ],
     variables: [
