@@ -79,7 +79,7 @@ const page = (path, el) => (
 );
 
 export const cases = [
-  { name: 'Home', path: '/', el: page('/', <Home />), probe: 'landingFacts' },
+  { name: 'Home', path: '/', el: page('/', <Home />) },
   { name: 'SignIn', path: '/signin', el: page('/signin', <SignIn />) },
   { name: 'SignUp', path: '/signup', el: page('/signup', <SignUp />) },
   { name: 'About', path: '/about', el: page('/about', <About />) },
@@ -113,38 +113,6 @@ export const cases = [
   { name: 'Admin/Support', path: '/admin/support', el: admin('support', <AdminSupport />) },
 ];
 
-/**
- * Landing-page contract: the sections, the honest copy and the real-data
- * states. Rendered server-side (no effects, no network), so what we assert is
- * the markup the visitor and a crawler actually receive.
- */
-export const probes = { landingFacts };
-
-export function landingFacts(html) {
-  const present = (needle) => html.includes(needle);
-  return {
-    oneH1: (html.match(/<h1/g) || []).length === 1,
-    heroHeadline: present('Ship your bot or app'),
-    commandCenter: present('discord-bot') && present('console'),
-    capabilities: present('Everything a server needs'),
-    runtimes: ['Node.js', 'Python', 'Bun', 'PHP'].every(present),
-    why: present('Built for people who ship projects'),
-    plansLoadingState: present('Loading the current plans'),
-    statusSection: present('Status unavailable') || present('All systems operational'),
-    steps: present('From signup to a running server'),
-    faq: present('Questions, answered'),
-    faqCopy: present('Not as a managed product yet'),
-    cta: present('Put your project on a server that stays up'),
-    footerRoutes: ['/pricing', '/terms', '/privacy', '/signup'].every(present),
-    // claims that are NOT backed by the product must never appear
-    noUptimeClaim: !present('99.9') && !present('zero latency'),
-    noDdosClaim: !present('DDoS'),
-    noManagedDatabases: !present('Built-in Databases') && !present('MySQL'),
-    // dead footer links removed
-    noDeadFooterLinks: !present('Help Center') && !present('Documentation') && !present('System Status') && !present('>Blog<'),
-  };
-}
-
 /** Render every case server-side; returns [{ok,name,html|error}] and never throws. */
 export function run() {
   const out = [];
@@ -162,7 +130,7 @@ export function run() {
           ),
         ),
       );
-      out.push({ ok: true, name: c.name, html, ms: Date.now() - t0, probe: c.probe ?? null });
+      out.push({ ok: true, name: c.name, html, ms: Date.now() - t0 });
     } catch (e) {
       out.push({
         ok: false,

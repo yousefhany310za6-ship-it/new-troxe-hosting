@@ -39,16 +39,6 @@
     --input: #1c1c1c;
     --ring: #ffffff;
 
-    /* --- Landing identity (marketing surfaces + the single accent) ---
-       Base is a near-black so cards can sit "above" it; the lemon accent is
-       reserved for the one action per view and for live indicators. */
-    --surface-0: #0a0a0a;
-    --surface-1: #121212;
-    --surface-2: #171717;
-    --lime: #d8ff3e;
-    --lime-strong: #c2eb22;
-    --lime-ink: #0a0a0a;
-
     /* Site-specific extras */
     --surface-hover: #0c0c0c;
     --hairline: #1c1c1c;
@@ -95,13 +85,6 @@
     --color-ink-secondary: var(--ink-secondary);
     --color-ink-muted: var(--ink-muted);
     --color-veil: var(--veil);
-
-    --color-surface-0: var(--surface-0);
-    --color-surface-1: var(--surface-1);
-    --color-surface-2: var(--surface-2);
-    --color-lime: var(--lime);
-    --color-lime-strong: var(--lime-strong);
-    --color-lime-ink: var(--lime-ink);
 
     /* Matches the original --transition on every interactive element */
     --default-transition-duration: 300ms;
@@ -187,62 +170,6 @@
 /* === Site utilities === */
 
 /* Replaces the old `.container` wrapper (max 1200px, 24px gutters) */
-/* Scroll reveal: the JS observer only toggles a class, so disabling motion
-   here keeps every section readable without any JS change. */
-.reveal {
-    opacity: 0;
-    transform: translateY(22px);
-    transition:
-        opacity 700ms cubic-bezier(0.4, 0, 0.2, 1),
-        transform 700ms cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.reveal-visible {
-    opacity: 1;
-    transform: none;
-}
-
-/* Accent used by the landing page: one clear action per view. */
-.accent-cta {
-    background: var(--lime);
-    color: var(--lime-ink);
-}
-
-.accent-cta:hover {
-    background: var(--lime-strong);
-}
-
-/* Slow, low-contrast pulse for the live status dot only. */
-.status-dot {
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--lime) 60%, transparent);
-    animation: status-pulse 2.4s ease-out infinite;
-}
-
-@keyframes status-pulse {
-    70% {
-        box-shadow: 0 0 0 7px transparent;
-    }
-    100% {
-        box-shadow: 0 0 0 0 transparent;
-    }
-}
-
-@media (prefers-reduced-motion: reduce) {
-    *,
-    *::before,
-    *::after {
-        animation-duration: 0.001ms !important;
-        animation-iteration-count: 1 !important;
-        transition-duration: 0.001ms !important;
-        scroll-behavior: auto !important;
-    }
-
-    .reveal {
-        opacity: 1;
-        transform: none;
-    }
-}
-
 @utility container-page {
     margin-inline: auto;
     max-width: 1200px;
