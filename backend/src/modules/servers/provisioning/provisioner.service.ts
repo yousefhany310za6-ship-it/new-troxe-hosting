@@ -7,7 +7,7 @@ import { nodes, servers } from '../../../db/schema';
 import { eq } from 'drizzle-orm';
 import { DockerService } from './docker.service';
 import { NetworkHardeningService } from './network-hardening.service';
-import { runtimeImage, type Runtime } from './images';
+import { resolveRuntimeImage, runtimeImage, type Runtime } from './images';
 import { starterSeed } from './starter';
 import { ownershipRepairScript } from './volume-ownership';
 import { intToIp, ipToInt } from '../../nodes/nodes.service';
@@ -196,8 +196,11 @@ export class ProvisionerService {
     }
 
     const runtime = runtimeImage(input.runtime);
-    // defense in depth: even internal callers may only use allowlisted digests
-    const image = input.image ?? runtime.image;
+    // defense in depth: even internal callers may only use allowlisted digests.
+    // A digest that was pinned before and has since been rotated is mapped to
+    // its documented successor, so existing servers keep booting after an
+    // image rotation instead of failing with IMAGE_NOT_ALLOWED.
+    const image = resolveRuntimeImage(runtime, input.image);
     if (!runtime.versions.some((v) => v.image === image)) {
       throw new AppError('IMAGE_NOT_ALLOWED', 400, 'Image is not allowlisted for this runtime');
     }

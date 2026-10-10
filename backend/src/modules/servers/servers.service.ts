@@ -832,6 +832,9 @@ export class ServersService {
       networkSubnet: result.networkSubnet || null,
       volumeName: result.volumeName || null,
       image: result.image,
+      // converge the stored version digest to the image actually used, so a
+      // rotated (retired) digest migrates once and is never looked up again
+      runtimeVersion: result.image,
       status: 'offline' as const,
       lastError: null,
       updatedAt: new Date(),

@@ -36,6 +36,48 @@ export interface RuntimeVersion {
   image: string;
 }
 
+/**
+ * Retired digests and their replacements.
+ *
+ * A server row stores the digest it was provisioned with (`runtime_version`).
+ * When a pinned image is rotated, rows still referencing the old digest must
+ * not be bricked: provisioning maps a retired digest to its successor instead
+ * of refusing with IMAGE_NOT_ALLOWED, and the row is then updated to the new
+ * digest so the mapping is a one-time migration, not a permanent shrug.
+ *
+ * Rotation runbook: add the old digest here pointing at its replacement in the
+ * SAME commit that changes the pinned image above.
+ */
+export const RETIRED_IMAGES: Readonly<Record<string, string>> = Object.freeze({
+  // node:20.11-alpine / node:22.12-alpine → the glibc slim variants
+  // (native npm addons only ship prebuilt glibc binaries; musl cannot build
+  // them in a sandbox with no toolchain)
+  'node@sha256:bf77dc26e48ea95fca9d1aceb5acfa69d2e546b765ec2abfb502975f1a2d4def':
+    'node@sha256:357deca6eb61149534d32faaf5e4b2e4fa3549c2be610ee1019bf340ea8c51ec',
+  'node@sha256:51eff88af6dff26f59316b6e356188ffa2c422bd3c3b76f2556a2e7e89d080bd':
+    'node@sha256:35531c52ce27b6575d69755c73e65d4468dba93a25644eed56dc12879cae9213',
+});
+
+/** True when the digest is one this platform may run right now. */
+export function isAllowlistedImage(runtime: RuntimeImage, image: string): boolean {
+  return runtime.versions.some((v) => v.image === image);
+}
+
+/**
+ * Resolve the image a server should be provisioned with: the requested digest
+ * when it is still allowlisted, its documented successor when it has been
+ * retired, and the runtime default as a last resort (never an error — a stale
+ * row must still boot).
+ */
+export function resolveRuntimeImage(runtime: RuntimeImage, requested: string | undefined): string {
+  if (requested && isAllowlistedImage(runtime, requested)) return requested;
+  if (requested) {
+    const successor = RETIRED_IMAGES[requested];
+    if (successor && isAllowlistedImage(runtime, successor)) return successor;
+  }
+  return runtime.image;
+}
+
 /** Egg-style startup variable (cf. Pterodactyl `variables[]`). */
 export interface EggVariable {
   /** env key, e.g. MAIN_FILE */
