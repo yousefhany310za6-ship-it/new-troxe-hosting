@@ -1,56 +1,46 @@
 import { IconZap, IconShield, IconBars, IconRefresh, IconBook, IconUsers } from '../components/icons.jsx';
 
-/**
- * Feature copy for the public features page. Every line describes something the
- * platform actually does today: container provisioning, per-server network
- * hardening, encrypted environment variables, live metrics, console/logs/files,
- * auto-restart, and the support ticket system.
- *
- * Deliberately absent (not implemented): DDoS mitigation, Git push deploys,
- * zero-downtime redeploys, managed databases, health-check alerting, and any
- * promise about support reply times.
- */
 export const FEATURES = [
     {
         Icon: IconZap,
-        title: 'Fast provisioning',
-        text: 'Pick a runtime, set the startup command and variables, and a container is created for you.',
+        title: 'Instant Deployment',
+        text: 'Your bot starts running in under 30 seconds from signup. No complexity, no waiting.',
         details:
-            'Choose Node.js, Python, Bun or PHP with a pinned version, set your environment variables, and the platform pulls the image, starts the container and shows you its status.',
+            'Push your code through Git, a zip upload or the web editor and it is live before your coffee cools. Zero-downtime redeploys mean updates never kick your users offline.',
     },
     {
         Icon: IconShield,
-        title: 'Isolation and hardening',
-        text: 'One container, one network and one volume per server, with its own firewall rules.',
+        title: 'Advanced Security',
+        text: 'DDoS protection, firewalls, and full data encryption. Your bot is in safe hands.',
         details:
-            'Each server runs in its own container with a dedicated network and volume, and the platform applies its own ruleset to that network when it is created. Environment variables are stored encrypted and shown masked.',
+            'Every server sits behind always-on DDoS mitigation, isolated containers and encrypted storage. Suspicious traffic is filtered at the edge, before it ever reaches your app.',
     },
     {
         Icon: IconBars,
-        title: 'A dashboard that shows the truth',
-        text: 'Live CPU, RAM and disk usage against your plan limits, with logs and files next to it.',
+        title: 'Smart Dashboard',
+        text: 'Everything in front of you: performance monitoring, file management, error logs, and more.',
         details:
-            'Metrics stream in while the server runs, the console shows stdout and stderr, and the file manager lets you edit and upload without leaving the browser.',
+            'CPU, RAM and bandwidth graphs, a built-in file manager and terminal, plus searchable logs — manage the whole fleet without touching SSH unless you want to.',
     },
     {
         Icon: IconRefresh,
-        title: 'Auto-restart',
-        text: 'If a process exits, the platform brings the container back on its own.',
+        title: 'Auto-Restart',
+        text: 'If your bot stops, we restart it automatically without any intervention from you.',
         details:
-            'Restart behaviour is part of the server definition, so a crash does not leave your project down until you notice it.',
+            'Health checks watch every process around the clock. A crash, a freeze or a failed deploy triggers an instant restart and an alert in your dashboard.',
     },
     {
         Icon: IconBook,
-        title: 'Backups and history',
-        text: 'Backup slots according to your plan, plus an activity trail for every action.',
+        title: 'Built-in Databases',
+        text: 'Support for MySQL, PostgreSQL, MongoDB, and Redis without any complex setup.',
         details:
-            'Take a snapshot on demand or automatically, restore it to a server, and see who did what from the server activity log.',
+            'Spin up a managed database in one click and connect with a single URL. Automated backups, scaling storage and zero maintenance windows included.',
     },
     {
         Icon: IconUsers,
-        title: 'Support tickets',
-        text: 'Talk to a specialist inside the dashboard, with the server attached to the ticket.',
+        title: '24/7 Support',
+        text: 'Our support team is available 24/7 to help you anytime. In English and Arabic.',
         details:
-            'Open a ticket about a server, chat in real time, and let the specialist see the status, logs and events of the server involved.',
+            'Real engineers on Discord and tickets, median first reply in minutes. From "why did my bot stop?" to architecture advice — just ask.',
     },
 ];

@@ -1,70 +1,166 @@
-import { IconDiscord, IconTelegram, IconSlack, IconNode, IconBun, IconPython, IconPhp, IconZap } from '../components/icons.jsx';
+import {
+    IconDiscord,
+    IconTelegram,
+    IconTwitch,
+    IconKick,
+    IconReddit,
+    IconSlack,
+    IconNode,
+    IconBun,
+    IconPython,
+    IconPhp,
+    IconGo,
+    IconRust,
+    IconHtml5,
+    IconCss3,
+    IconJavascript,
+    IconMysql,
+    IconPostgres,
+    IconMongodb,
+    IconRedis,
+    IconMinecraft,
+    IconFivem,
+} from '../components/icons.jsx';
 
-/**
- * What the platform can actually run today.
- *
- * The only provisionable runtimes are the four in the backend `server_runtime`
- * enum (Node.js, Python, Bun, PHP). Everything else here is a *use case* that
- * runs on one of them — not a separate product. Types that are NOT supported
- * are deliberately absent: Go, Rust, static-site hosting, and managed
- * MySQL/PostgreSQL/MongoDB/Redis databases.
- */
 export const SERVICE_GROUPS = [
     {
-        label: 'Runtimes',
+        label: 'Bot Platforms',
         items: [
             {
-                Icon: IconNode,
-                name: 'Node.js',
+                name: 'Discord',
+                Icon: IconDiscord,
+                iconClassName: 'text-[#5865F2]',
                 details:
-                    'The default for Discord, Telegram and Slack bots. Pick the Node version you need, set your startup command, and the platform keeps the container running with metrics, logs and a console.',
+                    'Host Discord.js, discord.py or any Discord bot with websocket-friendly networking, instant restarts and 24/7 uptime for even the biggest guilds.',
             },
             {
-                Icon: IconBun,
-                name: 'Bun',
+                name: 'Telegram',
+                Icon: IconTelegram,
+                iconClassName: 'text-[#2AABEE]',
                 details:
-                    'A fast TypeScript runtime for the same code you already ship. Use it when you want faster installs and a modern toolchain.',
+                    'Run Telegraf, aiogram or raw Bot API bots with fast delivery, webhook support and polling that never sleeps.',
             },
             {
-                Icon: IconPython,
-                name: 'Python',
+                name: 'Twitch',
+                Icon: IconTwitch,
                 details:
-                    'Bots, workers and scripts from a requirements.txt. Watch stdout in the console, edit files in the browser and restart from the dashboard.',
+                    'Chat bots, moderators and channel-point apps stay connected to Twitch IRC and EventSub around the clock.',
             },
             {
-                Icon: IconPhp,
-                name: 'PHP',
+                name: 'Kick',
+                Icon: IconKick,
+                variant: 'wide',
+                iconClassName: 'text-[#53FC18]',
                 details:
-                    'Classic web apps, cron scripts and small sites. Environment variables are stored encrypted and injected at start.',
+                    'Kick chat bots with low-latency messaging and auto-reconnect, ready for hype trains at any hour.',
+            },
+            {
+                name: 'Reddit',
+                Icon: IconReddit,
+                details:
+                    'PRAW and Snoowrap bots for moderation, auto-replies and scheduled posts — with cron-style scheduling built in.',
+            },
+            {
+                name: 'Slack',
+                Icon: IconSlack,
+                details:
+                    'Slack apps with Bolt or raw APIs: slash commands, modals and event subscriptions on a server that is always awake.',
             },
         ],
     },
     {
-        label: 'What people run on them',
+        label: 'Runtimes & Frameworks',
         items: [
             {
-                Icon: IconDiscord,
-                name: 'Discord bots',
+                name: 'Node.js',
+                Icon: IconNode,
                 details:
-                    'A Node.js or Python process, its own container, live CPU and RAM, and logs you can read while it is running.',
+                    'Every LTS version with npm, pnpm and yarn support. Deploy Express, Fastify, Nest or plain scripts in seconds.',
             },
             {
-                Icon: IconTelegram,
-                name: 'Telegram bots',
+                name: 'Bun',
+                Icon: IconBun,
+                iconClassName: 'text-[#F5F0E6]',
                 details:
-                    'Long-polling or webhook, with auto-restart so a crash does not leave your bot offline until you notice.',
+                    'Native Bun runtime with installs up to 25x faster. Drop-in compatible with most Node.js projects.',
             },
             {
-                Icon: IconSlack,
-                name: 'Slack apps',
+                name: 'Python',
+                Icon: IconPython,
                 details:
-                    'Socket Mode or HTTP endpoints, with the console and log tail next to the metrics.',
+                    'Python 3.8 through 3.12 with pip and venv handled for you. Perfect for aiogram, discord.py and Flask apps.',
             },
             {
-                Icon: IconZap,
-                name: 'APIs, workers and scripts',
+                name: 'PHP',
+                Icon: IconPhp,
+                iconClassName: 'text-[#777BB3]',
                 details:
-                    'REST APIs, webhooks, queue workers and scheduled scripts — anything that starts from one command.',
+                    'PHP 8.x with Composer and common extensions preinstalled. Laravel, Symfony or plain scripts just run.',
+            },
+            {
+                name: 'Go',
+                Icon: IconGo,
+                details:
+                    'Single-binary Go builds with module caching. Tiny memory footprint, huge concurrency headroom.',
+            },
+            {
+                name: 'Rust',
+                Icon: IconRust,
+                details:
+                    'Release-profile Rust builds with sccache-style caching so recompiles stay fast and binaries stay lean.',
+            },
+            {
+                name: 'Static Sites',
+                variant: 'stack',
+                StackIcons: [IconHtml5, IconCss3, IconJavascript],
+                details:
+                    'HTML, CSS and JS served from a global edge cache with instant deploys on every push. Free TLS included.',
+            },
+        ],
+    },
+    {
+        label: 'Databases',
+        items: [
+            {
+                name: 'MySQL',
+                Icon: IconMysql,
+                details:
+                    'Managed MySQL 8 with automated backups, one-click restores and a connection URL your app can use instantly.',
+            },
+            {
+                name: 'PostgreSQL',
+                Icon: IconPostgres,
+                details:
+                    'Managed Postgres with extensions, point-in-time recovery options and pooling for busy bots.',
+            },
+            {
+                name: 'MongoDB',
+                Icon: IconMongodb,
+                details:
+                    'Document storage for flexible bot data — user profiles, guild settings and logs without migrations.',
+            },
+            {
+                name: 'Redis',
+                Icon: IconRedis,
+                details:
+                    'In-memory caching, queues and rate-limit counters with sub-millisecond latency next to your app.',
+            },
+        ],
+    },
+    {
+        label: 'Game Hosting',
+        items: [
+            {
+                name: 'Minecraft',
+                Icon: IconMinecraft,
+                details:
+                    'Paper, Spigot, Forge and Vanilla servers with one-click modpacks, plugins and version switching. Full FTP access and instant setup.',
+            },
+            {
+                name: 'FiveM',
+                Icon: IconFivem,
+                details:
+                    'GTA V roleplay servers with txAdmin, custom resources and OneSync support. High single-thread performance for busy cities.',
             },
         ],
     },

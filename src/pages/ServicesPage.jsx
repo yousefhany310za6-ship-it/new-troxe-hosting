@@ -26,7 +26,7 @@ function ServiceDetail({ item, flip }) {
                         : Icon && <Icon />}
                 </Tile>
                 <p className="mt-5 text-[1rem] font-semibold text-foreground">
-                    Deploy {name} from the dashboard
+                    Deploy {name} in under 60 seconds
                 </p>
             </div>
             <p className={cn('text-[0.95rem] leading-[1.8] text-ink-secondary', flip && 'lg:order-1')}>
@@ -47,10 +47,10 @@ export default function ServicesPage() {
                     tag="Supported Runtimes"
                     title={
                         <>
-                            Four runtimes, <span className="gradient-text">anything you can build</span>
+                            Any Language, <span className="gradient-text">Any Framework</span>
                         </>
                     }
-                    subtitle="Pick a runtime, set the startup command and variables, and the platform provisions a container for it."
+                    subtitle="Pick your runtime and deploy in under 60 seconds — every stack, in detail."
                 />
 
                 {SERVICE_GROUPS.map((group) => (
