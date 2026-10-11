@@ -10,6 +10,7 @@ import {
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { config } from '../../config/env';
+import { ctxOfHandshake } from '../../common/request-context';
 import { WsTicketService } from '../auth/ws-ticket.service';
 import { AdminGrantService } from '../auth/admin-grant.service';
 import { eq } from 'drizzle-orm';
@@ -223,12 +224,13 @@ export class ExecGateway implements OnGatewayConnection, OnGatewayDisconnect {
       });
       shell.onEnd((code) => this.close(client, 'exit', code));
 
+      const wsCtx = ctxOfHandshake(client.handshake);
       await this.audit.record({
         actorId: userId,
         action: 'server.exec.open',
         targetType: 'server',
         targetId: serverId,
-        ip: client.handshake.address,
+        ip: wsCtx.ip,
         userAgent: 'ws-exec',
       }).catch(() => undefined);
 
@@ -344,7 +346,7 @@ export class ExecGateway implements OnGatewayConnection, OnGatewayDisconnect {
         action: 'server.exec.close',
         targetType: 'server',
         targetId: s.serverId,
-        ip: client.handshake.address,
+        ip: ctxOfHandshake(client.handshake).ip,
         userAgent: 'ws-exec',
         meta: { reason, code },
       })

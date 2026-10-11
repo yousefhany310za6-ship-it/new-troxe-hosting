@@ -747,7 +747,15 @@ export class ServersService {
       })
       .from(auditLogs)
       .leftJoin(users, eq(auditLogs.actorId, users.id))
-      .where(and(eq(auditLogs.targetType, 'server'), eq(auditLogs.targetId, id)))
+      .where(and(
+        eq(auditLogs.targetType, 'server'),
+        eq(auditLogs.targetId, id),
+        // Administrative actions (admin.* — console access, power actions,
+        // suspensions) are recorded in the internal audit log for security and
+        // compliance, and are deliberately NOT part of the owner's activity
+        // feed: an admin looking at a server is not the customer's activity.
+        sql`${auditLogs.action} not like 'admin.%'`,
+      ))
       .orderBy(desc(auditLogs.createdAt))
       .limit(safeLimit + 1)
       .offset((safePage - 1) * safeLimit);
@@ -774,7 +782,11 @@ export class ServersService {
         country: geo?.country ?? null,
         countryCode: geo?.countryCode ?? null,
         detail,
-        actor: r.actorId ? { id: r.actorId, name: r.actorName, avatarUrl: r.actorAvatar } : null,
+        actor: r.actorId
+          ? { id: r.actorId, name: r.actorName ?? 'Unknown', avatarUrl: r.actorAvatar }
+          : // no actor recorded: automated (reconciler, auto-backup) rather than
+            // "someone unknown". The UI renders this as the system actor.
+            { id: null, name: 'System', avatarUrl: null, system: true },
         createdAt: r.createdAt,
       };
     });

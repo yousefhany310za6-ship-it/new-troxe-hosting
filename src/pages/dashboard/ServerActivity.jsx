@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import {
   Activity,
   AlertTriangle,
+  Cog,
   Database,
   Globe,
   History,
@@ -133,16 +134,29 @@ export default function ServerActivity({ server, apiBase = '/servers' }) {
             {items.map((ev) => {
               const meta = actionMeta(ev.action);
               const extra = describe(ev);
+              const isSystem = !!ev.actor?.system;
               const actorName = ev.actor?.name || 'System';
               return (
                 <li key={ev.id} className="relative flex items-start gap-3 px-2 py-2.5">
-                  <AvatarBadge
-                    url={ev.actor?.avatarUrl}
-                    name={actorName}
-                    size="size-9"
-                    text="text-sm"
-                    className="relative z-10 ring-2 ring-card"
-                  />
+                  {ev.actor?.system ? (
+                    // platform action (reconciler, auto-backup): no avatar, an
+                    // explicit marker, and its own label
+                    <span
+                      className="relative z-10 flex size-9 shrink-0 items-center justify-center rounded-full border border-dashed border-hairline bg-veil"
+                      title="Recorded automatically by the platform"
+                    >
+                      <Cog className="size-4 text-ink-secondary" aria-hidden="true" />
+                      <span className="sr-only">System</span>
+                    </span>
+                  ) : (
+                    <AvatarBadge
+                      url={ev.actor?.avatarUrl}
+                      name={actorName}
+                      size="size-9"
+                      text="text-sm"
+                      className="relative z-10 ring-2 ring-card"
+                    />
+                  )}
                   <div className="min-w-0 flex-1 pt-0.5">
                     <p className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[0.86rem]">
                       <span className="truncate font-semibold">{actorName}</span>
@@ -153,7 +167,12 @@ export default function ServerActivity({ server, apiBase = '/servers' }) {
                     </p>
                     {extra && <p className="mt-0.5 truncate font-mono text-[0.72rem] text-ink-muted">{extra}</p>}
                     <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.74rem] text-ink-muted">
-                      {ev.ip ? (
+                      {isSystem ? (
+                        <span className="inline-flex items-center gap-1.5">
+                          <Cog size={12} className="shrink-0" />
+                          automated
+                        </span>
+                      ) : ev.ip ? (
                         <span className="inline-flex items-center gap-1.5">
                           <MonitorSmartphone size={12} className="shrink-0" />
                           <code className="font-mono tabular-nums" dir="ltr">{ev.ip}</code>
