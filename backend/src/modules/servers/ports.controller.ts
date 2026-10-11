@@ -5,6 +5,7 @@ import { CurrentUser } from '../auth/current-user';
 import { ctxOf } from '../../common/request-context';
 import { PortsService } from './ports.service';
 import { ServersService } from './servers.service';
+import { DockerService } from './provisioning/docker.service';
 
 const UUID = new ParseUUIDPipe({ version: '4' });
 
@@ -18,7 +19,7 @@ const UUID = new ParseUUIDPipe({ version: '4' });
 @UseGuards(JwtAuthGuard)
 @Throttle({ default: { limit: 120, ttl: 60_000 } })
 export class PortsController {
-  constructor(private ports: PortsService, private servers: ServersService) {}
+  constructor(private ports: PortsService, private servers: ServersService, private docker: DockerService) {}
 
   /** The server's published port(s) + the address to reach them on. */
   @Get(':id/ports')
@@ -50,7 +51,20 @@ export class PortsController {
     const ctx = ctxOf(req);
     const row = await this.ports.requireOwned(id, u.sub);
     const existing = await this.ports.listForServer(id);
-    if (existing.length) return { ports: existing, address: await this.ports.addressFor(id), alreadyAllocated: true as const };
+    if (existing.length) {
+      // A port can be allocated in the database but not live on the host (the
+      // container predates the allocation, and `docker restart` does not
+      // re-apply PortBindings). Reconcile rather than report a dead port.
+      const published = await this.docker.publishedPorts(row.containerId!, row.nodeId);
+      const wanted = new Set(existing.map((p) => p.port));
+      const missing = existing.some((p) => !published.includes(p.port));
+      const extra = published.filter((p) => !wanted.has(p));
+      if (missing || extra.length) {
+        const result = await this.servers.reprovision(u.sub, id, ctx);
+        return { ports: await this.ports.listForServer(id), address: await this.ports.addressFor(id), reprovisioned: true as const, status: result.status };
+      }
+      return { ports: existing, address: await this.ports.addressFor(id), alreadyAllocated: true as const };
+    }
     const { runtimeImage } = await import('./provisioning/images');
     const allocated = await this.ports.allocate({
       serverId: id,

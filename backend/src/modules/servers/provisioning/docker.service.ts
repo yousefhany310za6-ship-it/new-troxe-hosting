@@ -513,6 +513,26 @@ export class DockerService {
 
   // ---- observation ----------------------------------------------------------
 
+  /**
+   * Host ports the container ACTUALLY publishes. Read from the container
+   * config, so a caller can tell "allocated in the database" from "live on the
+   * host" and reconcile the two.
+   */
+  async publishedPorts(id: string, nodeId = 'local'): Promise<number[]> {
+    const d = await this.cx(nodeId).catch(() => null);
+    if (!d) return [];
+    try {
+      const info: any = await withTimeout(d.getContainer(id).inspect(), 10_000, 'container inspect');
+      const bindings = (info?.HostConfig?.PortBindings ?? {}) as Record<string, Array<{ HostPort?: string }>>;
+      return Object.values(bindings)
+        .flat()
+        .map((b) => Number(b?.HostPort))
+        .filter((n) => Number.isInteger(n) && n > 0);
+    } catch {
+      return [];
+    }
+  }
+
   async inspect(id: string, nodeId = 'local'): Promise<ContainerState | null> {
     const d = await this.cx(nodeId).catch(() => null);
     if (!d) return null;
