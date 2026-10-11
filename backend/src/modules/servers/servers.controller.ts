@@ -88,6 +88,18 @@ export class ServersController {
     return this.svc.lifecycle(u.sub, id, 'restart', ctxOf(req));
   }
 
+  /**
+   * Recreate the container keeping every file (applies settings that only
+   * exist at create time, such as a newly allocated published port).
+   */
+  @Post(':id/reprovision')
+  @HttpCode(202)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @UseGuards(ServerOwnerGuard)
+  reprovision(@Param('id', ParseUuidPipe) id: string, @CurrentUser() u: ReqUser, @Req() req: Request) {
+    return this.svc.reprovision(u.sub, id, ctxOf(req));
+  }
+
   /** Wipes data and provisions a clean sandbox. */
   @Post(':id/reinstall')
   @HttpCode(202)

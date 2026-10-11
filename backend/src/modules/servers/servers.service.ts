@@ -599,6 +599,53 @@ export class ServersService {
 
   // ---- lifecycle ------------------------------------------------------------
 
+  /**
+   * Recreate the container WITHOUT touching the volume, so settings that only
+   * take effect at create time (published ports) apply while the client's
+   * files stay exactly where they are.
+   */
+  async reprovision(ownerId: string, id: string, ctx: ReqCtx) {
+    const row = await this.requireOwned(ownerId, id);
+    this.assertOperable(row);
+    if (row.status === 'deleting') throw Err.conflict('SERVER_DELETING', 'Server is being deleted');
+    const release = await this.acquire(id);
+    try {
+      await this.db.update(servers).set({ status: 'restarting', lastError: null }).where(eq(servers.id, id));
+      const env = row.envEncrypted ? this.safeDecrypt(row.envEncrypted) : [];
+      const startup = applyTemplate(row.startup, resolveEggEnv(row.runtime, env));
+      // provision() reuses the existing network + volume; rollback never
+      // deletes a reused resource holding live client data
+      const result = await this.provisioner.provision({
+        id: row.id,
+        ownerId,
+        nodeId: row.nodeId,
+        runtime: row.runtime as Runtime,
+        image: row.runtimeVersion ?? undefined,
+        startup,
+        env: resolveEggEnv(row.runtime, env),
+        cpuMilli: row.cpuMilli,
+        ramMb: row.ramMb,
+        autoRestart: row.autoRestart,
+      });
+      const updated = await this.persistProvision(row.id, result, { start: true, nodeId: row.nodeId });
+      await this.event(id, ownerId, 'reprovision', { status: updated.status });
+      await this.audit.record({
+        actorId: ownerId,
+        action: 'server.reprovision',
+        targetType: 'server',
+        targetId: id,
+        ip: ctx.ip,
+        userAgent: ctx.device,
+      });
+      return { status: updated.status };
+    } catch (e) {
+      await this.setField(id, { status: 'error', lastError: String((e as Error).message).slice(0, 400) }).catch(() => undefined);
+      throw e;
+    } finally {
+      release();
+    }
+  }
+
   async lifecycle(ownerId: string, id: string, action: 'start' | 'stop' | 'restart' | 'reinstall', ctx: ReqCtx) {
     let row = await this.requireOwned(ownerId, id);
     this.assertOperable(row);

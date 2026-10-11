@@ -58,8 +58,9 @@ export class PortsController {
       containerPort: runtimeImage(row.runtime as 'Node.js').port,
       protocol: 'tcp',
     });
-    // the container must be recreated so Docker publishes the new port
-    await this.servers.lifecycle(u.sub, id, 'restart', ctx).catch(() => undefined);
+    // docker restart does NOT re-apply PortBindings: the container has to be
+    // recreated (the volume, and therefore the client's files, is untouched)
+    await this.servers.reprovision(u.sub, id, ctx);
     return { ports: await this.ports.listForServer(id), address: await this.ports.addressFor(id), allocated };
   }
 }
