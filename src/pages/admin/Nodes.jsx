@@ -22,7 +22,7 @@ import {
     timeAgo,
 } from './components.jsx';
 
-const blank = { id: '', name: '', host: '', port: '2376', subnetBase: '', ca: '', cert: '', key: '' };
+const blank = { id: '', name: '', host: '', publicHost: '', port: '2376', subnetBase: '', ca: '', cert: '', key: '' };
 
 export default function AdminNodes() {
     const toast = useToast();
@@ -34,6 +34,8 @@ export default function AdminNodes() {
     // last firewall report per node (`ok: null` = unreadable, NOT the same as drift)
     const [fw, setFw] = useState({});
     const [editTls, setEditTls] = useState(null); // node id being rotated
+    const [hostOpen, setHostOpen] = useState(null); // node id whose client host is being set
+    const [hostValue, setHostValue] = useState('');
 
     const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
@@ -43,6 +45,8 @@ export default function AdminNodes() {
             const payload = {
                 name: form.name.trim(),
                 host: form.host.trim(),
+                // the address CLIENTS connect to for published ports (optional)
+                publicHost: form.publicHost.trim() || undefined,
                 port: Number(form.port) || 2376,
                 subnetBase: form.subnetBase.trim(),
                 ca: form.ca,
@@ -155,6 +159,13 @@ export default function AdminNodes() {
                     </Field>
                     <Field label="Daemon host" htmlFor="node-host">
                         <input id="node-host" value={form.host} onChange={set('host')} placeholder="203.0.113.9" className="input-field font-mono" />
+                        <p className="mt-1 text-[0.72rem] text-ink-muted">Internal Docker API address — may be private.</p>
+                    </Field>
+                    <Field label="Client host (optional)" htmlFor="node-public-host">
+                        <input id="node-public-host" value={form.publicHost} onChange={set('publicHost')} placeholder="node.hosting.troxe.dev" className="input-field font-mono" />
+                        <p className="mt-1 text-[0.72rem] text-ink-muted">
+                            The address clients use for published ports, e.g. <code className="font-mono">node.hosting.troxe.dev:30125</code>.
+                        </p>
                     </Field>
                     <Field label="Port" htmlFor="node-port" className="sm:col-span-1">
                         <input id="node-port" value={form.port} onChange={set('port')} placeholder="2376" className="input-field font-mono" />
@@ -219,6 +230,7 @@ function NodeCard({ node, checking, fw, onCheck, onRotate }) {
                                 { key: 'drain', label: node.drained ? 'Undrain' : 'Drain', onSelect: () => toggle('drained', !node.drained, 'Drain') },
                                 { key: 'toggle', label: node.enabled ? 'Disable' : 'Enable', onSelect: () => toggle('enabled', !node.enabled, 'Node') },
                                 { key: 'tls', label: 'Rotate TLS', onSelect: onRotate },
+                                { key: 'host', label: 'Set client host', onSelect: () => { setHostValue(node.publicHost ?? ''); setHostOpen(node.id); } },
                                 { key: 'remove', label: 'Remove', danger: true, onSelect: () => setRemoveOpen(true) },
                             ] : []),
                         ]}
@@ -227,6 +239,7 @@ function NodeCard({ node, checking, fw, onCheck, onRotate }) {
             </div>
             <dl className="mt-3 grid grid-cols-1 gap-x-6 gap-y-1.5 font-mono text-[0.75rem] text-ink-muted sm:grid-cols-2">
                 <div className="flex gap-2"><dt className="w-20 shrink-0">host</dt><dd className="truncate text-ink-secondary">{node.dockerHost ? `${node.dockerHost}:${node.dockerPort}` : 'unix socket'}</dd></div>
+                <div className="flex gap-2"><dt className="w-20 shrink-0">clients</dt><dd className="truncate text-ink-secondary">{node.publicHost ?? <span className="text-ink-muted">not set — ports fall back to the global host</span>}</dd></div>
                 <div className="flex gap-2"><dt className="w-20 shrink-0">supernet</dt><dd className="truncate text-ink-secondary">{node.subnetBase ?? '— (legacy)'}</dd></div>
                 <div className="flex gap-2"><dt className="w-20 shrink-0">servers</dt><dd className="text-ink-secondary tabular-nums">{node.serverCount ?? '—'}</dd></div>
                 <div className="flex gap-2"><dt className="w-20 shrink-0">last seen</dt><dd className="text-ink-secondary">{node.lastSeenAt ? timeAgo(node.lastSeenAt) : 'never'}</dd></div>
@@ -307,6 +320,55 @@ function TlsRotateModal({ nodeId, onClose }) {
                         <textarea value={v} onChange={(e) => fn(e.target.value)} rows={3} placeholder="-----BEGIN ..." className="input-field font-mono text-[0.75rem]" />
                     </Field>
                 ))}
+            </form>
+        </Modal>
+    );
+}
+
+/** Sets the address clients use for a node's published ports. */
+function ClientHostModal({ nodeId, value, onChange, onClose }) {
+    const toast = useToast();
+    const update = useAdminUpdateNode(nodeId);
+    const [busy, setBusy] = useState(false);
+
+    const save = async (e) => {
+        e.preventDefault();
+        const host = value.trim();
+        setBusy(true);
+        try {
+            // null clears the override and falls back to the global host
+            await update.mutateAsync({ publicHost: host || null });
+            toast.success(host ? 'Client host updated.' : 'Client host cleared — using the global host.');
+            onClose();
+        } catch (err) { toast.error(err.message); } finally { setBusy(false); }
+    };
+
+    return (
+        <Modal open onClose={onClose} title={`Client host — ${nodeId}`} description="The address clients use for published ports, e.g. node.hosting.troxe.dev:30125. Leave empty to use the global host.">
+            <form onSubmit={save} className="flex flex-col gap-4">
+                <Field label="Hostname or IP" htmlFor="client-host">
+                    <input
+                        id="client-host"
+                        value={value}
+                        onChange={(e) => onChange(e.target.value)}
+                        placeholder="node.hosting.troxe.dev"
+                        className="input-field font-mono"
+                        dir="ltr"
+                        maxLength={253}
+                        autoFocus
+                    />
+                    <p className="mt-1 text-[0.72rem] text-ink-muted">
+                        No scheme, no path, no port. This is what the server Overview shows to the customer.
+                    </p>
+                </Field>
+                <div className="flex justify-end gap-2">
+                    <button type="button" onClick={onClose} className="rounded-full border border-hairline px-6 py-2.5 text-sm font-bold text-ink-secondary transition hover:text-foreground">
+                        Cancel
+                    </button>
+                    <button type="submit" disabled={busy} className="rounded-full bg-white px-6 py-2.5 text-sm font-bold text-black transition hover:bg-gray-200 disabled:opacity-50">
+                        {busy ? 'Saving…' : 'Save'}
+                    </button>
+                </div>
             </form>
         </Modal>
     );

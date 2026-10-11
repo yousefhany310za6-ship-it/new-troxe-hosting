@@ -1,4 +1,4 @@
-import { IsBoolean, IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength } from 'class-validator';
+import { IsBoolean, IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength, ValidateIf } from 'class-validator';
 import { Type } from 'class-transformer';
 
 const ID_RE = /^[a-z0-9-]{2,32}$/;
@@ -66,6 +66,17 @@ export class UpdateNodeDto {
   @Matches(HOST_RE, { message: 'host must be a hostname or IP (no scheme, path or port)' })
   @MaxLength(253)
   host?: string;
+
+  /**
+   * The address CLIENTS connect to (e.g. `node.hosting.troxe.dev`), used for
+   * published ports. Distinct from `host` (the daemon address, which may be
+   * private). Null clears it and falls back to the global setting.
+   */
+  @IsOptional()
+  @ValidateIf((o: UpdateNodeDto) => o.publicHost !== null)
+  @Matches(HOST_RE, { message: 'publicHost must be a hostname or IP (no scheme, path or port)' })
+  @MaxLength(253)
+  publicHost?: string | null;
 
   @IsOptional()
   @Type(() => Number)

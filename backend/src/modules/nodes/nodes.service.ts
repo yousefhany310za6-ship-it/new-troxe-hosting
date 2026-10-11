@@ -136,6 +136,8 @@ export class NodesService {
     if (dto.name !== undefined) patch.name = dto.name.trim();
     if (dto.host !== undefined) patch.dockerHost = dto.host.trim();
     if (dto.port !== undefined) patch.dockerPort = dto.port;
+    // null clears the override (falls back to the global port host setting)
+    if (dto.publicHost !== undefined) patch.publicHost = dto.publicHost ? dto.publicHost.trim() : null;
     if (dto.subnetBase !== undefined) {
       // live servers are firewalled by the OLD base — moving it would
       // orphan their coverage, so it is pinned while servers exist
