@@ -3,8 +3,8 @@ import { config } from '../../../config/env';
 import { AppError } from '../../../common/errors';
 import type { EnvVar } from '../../../db/schema';
 import { DB, Db } from '../../../db/db.module';
-import { nodes, servers } from '../../../db/schema';
-import { eq } from 'drizzle-orm';
+import { nodes, servers, serverPorts } from '../../../db/schema';
+import { and, eq } from 'drizzle-orm';
 import { DockerService } from './docker.service';
 import { NetworkHardeningService } from './network-hardening.service';
 import { resolveRuntimeImage, runtimeImage, type Runtime } from './images';
@@ -253,7 +253,14 @@ export class ProvisionerService {
       await this.getOrCreateVolume(input.nodeId, names.volumeName, labels).then((v) => (created.volume = v));
       await this.chownVolume(input.nodeId, names.volumeName, image, spec.starter);
 
-      // 4. the sandbox container itself (replaces any previous one)
+      // 4. the sandbox container itself (replaces any previous one).
+      // Ports are NOT chosen here: they were already allocated (atomically, in
+      // the database) by PortsService before provision ran, so this call only
+      // publishes what it was given.
+      const allocated = await this.db
+        .select({ port: serverPorts.port, protocol: serverPorts.protocol, containerPort: serverPorts.containerPort })
+        .from(serverPorts)
+        .where(and(eq(serverPorts.serverId, input.id), eq(serverPorts.state, 'allocated')));
       await this.docker.removeByName(names.containerName, input.nodeId).catch(() => undefined);
       const containerId = await this.docker.createContainer(
         buildSandboxConfig({
@@ -263,6 +270,7 @@ export class ProvisionerService {
           startup: input.startup || runtime.defaultStartup,
           env: input.env,
           cpuMilli: input.cpuMilli,
+          ports: allocated.map((p) => ({ port: p.port, protocol: p.protocol, containerPort: p.containerPort })),
           ramMb: input.ramMb,
           networkName: names.networkName,
           volumeName: names.volumeName,

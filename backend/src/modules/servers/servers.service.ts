@@ -14,6 +14,7 @@ import { DockerService, startedAtToSince } from './provisioning/docker.service';
 import { ProvisionerService, type ProvisionResult } from './provisioning/provisioner.service';
 import { RUNTIMES, runtimeImage, type Runtime, applyTemplate, labelFor, resolveEggEnv, resolveVersion } from './provisioning/images';
 import { NodesService } from '../nodes/nodes.service';
+import { PortsService } from './ports.service';
 import { CreateServerDto, UpdateServerDto } from './dto';
 import { backupDirFor, backupOwnerDir } from './backup-paths';
 import { RealtimeGateway } from '../auth/realtime.gateway';
@@ -29,6 +30,7 @@ export class ServersService {
   constructor(
     @Inject(DB) private db: Db,
     private provisioner: ProvisionerService,
+    private ports: PortsService,
     private docker: DockerService,
     private audit: AuditService,
     private realtime: RealtimeGateway,
@@ -377,6 +379,17 @@ export class ServersService {
     await this.event(row.id, ownerId, 'create', { plan: plan.id, runtime: dto.runtime, region });
 
     try {
+      // Host port first: it is allocated atomically in the database (unique on
+      // node+port among allocated rows) and provision fails when the pool runs
+      // dry — the honest outcome, since a server without a published port is a
+      // different product than the one requested.
+      const allocated = await this.ports.allocate({
+        serverId: row.id,
+        nodeId,
+        containerPort: runtimeImage(dto.runtime as Runtime).port,
+        protocol: 'tcp',
+      });
+      this.log.log(`server ${row.id}: published host port ${allocated.port}`);
       const result = await this.provisioner.provision({
         id: row.id,
         ownerId,
@@ -544,6 +557,11 @@ export class ServersService {
     const release = await this.acquire(id);
     try {
       await this.db.update(servers).set({ status: 'deleting' }).where(eq(servers.id, id)).catch(() => undefined);
+
+      // give the published port back to the pool BEFORE the row disappears
+      // (the allocations cascade with it, which would lose the port and its
+      // history together).
+      await this.ports.releaseAll(id);
 
       const errors = await this.provisioner.destroy({
         nodeId: row.nodeId,
@@ -1047,12 +1065,20 @@ export class ServersService {
       .catch(() => undefined);
   }
 
+  /** The node a server lives on (used by the port allocator for pool status). */
+  async getNodeId(id: string): Promise<string> {
+    const [row] = await this.db.select({ nodeId: servers.nodeId }).from(servers).where(eq(servers.id, id)).limit(1);
+    if (!row) throw Err.notFound('SERVER_NOT_FOUND');
+    return row.nodeId;
+  }
+
   /** Strips everything a client must never see (crypto material, docker ids). */
   private toPublic(row: Server) {
     let env: EnvVar[] = [];
+    let rawEnv: EnvVar[] = [];
     if (row.envEncrypted) {
-      const raw = this.safeDecrypt(row.envEncrypted);
-      env = maskEnv(raw);
+      rawEnv = this.safeDecrypt(row.envEncrypted);
+      env = maskEnv(rawEnv);
     }
     const port = runtimeImage(row.runtime).port;
     return {
@@ -1071,7 +1097,9 @@ export class ServersService {
       ramMb: row.ramMb,
       storageGb: row.storageGb,
       startup: row.startup,
-      mainFile: row.mainFile ?? this.mainFileFromEnv(env),
+      // legacy rows keep MAIN_FILE only in the (encrypted) env: read the
+      // decrypted value, never the masked one the UI shows.
+      mainFile: row.mainFile ?? this.mainFileFromEnv(rawEnv),
       env,
       envCount: env.length,
       port,

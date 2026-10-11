@@ -4,6 +4,8 @@ import { NodesModule } from '../nodes/nodes.module';
 import { BackupsService } from './backups.service';
 import { ExecGateway } from './exec.gateway';
 import { FilesService } from './files.service';
+import { PortsService } from './ports.service';
+import { PortsController } from './ports.controller';
 import { DockerService } from './provisioning/docker.service';
 import { NetworkHardeningService } from './provisioning/network-hardening.service';
 import { ProvisionerService } from './provisioning/provisioner.service';
@@ -15,9 +17,10 @@ import { StatsStreamService } from './stats-stream.service';
 
 @Module({
   imports: [AuthModule, NodesModule],
-  controllers: [ServersController],
+  controllers: [ServersController, PortsController],
   providers: [
     ServersService,
+    PortsService,
     BackupsService,
     FilesService,
     ExecGateway,
@@ -28,6 +31,6 @@ import { StatsStreamService } from './stats-stream.service';
     ReconcilerService,
     StatsStreamService,
   ],
-  exports: [ServersService, BackupsService, FilesService, DockerService, ProvisionerService, ReconcilerService, ExecGateway],
+  exports: [ServersService, PortsService, BackupsService, FilesService, DockerService, ProvisionerService, ReconcilerService, ExecGateway],
 })
 export class ServersModule {}

@@ -234,6 +234,12 @@ export const nodes = pgTable('nodes', {
   /** null = local unix socket (config.DOCKER_SOCKET); set = remote TCP host */
   dockerHost: varchar('docker_host', { length: 255 }),
   dockerPort: integer('docker_port'),
+  /**
+   * The address CLIENTS connect to (e.g. `node.hosting.troxe.dev`). Set by the
+   * admin; separate from dockerHost, which is the internal daemon address and
+   * may be private. Used for the connection address of published ports.
+   */
+  publicHost: varchar('public_host', { length: 255 }),
   /** AES-256-GCM encrypted JSON PEM blobs (ca/cert/key), null for local */
   tlsCa: text('tls_ca'),
   tlsCert: text('tls_cert'),
@@ -449,6 +455,34 @@ export const announcementInteractions = pgTable('announcement_interactions', {
   uniqueIndex('announcement_ix_unique').on(t.announcementId, t.userId, t.version),
   index('announcement_ix_user_idx').on(t.userId),
   index('announcement_ix_ann_idx').on(t.announcementId),
+]);
+
+// ---- Host port allocations ---------------------------------------------------
+export const portProtocol = pgEnum('port_protocol', ['tcp', 'udp']);
+export const portState = pgEnum('port_state', ['allocated', 'released']);
+
+/**
+ * One published host port per allocation. The pair (node_id, port) is unique
+ * among ALLOCATED rows only, so releasing a port hands it straight back to the
+ * pool and a concurrent allocation is resolved by the database, not by a
+ * check-then-insert race.
+ */
+export const serverPorts = pgTable('server_ports', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  serverId: uuid('server_id').notNull().references(() => servers.id, { onDelete: 'cascade' }),
+  nodeId: varchar('node_id', { length: 32 }).notNull().references(() => nodes.id, { onDelete: 'cascade' }),
+  port: integer('port').notNull(),
+  protocol: portProtocol('protocol').default('tcp').notNull(),
+  /** the port the process listens on inside the sandbox */
+  containerPort: integer('container_port').notNull(),
+  state: portState('state').default('allocated').notNull(),
+  reason: varchar('reason', { length: 120 }),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  releasedAt: timestamp('released_at'),
+}, (t) => [
+  uniqueIndex('server_ports_node_port_unique').on(t.nodeId, t.port),
+  index('server_ports_server_idx').on(t.serverId, t.state),
+  uniqueIndex('server_ports_server_proto_unique').on(t.serverId, t.protocol),
 ]);
 
 // ---- Support tickets --------------------------------------------------------

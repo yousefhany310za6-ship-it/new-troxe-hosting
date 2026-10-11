@@ -24,6 +24,8 @@ export interface SandboxSpec {
   volumeName: string;
   autoRestart: boolean;
   pidsLimit: number;
+  /** host ports already allocated by PortsService (published on the host) */
+  ports?: Array<{ port: number; protocol: string; containerPort: number }>;
 }
 
 const TROXE_LABELS = (serverId: string, ownerId: string) => ({
@@ -105,6 +107,20 @@ function pyPrelude(): string {
   );
 }
 
+/**
+ * Map the server's allocated host ports onto the container port. Only ports
+ * already claimed by PortsService may appear here — the sandbox never chooses
+ * a port itself, so two servers cannot be handed the same one.
+ */
+export function portBindings(ports: Array<{ port: number; protocol: string; containerPort: number }>): Record<string, Array<{ HostPort: string }>> {
+  const out: Record<string, Array<{ HostPort: string }>> = {};
+  for (const p of ports) {
+    const key = `${p.containerPort}/${p.protocol}`;
+    out[key] = [{ HostPort: String(p.port) }];
+  }
+  return out;
+}
+
 /** Shell prefix for the sandbox command, including the trailing `&& ` (or empty). */
 export function depsPrelude(runtime: Runtime): string {
   switch (runtime) {
@@ -144,6 +160,10 @@ export function buildSandboxConfig(spec: SandboxSpec): ContainerCreateOptions {
     Binds: [`${spec.volumeName}:/data:rw`],
     NetworkMode: spec.networkName,
     ReadonlyRootfs: true,
+    // host ports allocated for this server (PortsService); an empty map keeps
+    // the sandbox internal, exactly as before.
+    ...(spec.ports?.length ? { PortBindings: portBindings(spec.ports) } : { PortBindings: {} }),
+    PublishAllPorts: false,
     Tmpfs: {
       '/tmp': 'rw,noexec,nosuid,size=64m,mode=1777',
       '/run': 'rw,noexec,nosuid,size=16m,mode=755',
@@ -173,8 +193,8 @@ export function buildSandboxConfig(spec: SandboxSpec): ContainerCreateOptions {
       { Name: 'nproc', Soft: 256, Hard: 512 },
     ],
 
-    // --- networking: private bridge, nothing published --------------------
-    PortBindings: {},
+    // --- networking: private bridge by default; published ports are added
+    // by the caller through spec.ports (see buildSandboxConfig).
     ExtraHosts: [],
     Dns: [],
 

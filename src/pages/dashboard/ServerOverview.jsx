@@ -30,6 +30,7 @@ import {
 import { cn } from '@/lib/utils';
 import { apiGet } from '@/lib/api.js';
 import { useLiveStats } from '@/hooks/useLiveStats.js';
+import ServerPorts from '@/components/dashboard/ServerPorts.jsx';
 
 // ---- formatting -----------------------------------------------------------------
 
@@ -376,6 +377,9 @@ export default function ServerOverview({ server, status, stats, usage, backups, 
           </div>
         </div>
       </section>
+
+      {/* ---- published port / connection address ---- */}
+      <ServerPorts server={server} adminMode={adminMode} />
 
       {/* ---- support contact id ---- */}
       <section className="flex flex-wrap items-center gap-x-6 gap-y-3 rounded-2xl border border-hairline bg-card p-5">
