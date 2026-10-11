@@ -2,9 +2,13 @@
 -- Host ports assigned to sandboxes, one row per (node, port) allocation.
 -- Idempotent (guarded), so re-running the migration on a database that already
 -- has these objects is a no-op rather than an error.
-CREATE TYPE IF NOT EXISTS "public"."port_protocol" AS ENUM('tcp', 'udp');
+DO $$ BEGIN
+  CREATE TYPE "public"."port_protocol" AS ENUM('tcp', 'udp');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 --> statement-breakpoint
-CREATE TYPE IF NOT EXISTS "public"."port_state" AS ENUM('allocated', 'released');
+DO $$ BEGIN
+  CREATE TYPE "public"."port_state" AS ENUM('allocated', 'released');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 --> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "server_ports" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
