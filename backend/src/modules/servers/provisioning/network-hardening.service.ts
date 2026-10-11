@@ -66,13 +66,24 @@ export function evaluateHardeningRules(
  *
  * `DOCKER-USER` (FORWARD path — traffic leaving the sandbox towards other
  * networks / the internet):
+ *   • ALLOW traffic inside the sandbox's own subnet first (its own bridge:
+ *     the container, and the bridge gateway Docker's userland proxy forwards
+ *     published host ports through). Without this, a published port accepts
+ *     the connection and then hangs forever — the proxy's SYN to the
+ *     container matches the 172.16.0.0/12 DROP below, since the sandbox's own
+ *     /16 sits inside it. Same-subnet traffic is Docker's default anyway, and
+ *     a per-server bridge holds only that server's containers.
  *   • drop traffic to RFC1918 (LAN, other docker bridges, host gateway)
  *   • drop traffic to link-local (cloud metadata endpoints 169.254.169.254)
  *   • drop traffic to any LOCAL address of the host itself (its public IPs too)
  *
  * `INPUT` (host path — traffic *terminating on the host itself*, which never
  * traverses FORWARD/DOCKER-USER, e.g. container → 172.17.0.1:3300):
- *   • drop ALL traffic from the sandbox subnet to any host port
+ *   • allow ESTABLISHED,RELATED replies first (the userland proxy that forwards
+ *     published host ports dials the container FROM the host, so the
+ *     container's SYN-ACK answers a host-initiated connection — without this,
+ *     a published port accepts and then hangs forever)
+ *   • drop ALL other traffic from the sandbox subnet to any host port
  *
  * Egress to the public internet and Docker's embedded DNS (127.0.0.11) are
  * unaffected: the former traverses FORWARD with a non-local destination, the
@@ -178,6 +189,30 @@ export class NetworkHardeningService {
       } else this.log.warn(`host-local drop rule not installed: ${ins.err}`);
     }
 
+    // Same-subnet ACCEPT, installed LAST so -I places it FIRST: the proxy
+    // path (bridge gateway → container) and container → container traffic on
+    // this isolated bridge must pass before any of the DROPs above are read.
+    // Host-bound traffic still dies at INPUT below, so the host itself stays
+    // unreachable from the sandbox.
+    const sameSubnet = ['-s', subnet, '-d', subnet, '-m', 'comment', '--comment', comment, '-j', 'ACCEPT'];
+    const sameExists = await this.iptables(['-C', 'DOCKER-USER', ...sameSubnet]);
+    if (sameExists.ok) {
+      applied++;
+    } else {
+      const ins = await this.iptables(['-I', 'DOCKER-USER', ...sameSubnet]);
+      if (ins.ok) {
+        applied++;
+        inserted++;
+      } else if (!this.warned) this.log.warn(`could not install same-subnet accept: ${ins.err}`);
+    }
+
+    // Established replies to host-initiated connections (see above) must pass;
+    // everything else the sandbox sends at the host is dropped. Installed AFTER
+    // the DROP below so -I stacks it on top (evaluated first).
+    const inputEstablished = [
+      '-s', subnet, '-m', 'conntrack', '--ctstate', 'ESTABLISHED,RELATED',
+      '-m', 'comment', '--comment', comment, '-j', 'ACCEPT',
+    ];
     // INPUT chain: container → host traffic never reaches DOCKER-USER (it is
     // locally delivered, not forwarded), so block the whole subnet at the host.
     const inputRule = ['-s', subnet, '-m', 'comment', '--comment', comment, '-j', 'DROP'];
@@ -190,6 +225,16 @@ export class NetworkHardeningService {
         applied++;
         inserted++;
       } else if (!this.warned) this.log.warn(`could not install INPUT drop: ${ins.err}`);
+    }
+    const inputEstExists = await this.iptables(['-C', 'INPUT', ...inputEstablished]);
+    if (inputEstExists.ok) {
+      applied++;
+    } else {
+      const ins = await this.iptables(['-I', 'INPUT', ...inputEstablished]);
+      if (ins.ok) {
+        applied++;
+        inserted++;
+      } else if (!this.warned) this.log.warn(`could not install INPUT established accept: ${ins.err}`);
     }
 
     if (applied === 0 && !this.warned) {
@@ -211,7 +256,11 @@ export class NetworkHardeningService {
     await this.ensureAvailable().catch(() => false);
     const comment = this.tag(networkName);
 
-    const targets = [...this.blockedDests.map((dest) => ['-s', subnet, '-d', dest]), ['-s', subnet, '-m', 'addrtype', '--dst-type', 'LOCAL']];
+    const targets = [
+      ...this.blockedDests.map((dest) => ['-s', subnet, '-d', dest]),
+      ['-s', subnet, '-m', 'addrtype', '--dst-type', 'LOCAL'],
+    ];
+    const acceptTargets = [['-s', subnet, '-d', subnet]];
     for (const extra of targets) {
       // delete repeatedly: the rule may have been inserted more than once
       for (let i = 0; i < 5; i++) {
@@ -220,9 +269,23 @@ export class NetworkHardeningService {
         if (!del.ok) break;
       }
     }
+    for (const extra of acceptTargets) {
+      for (let i = 0; i < 5; i++) {
+        const args = ['DOCKER-USER', ...extra, '-m', 'comment', '--comment', comment, '-j', 'ACCEPT'];
+        const del = await this.iptables(['-D', ...args]);
+        if (!del.ok) break;
+      }
+    }
     // INPUT chain rules (same match, different chain)
     for (let i = 0; i < 5; i++) {
       const del = await this.iptables(['-D', 'INPUT', '-s', subnet, '-m', 'comment', '--comment', comment, '-j', 'DROP']);
+      if (!del.ok) break;
+    }
+    for (let i = 0; i < 5; i++) {
+      const del = await this.iptables([
+        '-D', 'INPUT', '-s', subnet, '-m', 'conntrack', '--ctstate', 'ESTABLISHED,RELATED',
+        '-m', 'comment', '--comment', comment, '-j', 'ACCEPT',
+      ]);
       if (!del.ok) break;
     }
     this.log.log(`removed hardening rules for ${networkName}`);
