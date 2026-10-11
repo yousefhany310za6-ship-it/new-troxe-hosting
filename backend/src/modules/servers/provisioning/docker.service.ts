@@ -1143,6 +1143,80 @@ export class DockerService {
       volumes: ((vs as any)?.Volumes ?? []).map((v: any) => ({ name: v.Name, labels: v.Labels ?? {} })),
     };
   }
+
+  /**
+   * Run ONE non-interactive command inside a container and collect its output.
+   * argv is an array handed to Docker verbatim — no shell is involved, so no
+   * caller-supplied string can reach a shell and there is nothing to
+   * interpolate into. The primitive the package manager builds on; deliberately
+   * NOT reachable by clients.
+   */
+  async runInContainer(
+    containerId: string,
+    argv: string[],
+    opts: { nodeId?: string; timeoutMs?: number; workdir?: string; env?: Record<string, string> } = {},
+  ): Promise<{ exitCode: number | null; stdout: string; stderr: string; timedOut: boolean }> {
+    const d = await this.cx(opts.nodeId ?? 'local');
+    const container = d.getContainer(containerId);
+  const timeoutMs = Math.min(Math.max(opts.timeoutMs ?? 120_000, 1_000), 900_000);
+  const exec = await container.exec({
+    Cmd: argv,
+    AttachStdout: true,
+    AttachStderr: true,
+    AttachStdin: false,
+    Tty: false,
+    WorkingDir: opts.workdir ?? '/data',
+    Env: opts.env ? Object.entries(opts.env).map(([k, v]) => `${k}=${v}`) : undefined,
+  });
+  const stream = (await exec.start({ hijack: true, stdin: false })) as unknown as {
+    on(event: 'data', cb: (d: Buffer) => void): unknown;
+    on(event: 'end' | 'close' | 'error', cb: (e?: unknown) => void): unknown;
+    destroy(): void;
+    write(d: Buffer): boolean;
+  };
+  const out: Buffer[] = [];
+  const err: Buffer[] = [];
+  let timedOut = false;
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(() => {
+      timedOut = true;
+      try { stream.destroy(); } catch { /* already gone */ }
+      resolve();
+    }, timeoutMs);
+    let buf = Buffer.alloc(0);
+    stream.on('data', (chunk: Buffer) => {
+      buf = Buffer.concat([buf, chunk]);
+      // stdout/stderr are multiplexed frame headers when Tty is false
+      for (;;) {
+        if (buf.length < 8) break;
+        const size = buf.readUInt32BE(4);
+        const type = buf[0];
+        if (buf.length < 8 + size) break;
+        const payload = buf.subarray(8, 8 + size);
+        (type === 2 ? err : out).push(Buffer.from(payload));
+        buf = buf.subarray(8 + size);
+      }
+    });
+    const done = () => { clearTimeout(timer); resolve(); };
+    stream.on('end', done);
+    stream.on('close', done);
+    stream.on('error', done);
+  });
+  let exitCode: number | null = null;
+  try {
+    const info = await exec.inspect();
+    exitCode = typeof (info as { ExitCode?: number }).ExitCode === 'number' ? (info as { ExitCode: number }).ExitCode : null;
+  } catch {
+    /* daemon gone */
+  }
+  return {
+    exitCode,
+    stdout: Buffer.concat(out).toString('utf8'),
+    stderr: Buffer.concat(err).toString('utf8'),
+    timedOut,
+  };
+}
+
 }
 
 function sumNet(nets: Record<string, { rx_bytes?: number; tx_bytes?: number }> | undefined, key: 'rx_bytes' | 'tx_bytes') {

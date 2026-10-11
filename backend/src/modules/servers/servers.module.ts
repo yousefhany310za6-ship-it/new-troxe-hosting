@@ -6,6 +6,8 @@ import { ExecGateway } from './exec.gateway';
 import { FilesService } from './files.service';
 import { PortsService } from './ports.service';
 import { PortsController } from './ports.controller';
+import { PackagesService } from './packages.service';
+import { PackagesController } from './packages.controller';
 import { DockerService } from './provisioning/docker.service';
 import { NetworkHardeningService } from './provisioning/network-hardening.service';
 import { ProvisionerService } from './provisioning/provisioner.service';
@@ -17,10 +19,11 @@ import { StatsStreamService } from './stats-stream.service';
 
 @Module({
   imports: [AuthModule, NodesModule],
-  controllers: [ServersController, PortsController],
+  controllers: [ServersController, PortsController, PackagesController],
   providers: [
     ServersService,
     PortsService,
+    PackagesService,
     BackupsService,
     FilesService,
     ExecGateway,

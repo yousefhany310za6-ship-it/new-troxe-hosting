@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   ArrowDown,
+  Check,
+  Clipboard,
   Download,
   Eraser,
   Maximize2,
@@ -367,6 +369,37 @@ function ConsoleFrame({ fullscreen, pill, actions, banner, footer, children }) {
   );
 }
 
+/**
+ * Copy to the clipboard with a visible result. navigator.clipboard needs a
+ * secure context and is missing on some mobile browsers, so a hidden textarea
+ * + execCommand is the fallback — the user is told either way instead of the
+ * copy failing silently.
+ */
+async function copyText(text) {
+  if (!text) return false;
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch { /* fall through to the legacy path */ }
+  try {
+    const t = document.createElement('textarea');
+    t.value = text;
+    t.setAttribute('readonly', '');
+    t.style.position = 'fixed';
+    t.style.opacity = '0';
+    document.body.appendChild(t);
+    t.select();
+    t.setSelectionRange(0, t.value.length);
+    const ok = document.execCommand('copy');
+    t.remove();
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 function downloadText(name, text) {
   const url = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }));
   const a = document.createElement('a');
@@ -424,6 +457,9 @@ export function ConsoleOffline({ server, status, logs, onStart }) {
             disabled={!lines.length}
           >
             <Download className="size-4" />
+          </IconButton>
+          <IconButton label="Copy console output" onClick={copyVisible} disabled={!lines.length}>
+            {copied ? <Check className="size-4" /> : <Clipboard className="size-4" />}
           </IconButton>
           <IconButton label={fullscreen ? 'Exit fullscreen (Esc)' : 'Fullscreen'} onClick={() => setFullscreen((v) => !v)}>
             {fullscreen ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
@@ -679,6 +715,13 @@ export default function ExecTerminal({ server, apiBase = '/servers', grant }) {
     const v = viewRef.current;
     if (v) downloadText(`${server.name}-console.txt`, v.text());
   };
+  const [copied, setCopied] = useState(false);
+  const copyVisible = async () => {
+    const text = viewRef.current?.text() ?? '';
+    if (!(await copyText(text))) return;
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1600);
+  };
 
   const tone = connected ? 'live' : phase === 'dead' ? 'dead' : phase === 'retrying' || phase === 'connecting' ? 'wait' : 'idle';
   const label = connected
@@ -705,6 +748,9 @@ export default function ExecTerminal({ server, apiBase = '/servers', grant }) {
           </IconButton>
           <IconButton label="Download output" onClick={download}>
             <Download className="size-4" />
+          </IconButton>
+          <IconButton label="Copy console output" onClick={copyVisible} disabled={!lines.length}>
+            {copied ? <Check className="size-4" /> : <Clipboard className="size-4" />}
           </IconButton>
           <IconButton label={fullscreen ? 'Exit fullscreen (Esc)' : 'Fullscreen'} onClick={() => setFullscreen((v) => !v)}>
             {fullscreen ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}

@@ -14,6 +14,7 @@ import {
     RotateCcw,
     Settings as SettingsIcon,
     Square,
+    Package,
     Terminal,
     TerminalSquare,
     Trash2,
@@ -29,6 +30,7 @@ import ExecTerminal, { ConsoleOffline } from './ExecTerminal.jsx';
 import ResourceMonitor from './ResourceMonitor.jsx';
 import ServerOverview from './ServerOverview.jsx';
 import ServerBackups from './ServerBackups.jsx';
+import ServerPackages from '@/components/dashboard/ServerPackages.jsx';
 import ServerSettings from './ServerSettings.jsx';
 import ServerStartup from './ServerStartup.jsx';
 import ServerActivity from './ServerActivity.jsx';
@@ -37,6 +39,7 @@ const TABS = [
     { id: 'overview', label: 'Overview', Icon: LayoutDashboard },
     { id: 'console', label: 'Console', Icon: Terminal },
     { id: 'files', label: 'Files', Icon: Folder },
+    { id: 'packages', label: 'Packages', Icon: Package },
     { id: 'backups', label: 'Backups', Icon: Database },
     { id: 'activity', label: 'Activity', Icon: Activity },
     { id: 'settings', label: 'Settings', Icon: SettingsIcon },
@@ -400,6 +403,8 @@ export default function ServerDetail() {
             )}
 
             {tab === 'files' && <ServerFiles server={server} />}
+
+            {tab === 'packages' && <ServerPackages server={server} />}
 
             {tab === 'backups' && (
                 <ServerBackups
