@@ -271,6 +271,13 @@ export const servers = pgTable('servers', {
   storageGb: integer('storage_gb').default(1).notNull(),
 
   startup: text('startup').notNull(),
+  /**
+   * Entry point of the application (e.g. `index.js`, `src/main.py`). A
+   * first-class setting, not an environment variable: it is also mirrored into
+   * the MAIN_FILE egg variable so existing startup templates keep working.
+   * Relative to the server root — never absolute, never `..`.
+   */
+  mainFile: varchar('main_file', { length: 160 }),
   /** AES-256-GCM encrypted JSON [{k,v}] */
   envEncrypted: text('env_encrypted'),
 

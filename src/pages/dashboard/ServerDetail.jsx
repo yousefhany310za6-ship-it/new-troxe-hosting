@@ -15,6 +15,7 @@ import {
     Settings as SettingsIcon,
     Square,
     Terminal,
+    TerminalSquare,
     Trash2,
 } from 'lucide-react';
 
@@ -28,6 +29,8 @@ import ExecTerminal, { ConsoleOffline } from './ExecTerminal.jsx';
 import ResourceMonitor from './ResourceMonitor.jsx';
 import ServerOverview from './ServerOverview.jsx';
 import ServerBackups from './ServerBackups.jsx';
+import ServerSettings from './ServerSettings.jsx';
+import ServerStartup from './ServerStartup.jsx';
 import ServerActivity from './ServerActivity.jsx';
 
 const TABS = [
@@ -37,6 +40,7 @@ const TABS = [
     { id: 'backups', label: 'Backups', Icon: Database },
     { id: 'activity', label: 'Activity', Icon: Activity },
     { id: 'settings', label: 'Settings', Icon: SettingsIcon },
+    { id: 'startup', label: 'Startup', Icon: TerminalSquare },
 ];
 
 const inputClass =
@@ -415,84 +419,7 @@ export default function ServerDetail() {
 
             {tab === 'settings' && (
                 <div className="flex flex-col gap-4">
-                    <form onSubmit={saveSettings} className="rounded-xl border border-hairline bg-card p-6">
-                        <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
-                            <label className="flex flex-col gap-1.5 text-[0.85rem] font-semibold">
-                                Server name
-                                <input value={name} onChange={(e) => setName(e.target.value)} className={inputClass} />
-                            </label>
-                            <label className="flex flex-col gap-1.5 text-[0.85rem] font-semibold">
-                                Startup command
-                                <input value={startup} onChange={(e) => setStartup(e.target.value)} className={inputClass} />
-                            </label>
-                        </div>
-                        <div className="mt-4 flex items-center justify-between">
-                            <p className="text-[0.85rem] font-semibold">Environment variables</p>
-                            <button
-                                type="button"
-                                onClick={() => setEnv((rows) => [...rows, { k: '', v: '' }])}
-                                className={actionBtn}
-                            >
-                                <Plus className="size-3.5" /> Add variable
-                            </button>
-                        </div>
-                        <p className="mt-1 text-[0.75rem] text-ink-muted">Values are masked (••••••••••••). Editing overwrites the stored value.</p>
-                        <div className="mt-3 flex flex-col gap-2">
-                            {env.map((row, i) => (
-                                <div key={i} className="grid grid-cols-[1fr_1fr_auto] gap-2 max-md:grid-cols-1">
-                                    <input
-                                        placeholder="KEY"
-                                        value={row.k}
-                                        onChange={(e) => setEnv((rows) => rows.map((r, j) => (j === i ? { ...r, k: e.target.value } : r)))}
-                                        className={cn(inputClass, 'font-mono')}
-                                    />
-                                    <input
-                                        placeholder="value"
-                                        value={row.v}
-                                        onChange={(e) => setEnv((rows) => rows.map((r, j) => (j === i ? { ...r, v: e.target.value } : r)))}
-                                        className={cn(inputClass, 'font-mono')}
-                                    />
-                                    <button
-                                        type="button"
-                                        aria-label="Remove variable"
-                                        onClick={() => setEnv((rows) => rows.filter((_, j) => j !== i))}
-                                        className={cn(actionBtn, 'max-md:w-fit')}
-                                    >
-                                        <Trash2 className="size-3.5" />
-                                    </button>
-                                </div>
-                            ))}
-                            {env.length === 0 && (
-                                <p className="text-[0.85rem] text-ink-muted">No variables yet.</p>
-                            )}
-                        </div>
-                        <div className="mt-5 flex flex-wrap items-center gap-4">
-                            <label className="flex cursor-pointer items-center gap-2 text-[0.88rem] font-semibold">
-                                <input
-                                    type="checkbox"
-                                    checked={autoRestart}
-                                    onChange={(e) => setAutoRestart(e.target.checked)}
-                                    className="size-4 accent-white"
-                                />
-                                Auto-restart on crash
-                            </label>
-                            <label className="flex cursor-pointer items-center gap-2 text-[0.88rem] font-semibold">
-                                <input
-                                    type="checkbox"
-                                    checked={autoBackup}
-                                    onChange={(e) => setAutoBackup(e.target.checked)}
-                                    className="size-4 accent-white"
-                                />
-                                Daily automatic backups
-                            </label>
-                        </div>
-                        <button
-                            type="submit"
-                            className="mt-6 inline-flex items-center gap-2 rounded-full bg-white px-6 py-2.5 text-sm font-bold text-black transition hover:bg-gray-200"
-                        >
-                            <Check className="size-4" /> Save settings
-                        </button>
-                    </form>
+                    <ServerSettings server={server} onSaved={fetchServer} onTab={(t) => setTab(t)} />
 
                     <div className="rounded-xl border border-red-500/30 bg-card p-6">
                         <h3 className="font-bold text-red-400">Danger zone</h3>
@@ -515,6 +442,8 @@ export default function ServerDetail() {
                     </div>
                 </div>
             )}
+
+            {tab === 'startup' && <ServerStartup server={server} onSaved={fetchServer} onTab={(t) => setTab(t)} />}
             </>
             )}
 

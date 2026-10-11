@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { randomInt } from 'crypto';
 import { rm } from 'fs/promises';
+import { posix } from 'path';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { config } from '../../config/env';
 import { decryptEnv, encryptEnv, maskEnv } from '../../common/crypto';
@@ -441,17 +442,29 @@ export class ServersService {
       if (row.status === 'deleting') throw Err.conflict('SERVER_DELETING', 'Server is being deleted');
       const patch: Partial<typeof servers.$inferInsert> = {};
       let rebuild = false;
+      const stored: EnvVar[] = row.envEncrypted ? this.safeDecrypt(row.envEncrypted) : [];
+      const storedMap = new Map(stored.map((e) => [e.k, e.v]));
+      // effective env for template validation: stored values merged under egg
+      // defaults — the same merge provision uses
+      let effective = resolveEggEnv(row.runtime, stored);
 
       if (dto.name !== undefined && dto.name !== row.name) patch.name = dto.name;
+      let mainFile: string = row.mainFile ?? this.mainFileFromEnv(stored) ?? '';
+      if (dto.mainFile !== undefined && dto.mainFile !== mainFile) {
+        mainFile = this.cleanMainFile(dto.mainFile);
+        patch.mainFile = mainFile;
+        // keep the startup template working: MAIN_FILE stays in sync, so an
+        // existing `node {{MAIN_FILE}}` command needs no rewrite
+        const synced: EnvVar[] = stored.map((e) => (e.k === 'MAIN_FILE' ? { ...e, v: mainFile } : e));
+        if (!synced.some((e) => e.k === 'MAIN_FILE')) synced.push({ k: 'MAIN_FILE', v: mainFile });
+        patch.envEncrypted = synced.length ? encryptEnv(synced) : null;
+        effective = resolveEggEnv(row.runtime, synced);
+        rebuild = true;
+      }
       if (dto.startup !== undefined && dto.startup !== row.startup) {
         patch.startup = this.cleanStartup(dto.startup);
         rebuild = true;
       }
-      // effective env for template validation: stored values (with masked
-      // round-trip) merged under egg defaults — same merge provision uses.
-      const stored = row.envEncrypted ? this.safeDecrypt(row.envEncrypted) : [];
-      const storedMap = new Map(stored.map((e) => [e.k, e.v]));
-      let effective = resolveEggEnv(row.runtime, stored);
       if (dto.env !== undefined) {
         const env = this.cleanEnv(dto.env);
         // toPublic masks values (••••) — a masked value sent back means
@@ -973,6 +986,26 @@ export class ServersService {
     return plan;
   }
 
+  /** The entry point a server was created with, read from its env (legacy rows). */
+  private mainFileFromEnv(env: EnvVar[]): string | null {
+    const found = env.find((e) => e.k === 'MAIN_FILE');
+    return found?.v ? found.v.slice(0, 160) : null;
+  }
+
+  /**
+   * Validates and normalises a main file: relative, no traversal, no control
+   * characters, bounded. The database repeats these rules as a CHECK.
+   */
+  private cleanMainFile(mainFile: string | undefined): string {
+    const value = (mainFile ?? '').replace(CONTROL_CHARS, '').trim();
+    if (!value || value.length > 160) throw Err.invalid('MAIN_FILE_INVALID', 'Main file must be 1-160 characters');
+    const norm = posix.normalize(value.replace(/\\/g, '/'));
+    if (norm.startsWith('/') || norm === '..' || norm.startsWith('../') || norm.includes('/../') || norm.endsWith('/..')) {
+      throw Err.invalid('MAIN_FILE_TRAVERSAL', 'Main file must stay inside the server directory');
+    }
+    return norm;
+  }
+
   private cleanStartup(startup: string | undefined): string {
     return (startup ?? '').replace(CONTROL_CHARS, '').slice(0, 500);
   }
@@ -1038,6 +1071,7 @@ export class ServersService {
       ramMb: row.ramMb,
       storageGb: row.storageGb,
       startup: row.startup,
+      mainFile: row.mainFile ?? this.mainFileFromEnv(env),
       env,
       envCount: env.length,
       port,

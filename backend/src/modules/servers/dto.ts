@@ -63,6 +63,18 @@ export class UpdateServerDto {
   @Matches(/^[a-z0-9-]{3,32}$/, { message: 'name must be 3-32 lowercase letters/digits/dashes' })
   name?: string;
 
+  /**
+   * Entry point, relative to the server root (e.g. `index.js`, `src/main.py`).
+   * A first-class setting — separate from the startup command and from the
+   * environment variables; the service mirrors it into MAIN_FILE so existing
+   * startup templates keep working.
+   */
+  @IsOptional()
+  @Matches(/^(?![.]{1,2}(\/|$))[^\\\r\n\t]{1,160}$/, {
+    message: 'main file must be a relative path (no leading slash, no .., no control characters)',
+  })
+  mainFile?: string;
+
   @IsOptional()
   @MinLength(1)
   @MaxLength(500)
