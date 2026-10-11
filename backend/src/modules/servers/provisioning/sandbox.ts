@@ -46,9 +46,13 @@ export function buildEnv(spec: SandboxSpec): string[] {
   // the client's own code/config lives on the persistent volume
   merged.set('PORT', String(spec.image.port));
   merged.set('HOST', '0.0.0.0');
-  // The published host port, so apps bind the address shown in the dashboard:
-  // `app.listen(process.env.SERVER_PORT ?? 3000)`. A user-set SERVER_PORT wins
-  // (explicit beats derived); absent when the server has no allocation yet.
+  // The PUBLIC port clients use, for display only (invite links, status pages,
+  // "connect to host:port" banners). Apps must still BIND the container port
+  // (PORT, e.g. 3000) — the platform maps it to the host port automatically.
+  // Binding SERVER_PORT inside the container is the classic mistake: that
+  // number does not exist in the sandbox network and the app only hangs.
+  // A user-set SERVER_PORT wins (explicit beats derived); absent when the
+  // server has no allocation yet.
   const published = spec.ports?.find((pt) => pt.protocol === 'tcp');
   if (published) merged.set('SERVER_PORT', String(published.port));
   for (const { k, v } of spec.env) {

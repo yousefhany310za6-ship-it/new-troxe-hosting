@@ -92,10 +92,11 @@ export default function ServerPorts({ server, adminMode = false }) {
                 {address.host}:{address.port}
               </p>
               <p className="mt-2 text-[0.75rem] text-ink-muted">
-                {address.protocol.toUpperCase()} · inside the container it is port{' '}
-                <span className="font-mono">{ports[0]?.containerPort ?? '—'}</span>. Make your app listen on{' '}
-                <code className="font-mono">process.env.SERVER_PORT</code> (falls back to{' '}
-                <code className="font-mono">{ports[0]?.containerPort ?? '—'}</code> locally) and it answers on this address.
+                {address.protocol.toUpperCase()} · your app must listen on port{' '}
+                <span className="font-mono">{ports[0]?.containerPort ?? '—'}</span> inside the container
+                (e.g. <code className="font-mono">process.env.PORT</code>) — the platform maps it to this address
+                automatically. <code className="font-mono">SERVER_PORT</code> only tells your code this public
+                number for display (invite links, status pages); binding it hangs.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
