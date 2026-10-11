@@ -46,6 +46,11 @@ export function buildEnv(spec: SandboxSpec): string[] {
   // the client's own code/config lives on the persistent volume
   merged.set('PORT', String(spec.image.port));
   merged.set('HOST', '0.0.0.0');
+  // The published host port, so apps bind the address shown in the dashboard:
+  // `app.listen(process.env.SERVER_PORT ?? 3000)`. A user-set SERVER_PORT wins
+  // (explicit beats derived); absent when the server has no allocation yet.
+  const published = spec.ports?.find((pt) => pt.protocol === 'tcp');
+  if (published) merged.set('SERVER_PORT', String(published.port));
   for (const { k, v } of spec.env) {
     if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(k)) merged.set(k, v);
   }

@@ -92,8 +92,10 @@ export default function ServerPorts({ server, adminMode = false }) {
                 {address.host}:{address.port}
               </p>
               <p className="mt-2 text-[0.75rem] text-ink-muted">
-                {address.protocol.toUpperCase()} · the same port maps to port{' '}
-                <span className="font-mono">{ports[0]?.containerPort ?? '—'}</span> inside the container
+                {address.protocol.toUpperCase()} · inside the container it is port{' '}
+                <span className="font-mono">{ports[0]?.containerPort ?? '—'}</span>. Make your app listen on{' '}
+                <code className="font-mono">process.env.SERVER_PORT</code> (falls back to{' '}
+                <code className="font-mono">{ports[0]?.containerPort ?? '—'}</code> locally) and it answers on this address.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
