@@ -435,8 +435,19 @@ function useFullscreen() {
  */
 export function ConsoleOffline({ server, status, logs, onStart }) {
   const [fullscreen, setFullscreen] = useFullscreen();
+  const [copied, setCopied] = useState(false);
   const ref = useRef(null);
   const lines = String(logs ?? '').split('\n').filter(Boolean);
+
+  // Same clipboard fallback as the live console (mobile browsers have no
+  // navigator.clipboard), copying exactly what is on screen.
+  const copyVisible = async () => {
+    const text = ref.current?.innerText ?? lines.join('\n');
+    if (!text.trim()) return;
+    if (!(await copyText(text))) return;
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1600);
+  };
 
   useEffect(() => {
     if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
@@ -749,7 +760,7 @@ export default function ExecTerminal({ server, apiBase = '/servers', grant }) {
           <IconButton label="Download output" onClick={download}>
             <Download className="size-4" />
           </IconButton>
-          <IconButton label="Copy console output" onClick={copyVisible} disabled={!lines.length}>
+          <IconButton label="Copy console output" onClick={copyVisible} disabled={lineCount === 0}>
             {copied ? <Check className="size-4" /> : <Clipboard className="size-4" />}
           </IconButton>
           <IconButton label={fullscreen ? 'Exit fullscreen (Esc)' : 'Fullscreen'} onClick={() => setFullscreen((v) => !v)}>

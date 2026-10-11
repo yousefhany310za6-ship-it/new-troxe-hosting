@@ -24,6 +24,7 @@ import Overview from '../src/pages/dashboard/Overview.jsx';
 import Servers from '../src/pages/dashboard/Servers.jsx';
 import CreateServer from '../src/pages/dashboard/CreateServer.jsx';
 import ServerDetail from '../src/pages/dashboard/ServerDetail.jsx';
+import ExecTerminal, { ConsoleOffline } from '../src/pages/dashboard/ExecTerminal.jsx';
 import Activity from '../src/pages/dashboard/Activity.jsx';
 import Settings from '../src/pages/dashboard/Settings.jsx';
 import MyTickets from '../src/pages/dashboard/MyTickets.jsx';
@@ -51,6 +52,35 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider } from '../src/context/AuthContext.jsx';
 
 const UID = '123e4567-e89b-12d3-a456-426614174000';
+
+/** an online server, so the live console (not the offline fallback) mounts */
+const ONLINE_SERVER = {
+  id: UID,
+  name: 'livetest',
+  runtime: 'Node.js',
+  runtimeLabel: 'Node.js 22',
+  runtimeVersion: 'node@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392',
+  status: 'online',
+  containerId: 'container-id',
+  containerName: 'srv_livetest',
+  mainFile: 'index.js',
+  startup: 'node {{MAIN_FILE}}',
+  env: [],
+  autoBackup: true,
+  autoBackupRetain: 7,
+  autoRestart: true,
+  region: 'fra-de',
+  planId: 'starter',
+  cpuMilli: 500,
+  ramMb: 512,
+  storageGb: 3,
+  port: 3000,
+  hasContainer: true,
+  contactCode: '12345678',
+  createdAt: new Date().toISOString(),
+  updatedAt: new Date().toISOString(),
+  provisionedAt: new Date().toISOString(),
+};
 
 /** a dashboard route nested under its layout (so layout code runs too) */
 const dash = (child, el) => (
@@ -96,6 +126,16 @@ export const cases = [
   { name: 'Dashboard/Servers', path: '/dashboard/servers', el: dash('servers', <Servers />) },
   { name: 'Dashboard/CreateServer', path: '/dashboard/servers/new', el: dash('servers/new', <CreateServer />) },
   { name: 'Dashboard/ServerDetail', path: `/dashboard/servers/${UID}`, el: dash('servers/:id', <ServerDetail />) },
+  {
+    name: 'Dashboard/Console (live)',
+    path: `/dashboard/servers/${UID}`,
+    el: page(`/dashboard/servers/${UID}`, <ExecTerminal server={ONLINE_SERVER} />),
+  },
+  {
+    name: 'Dashboard/Console (offline)',
+    path: `/dashboard/servers/${UID}`,
+    el: page(`/dashboard/servers/${UID}`, <ConsoleOffline server={ONLINE_SERVER} status="offline" logs={[]} onStart={() => {}} />),
+  },
   { name: 'Dashboard/Activity', path: '/dashboard/activity', el: dash('activity', <Activity />) },
   { name: 'Dashboard/Settings', path: '/dashboard/settings', el: dash('settings', <Settings />) },
   { name: 'Dashboard/MyTickets', path: '/dashboard/support', el: dash('support', <MyTickets />) },
