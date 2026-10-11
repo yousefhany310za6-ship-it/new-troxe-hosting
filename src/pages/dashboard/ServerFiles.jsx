@@ -822,6 +822,9 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
                         {readOnly && (
                         <span className="rounded-full border border-hairline bg-veil px-2.5 py-1 text-[0.68rem] font-semibold text-ink-secondary">Read-only</span>
                         )}
+                        <span className="hidden shrink-0 font-mono text-[0.68rem] text-ink-muted md:inline" title="Largest single file you can upload">
+                            max {fmtSize(UPLOAD_MAX)} per file
+                        </span>
                         <RowMenu
                             label="More file actions"
                             disabled={busy}

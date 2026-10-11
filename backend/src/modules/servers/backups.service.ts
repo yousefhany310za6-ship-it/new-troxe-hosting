@@ -80,6 +80,27 @@ export class BackupsService {
     return path.join(this.dirFor(ownerId, serverId), `${backupId}.tar.gz`);
   }
 
+  /**
+   * Resolve a backup archive for download. Ownership + containment are
+   * checked here (the caller only streams the returned path), so a guessed
+   * backup id can never read another user's archive.
+   */
+  async resolveDownload(ownerId: string, serverId: string, backupId: string): Promise<{ path: string; name: string; sizeBytes: number }> {
+    const server = await this.serversSvc.requireOwned(ownerId, serverId);
+    this.serversSvc.assertOperable(server);
+    const [row] = await this.db
+      .select()
+      .from(backups)
+      .where(and(eq(backups.id, backupId), eq(backups.serverId, serverId)))
+      .limit(1);
+    if (!row) throw Err.notFound('BACKUP_NOT_FOUND');
+    if (row.status !== 'ready') throw new AppError('BACKUP_NOT_READY', 409, 'This backup is not finished yet.');
+    this.assertContained(ownerId, serverId, row.storageKey, 'backup archive');
+    const info = await stat(row.storageKey).catch(() => null);
+    if (!info) throw Err.notFound('BACKUP_FILE_MISSING');
+    return { path: row.storageKey, name: `${row.name}.tar.gz`, sizeBytes: Number(info.size) };
+  }
+
   async list(ownerId: string, serverId: string) {
     await this.serversSvc.requireOwned(ownerId, serverId);
     const rows = await this.db

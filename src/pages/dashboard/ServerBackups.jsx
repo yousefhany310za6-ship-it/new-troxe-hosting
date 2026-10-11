@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import {
   AlertTriangle,
+  Download,
   Archive,
   Check,
   ChevronRight,
@@ -112,6 +113,8 @@ export default function ServerBackups({
   onRetain,
   onRestore,
   onDelete,
+  onDownload,
+  downloadingId,
 }) {
   const list = backups ?? [];
   const slots = quota?.slots;
@@ -311,6 +314,15 @@ export default function ServerBackups({
                   </p>
                 </div>
                 <div className="flex shrink-0 items-center gap-2 max-sm:self-end sm:ml-auto">
+                  <button
+                    type="button"
+                    onClick={() => onDownload(backup)}
+                    disabled={backup.status !== 'ready' || !!downloadingId}
+                    title={backup.status === 'ready' ? 'Download this snapshot' : 'Available once the snapshot is ready'}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-hairline bg-veil px-3.5 py-1.5 text-[0.78rem] font-semibold text-ink-secondary transition hover:border-hairline-hover hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    {downloadingId === backup.id ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} Download
+                  </button>
                   <button
                     type="button"
                     onClick={() => onRestore(backup)}

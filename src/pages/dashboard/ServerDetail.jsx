@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
-import { apiGet, apiPost, apiPatch, apiDelete } from '@/lib/api.js';
+import { apiGet, apiPost, apiPatch, apiDelete, apiDownload } from '@/lib/api.js';
 import { STATUS_STYLE } from './Overview.jsx';
 import { RUNTIME_ICONS } from './Servers.jsx';
 import { ConfirmModal } from '@/components/ui/confirm-modal.jsx';
@@ -69,6 +69,7 @@ export default function ServerDetail() {
     const [reinstallOpen, setReinstallOpen] = useState(false);
     const [deleteOpen, setDeleteOpen] = useState(false);
     const [restoreTarget, setRestoreTarget] = useState(null);
+    const [downloadId, setDownloadId] = useState(null);
     const [deleteBackupTarget, setDeleteBackupTarget] = useState(null);
 
 
@@ -235,6 +236,29 @@ export default function ServerDetail() {
         setMsg({ text: 'Restore started', ok: true });
         fetchBackups();
         fetchServer();
+    };
+
+    // Authenticated download: the endpoint streams the archive, so the browser
+    // must carry the access token (a plain <a href> cannot). apiDownload
+    // handles the refresh-on-401 and the filename for us.
+    const downloadBackup = async (backupId) => {
+        setDownloadId(backupId);
+        try {
+            const { blob, filename } = await apiDownload(`/servers/${id}/backups/${backupId}/download`);
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename || 'backup.tar.gz';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 5000);
+            setMsg({ text: 'Download started', ok: true });
+        } catch (e) {
+            setMsg({ text: e.message, ok: false });
+        } finally {
+            setDownloadId(null);
+        }
     };
 
     const deleteBackup = async (backupId) => {
@@ -417,6 +441,8 @@ export default function ServerDetail() {
                     onRetain={setBackupRetain}
                     onRestore={(b) => setRestoreTarget(b)}
                     onDelete={(b) => setDeleteBackupTarget(b)}
+                    onDownload={(b) => downloadBackup(b.id)}
+                    downloadingId={downloadId}
                 />
             )}
 

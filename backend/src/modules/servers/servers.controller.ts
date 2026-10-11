@@ -1,5 +1,6 @@
 import { Body, Controller, DefaultValuePipe, Delete, Get, HttpCode, Param, ParseIntPipe, Patch, Post, Put, Query, Req, Res, UseGuards } from '@nestjs/common';
 import type { Request, Response } from 'express';
+import { createReadStream } from 'fs';
 import { Throttle } from '@nestjs/throttler';
 import { ctxOf } from '../../common/request-context';
 import { CurrentUser } from '../auth/current-user';
@@ -330,6 +331,30 @@ export class ServersController {
     @Body() dto: ExtractDto,
   ) {
     return this.files.extract(u.sub, id, dto.file, dto.dest);
+  }
+
+  /**
+   * Streams a backup archive to its owner. The service resolves and validates
+   * the path (ownership + containment + ready state) before anything is
+   * streamed, so an id alone cannot reach another user's file.
+   */
+  @Get(':id/backups/:backupId/download')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @UseGuards(ServerOwnerGuard)
+  async downloadBackup(
+    @Param('id', ParseUuidPipe) id: string,
+    @Param('backupId', ParseUuidPipe) backupId: string,
+    @CurrentUser() u: ReqUser,
+    @Res() res: Response,
+  ) {
+    const file = await this.backups.resolveDownload(u.sub, id, backupId);
+    res.set({
+      'Content-Type': 'application/gzip',
+      'Content-Length': String(file.sizeBytes),
+      'Content-Disposition': `attachment; filename="${file.name}"`,
+      'X-Content-Type-Options': 'nosniff',
+    });
+    createReadStream(file.path).pipe(res);
   }
 
   @Get(':id/files/download')
