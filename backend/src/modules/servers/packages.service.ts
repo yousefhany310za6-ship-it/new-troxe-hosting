@@ -6,6 +6,8 @@ import { auditLogs } from '../../db/schema';
 import { runtimeImage, type Runtime } from './provisioning/images';
 import { DockerService } from './provisioning/docker.service';
 import { ServersService } from './servers.service';
+import { ServerAccessService } from './server-access.service';
+import type { ServerPermission } from './server-access-policy';
 import {
   MANAGER_FOR_RUNTIME,
   PACKAGE_OP_TIMEOUT_MS,
@@ -61,15 +63,22 @@ export class PackagesService {
     @Inject(DB) private db: Db,
     private servers: ServersService,
     private docker: DockerService,
+    private access: ServerAccessService,
   ) {}
+
+  private async accessible(serverId: string, ownerId: string, perm: ServerPermission) {
+    const access = await this.access.resolve(serverId, ownerId);
+    this.access.requirePermission(access, perm);
+    return access.row;
+  }
 
   /** Which manager this server uses, or null when the runtime has none. */
   managerForRuntime(runtime: string): PackageManager | null {
     return MANAGER_FOR_RUNTIME[runtime] ?? null;
   }
 
-  private async requireRunningOwned(serverId: string, ownerId: string) {
-    const row = await this.servers.requireOwned(ownerId, serverId);
+  private async requireRunningOwned(serverId: string, ownerId: string, perm?: ServerPermission) {
+    const row = await this.accessible(serverId, ownerId, perm ?? 'server.view');
     if (!row.containerId) throw new AppError('SERVER_NOT_READY', 409, 'This server has no container yet — start it first.');
     const state = await this.docker.inspect(row.containerId, row.nodeId).catch(() => null);
     if (!state?.running) throw new AppError('SERVER_NOT_RUNNING', 409, 'The server must be running to manage packages.');
@@ -81,7 +90,7 @@ export class PackagesService {
    * A runtime with no manifest returns an empty list — nothing is invented.
    */
   async list(serverId: string, ownerId: string): Promise<{ manager: PackageManager | null; manifest: string | null; packages: PackageRow[] }> {
-    const row = await this.servers.requireOwned(ownerId, serverId);
+    const row = await this.accessible(serverId, ownerId, 'server.view');
     const manager = this.managerForRuntime(row.runtime);
     const image = runtimeImage(row.runtime as Runtime);
     if (!manager || !row.containerId) return { manager, packages: [], manifest: null };
@@ -131,7 +140,7 @@ export class PackagesService {
 
   /** Install one package into this server. */
   async install(serverId: string, ownerId: string, name: string, ip?: string): Promise<PackageOpResult> {
-    const row = await this.requireRunningOwned(serverId, ownerId);
+    const row = await this.requireRunningOwned(serverId, ownerId, 'packages.write');
     const manager = this.managerForRuntime(row.runtime);
     if (!manager) {
       throw new AppError('PACKAGE_MANAGER_UNSUPPORTED', 400, `${row.runtime} has no package manager on this platform.`);
@@ -154,7 +163,7 @@ export class PackagesService {
 
   /** Remove one package the manifest lists. */
   async uninstall(serverId: string, ownerId: string, name: string, ip?: string): Promise<PackageOpResult> {
-    const row = await this.requireRunningOwned(serverId, ownerId);
+    const row = await this.requireRunningOwned(serverId, ownerId, 'packages.write');
     const manager = this.managerForRuntime(row.runtime);
     if (!manager) {
       throw new AppError('PACKAGE_MANAGER_UNSUPPORTED', 400, `${row.runtime} has no package manager on this platform.`);

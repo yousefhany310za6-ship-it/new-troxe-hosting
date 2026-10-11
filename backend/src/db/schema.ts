@@ -485,6 +485,50 @@ export const serverPorts = pgTable('server_ports', {
   uniqueIndex('server_ports_server_proto_unique').on(t.serverId, t.protocol),
 ]);
 
+// ---- Server subusers & schedules -----------------------------------------------
+export const scheduleAction = pgEnum('schedule_action', ['backup', 'start', 'stop', 'restart']);
+
+/**
+ * Scoped access grants: users other than the owner who may act on a server.
+ * Permissions is an array of keys from server-access-policy.ts — only
+ * whitelisted keys are ever written (enforced in the service, not the DB).
+ */
+export const serverUsers = pgTable('server_users', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  serverId: uuid('server_id').notNull().references(() => servers.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  permissions: text('permissions').array().default([]).notNull(),
+  createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (t) => [
+  uniqueIndex('server_users_pair_unique').on(t.serverId, t.userId),
+  index('server_users_user_idx').on(t.userId),
+  index('server_users_server_idx').on(t.serverId),
+]);
+
+/**
+ * Cron-driven tasks. Cron is a 5-field expression evaluated in UTC;
+ * nextRunAt is recomputed after every run so the runner is one indexed query.
+ */
+export const serverSchedules = pgTable('server_schedules', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  serverId: uuid('server_id').notNull().references(() => servers.id, { onDelete: 'cascade' }),
+  name: varchar('name', { length: 64 }).notNull(),
+  cron: varchar('cron', { length: 64 }).notNull(),
+  action: scheduleAction('action').notNull(),
+  enabled: boolean('enabled').default(true).notNull(),
+  createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+  lastRunAt: timestamp('last_run_at'),
+  lastStatus: varchar('last_status', { length: 16 }),
+  lastError: varchar('last_error', { length: 500 }),
+  nextRunAt: timestamp('next_run_at'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (t) => [
+  index('server_schedules_server_idx').on(t.serverId),
+  index('server_schedules_due_idx').on(t.enabled, t.nextRunAt),
+]);
+
 // ---- Support tickets --------------------------------------------------------
 export const ticketStatus = pgEnum('ticket_status', [
   'open', 'in_progress', 'waiting_user', 'waiting_admin', 'resolved', 'closed',

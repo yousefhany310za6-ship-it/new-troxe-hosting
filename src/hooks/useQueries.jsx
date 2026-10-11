@@ -349,3 +349,86 @@ export function useDismissAnnouncement() {
     onSuccess: () => qc.invalidateQueries({ queryKey: keys.announcements() }),
   });
 }
+
+/* ------------------------- server sharing ------------------------- */
+
+export function useServerGrant(id) {
+  return useQuery({
+    queryKey: ['servers', id, 'grant'],
+    queryFn: () => apiGet(`/servers/${id}/grant`),
+    enabled: !!id,
+    staleTime: 30_000,
+  });
+}
+
+export function useSubusers(id) {
+  return useQuery({
+    queryKey: ['servers', id, 'users'],
+    queryFn: () => apiGet(`/servers/${id}/users`),
+    enabled: !!id,
+  });
+}
+
+export function useAddSubuser(id) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body) => apiPost(`/servers/${id}/users`, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['servers', id, 'users'] }),
+  });
+}
+
+export function useUpdateSubuser(id) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ userId, permissions }) => apiPatch(`/servers/${id}/users/${userId}`, { permissions }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['servers', id, 'users'] }),
+  });
+}
+
+export function useRemoveSubuser(id) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (userId) => apiDelete(`/servers/${id}/users/${userId}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['servers', id, 'users'] }),
+  });
+}
+
+/* ------------------------- server schedules ------------------------- */
+
+export function useSchedules(id) {
+  return useQuery({
+    queryKey: ['servers', id, 'schedules'],
+    queryFn: () => apiGet(`/servers/${id}/schedules`),
+    enabled: !!id,
+  });
+}
+
+export function useCreateSchedule(id) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body) => apiPost(`/servers/${id}/schedules`, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['servers', id, 'schedules'] }),
+  });
+}
+
+export function useUpdateSchedule(id) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ scheduleId, ...body }) => apiPatch(`/servers/${id}/schedules/${scheduleId}`, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['servers', id, 'schedules'] }),
+  });
+}
+
+export function useDeleteSchedule(id) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (scheduleId) => apiDelete(`/servers/${id}/schedules/${scheduleId}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['servers', id, 'schedules'] }),
+  });
+}
+
+export function usePreviewCron(id) {
+  return useMutation({
+    mutationFn: (cron) => apiPost(`/servers/${id}/schedules/preview`, { cron }),
+  });
+}

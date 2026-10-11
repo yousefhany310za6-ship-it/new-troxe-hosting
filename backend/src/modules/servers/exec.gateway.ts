@@ -18,6 +18,7 @@ import { DB, Db } from '../../db/db.module';
 import { users } from '../../db/schema';
 import { AuditService } from '../audit/audit.module';
 import { ServersService } from './servers.service';
+import { ServerAccessService } from './server-access.service';
 import { DockerService, startedAtToSince, type ShellHandle } from './provisioning/docker.service';
 import { ExecInputDto, ExecResizeDto } from './exec.dto';
 
@@ -91,6 +92,7 @@ export class ExecGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private tickets: WsTicketService,
     private grants: AdminGrantService,
     private servers: ServersService,
+    private serverAccess: ServerAccessService,
     private docker: DockerService,
     private audit: AuditService,
     @Inject(DB) private db: Db,
@@ -117,7 +119,16 @@ export class ExecGateway implements OnGatewayConnection, OnGatewayDisconnect {
         .limit(1);
       if (!actor || actor.status !== 'active') return fail('EXEC_DENIED');
 
-      let row = await this.servers.requireOwned(userId, serverId).catch(() => null);
+      // Owner or subuser holding console.access — checked on every connect,
+      // so removing the grant cuts the next session even with a live ticket.
+      let row: Awaited<ReturnType<ServerAccessService['resolve']>>['row'] | null = null;
+      try {
+        const access = await this.serverAccess.resolve(serverId, userId);
+        this.serverAccess.requirePermission(access, 'console.access');
+        row = access.row;
+      } catch {
+        row = null;
+      }
       let viaGrant = false;
       const grantToken = (auth as { grant?: string }).grant;
       if (!row && grantToken && actor.role === 'admin') {

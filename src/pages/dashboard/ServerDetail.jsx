@@ -4,6 +4,7 @@ import {
     Activity,
     ArrowLeft,
     Ban,
+    CalendarClock,
     Check,
     Database,
     FileText,
@@ -18,6 +19,7 @@ import {
     Terminal,
     TerminalSquare,
     Trash2,
+    Users,
 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
@@ -34,6 +36,9 @@ import ServerPackages from '@/components/dashboard/ServerPackages.jsx';
 import ServerSettings from './ServerSettings.jsx';
 import ServerStartup from './ServerStartup.jsx';
 import ServerActivity from './ServerActivity.jsx';
+import ServerUsers from './ServerUsers.jsx';
+import ServerSchedules from './ServerSchedules.jsx';
+import { useServerGrant } from '@/hooks/useQueries.jsx';
 
 const TABS = [
     { id: 'overview', label: 'Overview', Icon: LayoutDashboard },
@@ -42,6 +47,8 @@ const TABS = [
     { id: 'packages', label: 'Packages', Icon: Package },
     { id: 'backups', label: 'Backups', Icon: Database },
     { id: 'activity', label: 'Activity', Icon: Activity },
+    { id: 'schedules', label: 'Schedules', Icon: CalendarClock },
+    { id: 'users', label: 'Users', Icon: Users },
     { id: 'settings', label: 'Settings', Icon: SettingsIcon },
     { id: 'startup', label: 'Startup', Icon: TerminalSquare },
 ];
@@ -51,6 +58,63 @@ const inputClass =
 
 const actionBtn =
     'inline-flex items-center gap-1.5 rounded-md border border-hairline bg-veil px-3 py-1.5 text-[0.8rem] font-semibold text-ink-secondary transition hover:border-hairline-hover hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40';
+
+/**
+ * Renders children only for callers the server recognises. Owners always pass;
+ * subusers pass with their grant. Anything else gets an honest message instead
+ * of a broken tab — and the server still re-checks on every API call.
+ */
+/**
+ * The tab row, filtered by what the caller may do: everyone sees the
+ * operational tabs, owners additionally see Users, and Schedules shows for
+ * anyone with access (managing stays server-enforced).
+ */
+function GrantTabs({ id, tab, setTab, setMsg }) {
+    const { data: grant } = useServerGrant(id);
+    const visible = TABS.filter((t) => {
+        if (t.id === 'users') return grant?.isOwner === true;
+        if (t.id === 'schedules') return !!grant && (grant.isOwner || (grant.permissions ?? []).length > 0);
+        return true;
+    });
+    return (
+        <>
+            {visible.map(({ id: tabId, label, Icon }) => (
+                <button
+                    key={tabId}
+                    type="button"
+                    onClick={() => { setTab(tabId); setMsg({ text: '', ok: true }); }}
+                    className={cn(
+                        'flex shrink-0 items-center gap-2 border-b-2 px-4 py-3 text-[0.88rem] font-semibold transition',
+                        tab === tabId
+                            ? 'border-white text-foreground'
+                            : 'border-transparent text-ink-secondary hover:text-foreground'
+                    )}
+                >
+                    <Icon className="size-4" />
+                    {label}
+                </button>
+            ))}
+        </>
+    );
+}
+
+function GrantGate({ id, ownerOnly = false, fallback = null, children }) {
+    const { data: grant, isLoading, error } = useServerGrant(id);
+    if (isLoading) {
+        return <div className="h-24 animate-pulse rounded-2xl bg-white/[0.04]" aria-busy="true" />;
+    }
+    if (error || !grant) {
+        return (
+            fallback ?? (
+                <p className="rounded-xl border border-hairline bg-card p-6 text-[0.86rem] text-ink-secondary">
+                    You no longer have access to this server.
+                </p>
+            )
+        );
+    }
+    if (ownerOnly && !grant.isOwner) return null;
+    return typeof children === 'function' ? children(grant) : children;
+}
 
 export default function ServerDetail() {
     const { id } = useParams();
@@ -380,22 +444,7 @@ export default function ServerDetail() {
             ) : (
             <>
             <div className="flex gap-1 overflow-x-auto border-b border-hairline">
-                {TABS.map(({ id: tabId, label, Icon }) => (
-                    <button
-                        key={tabId}
-                        type="button"
-                        onClick={() => { setTab(tabId); setMsg({ text: '', ok: true }); }}
-                        className={cn(
-                            'flex shrink-0 items-center gap-2 border-b-2 px-4 py-3 text-[0.88rem] font-semibold transition',
-                            tab === tabId
-                                ? 'border-white text-foreground'
-                                : 'border-transparent text-ink-secondary hover:text-foreground'
-                        )}
-                    >
-                        <Icon className="size-4" />
-                        {label}
-                    </button>
-                ))}
+                <GrantTabs id={id} tab={tab} setTab={setTab} setMsg={setMsg} />
             </div>
 
             {msg.text && (
@@ -447,6 +496,26 @@ export default function ServerDetail() {
             )}
 
             {tab === 'activity' && <ServerActivity key={server.id} server={server} />}
+
+            {tab === 'schedules' && (
+                <GrantGate
+                    id={id}
+                    fallback={<p className="rounded-xl border border-hairline bg-card p-6 text-[0.86rem] text-ink-secondary">Schedules are available to people with access to this server.</p>}
+                >
+                    {({ permissions }) => (
+                        <ServerSchedules
+                            server={server}
+                            canManage={permissions.includes('schedule.manage')}
+                        />
+                    )}
+                </GrantGate>
+            )}
+
+            {tab === 'users' && (
+                <GrantGate id={id} ownerOnly>
+                    <ServerUsers server={server} />
+                </GrantGate>
+            )}
 
             {tab === 'settings' && (
                 <div className="flex flex-col gap-4">

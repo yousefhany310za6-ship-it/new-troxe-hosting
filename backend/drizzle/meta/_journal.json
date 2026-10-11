@@ -169,6 +169,20 @@
       "when": 1791692850837,
       "tag": "0023_fix_main_file_ck",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1791750401303,
+      "tag": "0024_server_users",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1791750402303,
+      "tag": "0025_server_schedules",
+      "breakpoints": true
     }
   ]
 }

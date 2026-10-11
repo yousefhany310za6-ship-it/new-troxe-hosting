@@ -4,6 +4,8 @@ import { posix } from 'path';
 import { config } from '../../config/env';
 import { AppError, Err } from '../../common/errors';
 import { ServersService } from './servers.service';
+import { ServerAccessService } from './server-access.service';
+import type { ServerPermission } from './server-access-policy';
 import { DockerService } from './provisioning/docker.service';
 
 export interface FileEntry {
@@ -43,6 +45,7 @@ export class FilesService {
   constructor(
     private serversSvc: ServersService,
     private docker: DockerService,
+    private access: ServerAccessService,
   ) {}
 
   static readonly READ_MAX = 512 * 1024;
@@ -57,7 +60,7 @@ export class FilesService {
   // ---- public API --------------------------------------------------------
 
   async list(ownerId: string, serverId: string, rel: string | undefined, opts?: { admin?: boolean }) {
-    const { volume, nodeId } = await this.volumeOf(ownerId, serverId, opts);
+    const { volume, nodeId } = await this.volumeOf(ownerId, serverId, opts, 'files.read');
     const dir = this.sanitizeDir(rel ?? '');
     const script = [
       `d=${this.q(`/data/${dir}`)}`,
@@ -96,7 +99,7 @@ export class FilesService {
   }
 
   async read(ownerId: string, serverId: string, rel: string | undefined, opts?: { admin?: boolean }) {
-    const { volume, nodeId } = await this.volumeOf(ownerId, serverId, opts);
+    const { volume, nodeId } = await this.volumeOf(ownerId, serverId, opts, 'files.read');
     const file = this.sanitizeFile(rel ?? '');
     const script = [
       `f=${this.q(`/data/${file}`)}`,
@@ -124,7 +127,7 @@ export class FilesService {
       throw new AppError('FILE_TOO_LARGE', 413, `File exceeds ${cap} bytes`);
     const release = await this.serversSvc.acquire(serverId);
     try {
-      const { volume, nodeId, storageGb } = await this.volumeOf(ownerId, serverId, opts);
+      const { volume, nodeId, storageGb } = await this.volumeOf(ownerId, serverId, opts, 'files.write');
       const file = this.sanitizeFile(rel);
       await this.assertQuota(volume, nodeId, storageGb, buf.length, file);
       const b64 = buf.toString('base64');
@@ -181,7 +184,7 @@ export class FilesService {
       throw new AppError('FILE_TOO_LARGE', 413, `File exceeds the ${FilesService.STREAM_UPLOAD_MAX / 1024 ** 3} GB upload limit`);
     const release = await this.serversSvc.acquire(serverId);
     try {
-      const { volume, nodeId, storageGb } = await this.volumeOf(ownerId, serverId, opts);
+      const { volume, nodeId, storageGb } = await this.volumeOf(ownerId, serverId, opts, 'files.write');
       const file = this.sanitizeFile(rel ?? '');
       const script = [
         `f=${this.q(`/data/${file}`)}`,
@@ -226,7 +229,7 @@ export class FilesService {
   async mkdir(ownerId: string, serverId: string, rel: string, opts?: { admin?: boolean }) {
     const release = await this.serversSvc.acquire(serverId);
     try {
-      const { volume, nodeId, storageGb } = await this.volumeOf(ownerId, serverId, opts);
+      const { volume, nodeId, storageGb } = await this.volumeOf(ownerId, serverId, opts, 'files.write');
       await this.assertQuota(volume, nodeId, storageGb, 0);
       const dir = this.sanitizeFile(rel);
       const script = [
@@ -248,7 +251,7 @@ export class FilesService {
   async remove(ownerId: string, serverId: string, rel: string | undefined, opts?: { admin?: boolean }) {
     const release = await this.serversSvc.acquire(serverId);
     try {
-      const { volume, nodeId } = await this.volumeOf(ownerId, serverId, opts);
+      const { volume, nodeId } = await this.volumeOf(ownerId, serverId, opts, 'files.write');
       const target = this.sanitizeFile(rel ?? '');
       const script = [
         `f=${this.q(`/data/${target}`)}`,
@@ -267,7 +270,7 @@ export class FilesService {
   async rename(ownerId: string, serverId: string, from: string, to: string, opts?: { admin?: boolean }) {
     const release = await this.serversSvc.acquire(serverId);
     try {
-      const { volume, nodeId } = await this.volumeOf(ownerId, serverId, opts);
+      const { volume, nodeId } = await this.volumeOf(ownerId, serverId, opts, 'files.write');
       const src = this.sanitizeFile(from);
       const dst = this.sanitizeFile(to);
       if (src === dst) throw Err.invalid('FILE_SAME', 'Source and destination are identical');
@@ -291,7 +294,7 @@ export class FilesService {
     }
   }
 
-  async download(ownerId: string, serverId: string, rel: string | undefined, opts?: { admin?: boolean }): Promise<{ filename: string; data: Buffer }> {    const { volume, nodeId } = await this.volumeOf(ownerId, serverId, opts);
+  async download(ownerId: string, serverId: string, rel: string | undefined, opts?: { admin?: boolean }): Promise<{ filename: string; data: Buffer }> {    const { volume, nodeId } = await this.volumeOf(ownerId, serverId, opts, 'files.read');
     const target = this.sanitizeFile(rel ?? '');
     const base = target.split('/').pop()!;
     const script = [
@@ -319,7 +322,7 @@ export class FilesService {
   async archive(ownerId: string, serverId: string, sources: string[], dest: string, opts?: { admin?: boolean }) {
     const release = await this.serversSvc.acquire(serverId);
     try {
-      const { volume, nodeId, storageGb } = await this.volumeOf(ownerId, serverId, opts);
+      const { volume, nodeId, storageGb } = await this.volumeOf(ownerId, serverId, opts, 'files.write');
       await this.assertQuota(volume, nodeId, storageGb, 0);
       const srcs = sources.map((s) => this.sanitizeFile(s));
       const dst = this.sanitizeFile(dest);
@@ -359,7 +362,7 @@ export class FilesService {
   async extract(ownerId: string, serverId: string, file: string, dest: string | undefined, opts?: { admin?: boolean }) {
     const release = await this.serversSvc.acquire(serverId);
     try {
-      const { volume, nodeId, storageGb } = await this.volumeOf(ownerId, serverId, opts);
+      const { volume, nodeId, storageGb } = await this.volumeOf(ownerId, serverId, opts, 'files.write');
       const arc = this.sanitizeFile(file);
       await this.assertQuota(volume, nodeId, storageGb, 0);
       // effective cap in bytes for the post-extract gate below (0 = no cap
@@ -447,8 +450,13 @@ export class FilesService {
     ownerId: string,
     serverId: string,
     opts?: { admin?: boolean },
+    perm?: ServerPermission,
   ): Promise<{ volume: string; nodeId: string; storageGb: number }> {
-    const row = await this.serversSvc.requireOwned(ownerId, serverId);
+    // Owner, subuser-with-permission, or the internal admin path (which passes
+    // the real owner id plus { admin: true } for the suspension bypass).
+    const resolved = await this.access.resolve(serverId, ownerId);
+    if (perm) this.access.requirePermission(resolved, perm);
+    const row = resolved.row;
     this.serversSvc.assertOperable(row, opts);
     if (!(await this.docker.availableOn(row.nodeId))) throw new AppError('DOCKER_UNAVAILABLE', 503, 'Container runtime is not available');
     if (!row.volumeName) throw Err.conflict('SERVER_NOT_PROVISIONED', 'Server has no volume yet');

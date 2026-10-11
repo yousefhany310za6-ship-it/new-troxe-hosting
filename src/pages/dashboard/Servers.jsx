@@ -11,6 +11,7 @@ import {
   Search,
   Server as ServerIcon,
   Square,
+  Users,
 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
@@ -75,6 +76,8 @@ function ServerCard({ server }) {
         });
 
     const open = () => navigate(`/dashboard/servers/${server.id}`);
+    const granted = server.shared ? server.permissions || [] : null;
+    const canControl = !server.shared || granted.includes('control.power');
 
     return (
         <article
@@ -104,6 +107,12 @@ function ServerCard({ server }) {
                     <span className={cn('size-2.5 shrink-0 rounded-full', STATUS_STYLE[server.status])} />
                 )}
                 <h2 className="min-w-0 flex-1 truncate font-mono text-[1rem] font-bold sm:flex-none">{server.name}</h2>
+                {server.shared && (
+                    <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-hairline bg-veil px-2.5 py-0.5 text-[0.68rem] font-bold text-ink-secondary">
+                        <Users size={11} aria-hidden="true" />
+                        Shared
+                    </span>
+                )}
                 <span className="rounded-full border border-hairline bg-veil px-2.5 py-0.5 text-[0.7rem] font-semibold text-ink-secondary">
                     {server.runtimeLabel ?? server.runtime}
                 </span>
@@ -111,6 +120,7 @@ function ServerCard({ server }) {
                     {server.status}
                 </span>
                 <div className="ml-auto flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                    {canControl ? (<>
                     <button type="button" aria-label={`Start ${server.name}`} disabled={server.status !== 'offline' || isPending} onClick={() => run('start', 'started')} className={actionBtn}>
                         <Play className="size-3.5" /> <span className="hidden sm:inline">Start</span>
                     </button>
@@ -120,6 +130,7 @@ function ServerCard({ server }) {
                     <button type="button" aria-label={`Stop ${server.name}`} disabled={!online || isPending} onClick={() => run('stop', 'stopped')} className={cn(actionBtn, 'hover:!border-red-500/50 hover:!text-red-300')}>
                         <Square className="size-3.5" /> <span className="hidden sm:inline">Stop</span>
                     </button>
+                    </>) : null}
                     <ChevronRight size={16} className="ml-1 shrink-0 text-ink-muted transition group-hover:translate-x-0.5 group-hover:text-foreground" />
                 </div>
             </div>
@@ -166,6 +177,9 @@ export default function Servers() {
                 return rank(a) - rank(b) || a.name.localeCompare(b.name, undefined, { numeric: true });
             });
     }, [servers, query, filter]);
+
+    const owned = filtered.filter((s) => !s.shared);
+    const shared = filtered.filter((s) => s.shared);
 
     if (isLoading) {
         return (
@@ -238,9 +252,20 @@ export default function Servers() {
             )}
 
             <div className="flex flex-col gap-3.5">
-                {filtered.map((server) => (
+                {owned.map((server) => (
                     <ServerCard key={server.id} server={server} />
                 ))}
+                {shared.length > 0 && (
+                    <>
+                        <p className="mt-2 flex items-center gap-2 px-1 text-[0.72rem] font-bold tracking-[0.14em] text-ink-muted uppercase">
+                            <Users size={13} aria-hidden="true" />
+                            Shared with me · {shared.length}
+                        </p>
+                        {shared.map((server) => (
+                            <ServerCard key={server.id} server={server} />
+                        ))}
+                    </>
+                )}
                 {servers.length === 0 && (
                     <div className="relative flex flex-col items-center gap-3 overflow-hidden rounded-2xl border border-dashed border-hairline bg-card px-4 py-14 text-center">
                         <div

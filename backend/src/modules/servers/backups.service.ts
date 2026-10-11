@@ -16,6 +16,8 @@ import { DockerService } from './provisioning/docker.service';
 import { ProvisionerService } from './provisioning/provisioner.service';
 import { runtimeImage } from './provisioning/images';
 import { ServersService } from './servers.service';
+import { ServerAccessService } from './server-access.service';
+import type { ServerPermission } from './server-access-policy';
 import { backupDirFor } from './backup-paths';
 
 /**
@@ -44,7 +46,18 @@ export class BackupsService {
     private provisioner: ProvisionerService,
     private serversSvc: ServersService,
     private audit: AuditService,
+    private access: ServerAccessService,
   ) {}
+
+  /**
+   * Owner or subuser-with-permission. Admin paths pass the real owner id, so
+   * they resolve as owner exactly as before.
+   */
+  private async accessible(ownerId: string, serverId: string, perm: 'backup.read' | 'backup.write') {
+    const access = await this.access.resolve(serverId, ownerId);
+    this.access.requirePermission(access, perm as never);
+    return access.row;
+  }
 
   private async acquireOwner(ownerId: string): Promise<() => void> {
     const prev = this.ownerLocks.get(ownerId) ?? Promise.resolve();
@@ -86,7 +99,7 @@ export class BackupsService {
    * backup id can never read another user's archive.
    */
   async resolveDownload(ownerId: string, serverId: string, backupId: string): Promise<{ path: string; name: string; sizeBytes: number }> {
-    const server = await this.serversSvc.requireOwned(ownerId, serverId);
+    const server = await this.accessible(ownerId, serverId, 'backup.write');
     this.serversSvc.assertOperable(server);
     const [row] = await this.db
       .select()
@@ -102,7 +115,7 @@ export class BackupsService {
   }
 
   async list(ownerId: string, serverId: string) {
-    await this.serversSvc.requireOwned(ownerId, serverId);
+    await this.accessible(ownerId, serverId, 'backup.read');
     const rows = await this.db
       .select()
       .from(backups)
@@ -120,8 +133,14 @@ export class BackupsService {
     }));
   }
 
-  async create(ownerId: string, serverId: string, opts: { name?: string; type?: 'manual' | 'auto' }, ctx?: ReqCtx) {
-    const server = await this.serversSvc.requireOwned(ownerId, serverId);
+  async create(
+    ownerId: string,
+    serverId: string,
+    opts: { name?: string; type?: 'manual' | 'auto' },
+    ctx?: ReqCtx,
+    trigger?: { scheduleId: string },
+  ) {
+    const server = await this.accessible(ownerId, serverId, 'backup.write');
     this.serversSvc.assertOperable(server);
     const slots = await this.backupSlots(server);
 
@@ -132,7 +151,7 @@ export class BackupsService {
     // below must observe finalized sizes, and sizes land only after tar.
     const releaseOwner = await this.acquireOwner(ownerId);
     try {
-      return await this.createInner(ownerId, serverId, opts, ctx, server, slots);
+      return await this.createInner(ownerId, serverId, opts, ctx, server, slots, trigger);
     } finally {
       releaseOwner();
     }
@@ -145,6 +164,7 @@ export class BackupsService {
     ctx: ReqCtx | undefined,
     server: Server,
     slots: number,
+    trigger?: { scheduleId: string },
   ) {
     const id = randomUUID();
     const dir = this.dirFor(ownerId, serverId);
@@ -219,12 +239,14 @@ export class BackupsService {
       const size = (await stat(file)).size;
       await this.db.update(backups).set({ sizeBytes: size, status: 'ready' }).where(eq(backups.id, id));
       await this.audit.record({
-        actorId: ownerId,
+        // scheduled runs are the platform acting: actor stays null and the
+        // schedule is named, so automation never wears the owner's identity
+        actorId: trigger ? null : ownerId,
         action: 'server.backup.create',
         targetType: 'server',
         targetId: serverId,
         ip: ctx?.ip,
-        meta: { backupId: id, sizeBytes: size },
+        meta: { backupId: id, sizeBytes: size, ...(trigger ? { scheduleId: trigger.scheduleId } : {}) },
       });
       this.log.log(`backup ${id} for server ${serverId} (${size} bytes)`);
       return { id, name: row.name, sizeBytes: size, status: 'ready', createdAt: row.createdAt };
@@ -242,7 +264,7 @@ export class BackupsService {
   }
 
   async remove(ownerId: string, serverId: string, backupId: string, ctx?: ReqCtx) {
-    const server = await this.serversSvc.requireOwned(ownerId, serverId);
+    const server = await this.accessible(ownerId, serverId, 'backup.write');
     this.serversSvc.assertOperable(server);
     const [row] = await this.db
       .select()
@@ -277,7 +299,7 @@ export class BackupsService {
    *  - prior online state is restored (was: always left offline + DB drift)
    */
   async restore(ownerId: string, serverId: string, backupId: string, ctx?: ReqCtx) {
-    const server = await this.serversSvc.requireOwned(ownerId, serverId);
+    const server = await this.accessible(ownerId, serverId, 'backup.write');
     this.serversSvc.assertOperable(server);
     const [row] = await this.db
       .select()
@@ -431,7 +453,7 @@ export class BackupsService {
    * server, and the plan name for display. Same source of truth as create().
    */
   async quota(ownerId: string, serverId: string) {
-    const server = await this.serversSvc.requireOwned(ownerId, serverId);
+    const server = await this.accessible(ownerId, serverId, 'backup.read');
     const [owner] = await this.db
       .select({ planId: users.planId })
       .from(users)

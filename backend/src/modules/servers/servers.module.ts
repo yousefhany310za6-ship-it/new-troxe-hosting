@@ -6,6 +6,12 @@ import { ExecGateway } from './exec.gateway';
 import { FilesService } from './files.service';
 import { PortsService } from './ports.service';
 import { PortsController } from './ports.controller';
+import { ServerAccessService } from './server-access.service';
+import { ServerAccessGuard } from './server-access.guard';
+import { ServerUsersService } from './server-users.service';
+import { ServerSchedulesService } from './server-schedules.service';
+import { ScheduleRunnerService } from './schedule-runner.service';
+import { ServerCollabController } from './server-collab.controller';
 import { PackagesService } from './packages.service';
 import { PackagesController } from './packages.controller';
 import { DockerService } from './provisioning/docker.service';
@@ -19,11 +25,16 @@ import { StatsStreamService } from './stats-stream.service';
 
 @Module({
   imports: [AuthModule, NodesModule],
-  controllers: [ServersController, PortsController, PackagesController],
+  controllers: [ServersController, PortsController, PackagesController, ServerCollabController],
   providers: [
     ServersService,
     PortsService,
     PackagesService,
+    ServerAccessService,
+    ServerAccessGuard,
+    ServerUsersService,
+    ServerSchedulesService,
+    ScheduleRunnerService,
     BackupsService,
     FilesService,
     ExecGateway,
@@ -34,6 +45,6 @@ import { StatsStreamService } from './stats-stream.service';
     ReconcilerService,
     StatsStreamService,
   ],
-  exports: [ServersService, PortsService, BackupsService, FilesService, DockerService, ProvisionerService, ReconcilerService, ExecGateway],
+  exports: [ServersService, PortsService, ServerAccessService, BackupsService, FilesService, DockerService, ProvisionerService, ReconcilerService, ExecGateway],
 })
 export class ServersModule {}

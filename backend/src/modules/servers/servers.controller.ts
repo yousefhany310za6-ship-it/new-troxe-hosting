@@ -11,6 +11,7 @@ import { ParseUuidPipe } from '../../common/pipes/uuid.pipe';
 import { ChangeRuntimeDto, CreateServerDto, UpdateServerDto } from './dto';
 import { MkdirDto, RenameDto, WriteFileDto, FilesQuery, ArchiveDto, ExtractDto } from './files.dto';
 import { ServerOwnerGuard } from './server-owner.guard';
+import { ServerAccessGuard } from './server-access.guard';
 import { ServersService } from './servers.service';
 
 /** Routes → /api/v1/servers ... */
@@ -47,14 +48,14 @@ export class ServersController {
   }
 
   @Get(':id')
-  @UseGuards(ServerOwnerGuard)
+  @UseGuards(ServerAccessGuard)
   getOne(@Param('id', ParseUuidPipe) id: string, @CurrentUser() u: ReqUser) {
     return this.svc.getOne(u.sub, id);
   }
 
   @Patch(':id')
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
-  @UseGuards(ServerOwnerGuard)
+  @UseGuards(ServerAccessGuard)
   update(@Param('id', ParseUuidPipe) id: string, @Body() dto: UpdateServerDto, @CurrentUser() u: ReqUser, @Req() req: Request) {
     return this.svc.update(u.sub, id, dto, ctxOf(req));
   }
@@ -68,7 +69,7 @@ export class ServersController {
   @Post(':id/start')
   @HttpCode(202)
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
-  @UseGuards(ServerOwnerGuard)
+  @UseGuards(ServerAccessGuard)
   start(@Param('id', ParseUuidPipe) id: string, @CurrentUser() u: ReqUser, @Req() req: Request) {
     return this.svc.lifecycle(u.sub, id, 'start', ctxOf(req));
   }
@@ -76,7 +77,7 @@ export class ServersController {
   @Post(':id/stop')
   @HttpCode(202)
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
-  @UseGuards(ServerOwnerGuard)
+  @UseGuards(ServerAccessGuard)
   stop(@Param('id', ParseUuidPipe) id: string, @CurrentUser() u: ReqUser, @Req() req: Request) {
     return this.svc.lifecycle(u.sub, id, 'stop', ctxOf(req));
   }
@@ -84,7 +85,7 @@ export class ServersController {
   @Post(':id/restart')
   @HttpCode(202)
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
-  @UseGuards(ServerOwnerGuard)
+  @UseGuards(ServerAccessGuard)
   restart(@Param('id', ParseUuidPipe) id: string, @CurrentUser() u: ReqUser, @Req() req: Request) {
     return this.svc.lifecycle(u.sub, id, 'restart', ctxOf(req));
   }
@@ -109,7 +110,7 @@ export class ServersController {
   @Post(':id/reprovision')
   @HttpCode(202)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
-  @UseGuards(ServerOwnerGuard)
+  @UseGuards(ServerAccessGuard)
   reprovision(@Param('id', ParseUuidPipe) id: string, @CurrentUser() u: ReqUser, @Req() req: Request) {
     return this.svc.reprovision(u.sub, id, ctxOf(req));
   }
@@ -127,21 +128,21 @@ export class ServersController {
 
   @Get(':id/stats')
   @Throttle({ default: { limit: 60, ttl: 60_000 } })
-  @UseGuards(ServerOwnerGuard)
+  @UseGuards(ServerAccessGuard)
   stats(@Param('id', ParseUuidPipe) id: string, @CurrentUser() u: ReqUser) {
     return this.svc.stats(u.sub, id);
   }
 
   @Get(':id/usage')
   @Throttle({ default: { limit: 60, ttl: 60_000 } })
-  @UseGuards(ServerOwnerGuard)
+  @UseGuards(ServerAccessGuard)
   usage(@Param('id', ParseUuidPipe) id: string, @CurrentUser() u: ReqUser) {
     return this.svc.usage(u.sub, id);
   }
 
   @Get(':id/activity')
   @Throttle({ default: { limit: 60, ttl: 60_000 } })
-  @UseGuards(ServerOwnerGuard)
+  @UseGuards(ServerAccessGuard)
   activity(
     @Param('id', ParseUuidPipe) id: string,
     @CurrentUser() u: ReqUser,
@@ -153,7 +154,7 @@ export class ServersController {
 
   @Get(':id/events')
   @Throttle({ default: { limit: 60, ttl: 60_000 } })
-  @UseGuards(ServerOwnerGuard)
+  @UseGuards(ServerAccessGuard)
   events(
     @Param('id', ParseUuidPipe) id: string,
     @CurrentUser() u: ReqUser,
@@ -164,14 +165,14 @@ export class ServersController {
 
   @Get(':id/backups/quota')
   @Throttle({ default: { limit: 60, ttl: 60_000 } })
-  @UseGuards(ServerOwnerGuard)
+  @UseGuards(ServerAccessGuard)
   backupQuota(@Param('id', ParseUuidPipe) id: string, @CurrentUser() u: ReqUser) {
     return this.backups.quota(u.sub, id);
   }
 
   @Get(':id/logs')
   @Throttle({ default: { limit: 60, ttl: 60_000 } })
-  @UseGuards(ServerOwnerGuard)
+  @UseGuards(ServerAccessGuard)
   logs(
     @Param('id', ParseUuidPipe) id: string,
     @CurrentUser() u: ReqUser,
@@ -184,7 +185,7 @@ export class ServersController {
 
   @Get(':id/backups')
   @Throttle({ default: { limit: 60, ttl: 60_000 } })
-  @UseGuards(ServerOwnerGuard)
+  @UseGuards(ServerAccessGuard)
   listBackups(@Param('id', ParseUuidPipe) id: string, @CurrentUser() u: ReqUser) {
     return this.backups.list(u.sub, id);
   }
@@ -192,14 +193,14 @@ export class ServersController {
   @Post(':id/backups')
   @HttpCode(201)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
-  @UseGuards(ServerOwnerGuard)
+  @UseGuards(ServerAccessGuard)
   createBackup(@Param('id', ParseUuidPipe) id: string, @CurrentUser() u: ReqUser, @Req() req: Request) {
     return this.backups.create(u.sub, id, { type: 'manual' }, ctxOf(req));
   }
 
   @Delete(':id/backups/:backupId')
   @Throttle({ default: { limit: 30, ttl: 60_000 } })
-  @UseGuards(ServerOwnerGuard)
+  @UseGuards(ServerAccessGuard)
   deleteBackup(
     @Param('id', ParseUuidPipe) id: string,
     @Param('backupId', ParseUuidPipe) backupId: string,
@@ -212,7 +213,7 @@ export class ServersController {
   @Post(':id/backups/:backupId/restore')
   @HttpCode(202)
   @Throttle({ default: { limit: 3, ttl: 60_000 } })
-  @UseGuards(ServerOwnerGuard)
+  @UseGuards(ServerAccessGuard)
   restoreBackup(
     @Param('id', ParseUuidPipe) id: string,
     @Param('backupId', ParseUuidPipe) backupId: string,
@@ -225,7 +226,7 @@ export class ServersController {
   // ---- files (volume browser; helper-container backed) -----------------------
 
   @Get(':id/files')
-  @UseGuards(ServerOwnerGuard)
+  @UseGuards(ServerAccessGuard)
   listFiles(
     @Param('id', ParseUuidPipe) id: string,
     @CurrentUser() u: ReqUser,
@@ -235,7 +236,7 @@ export class ServersController {
   }
 
   @Get(':id/files/content')
-  @UseGuards(ServerOwnerGuard)
+  @UseGuards(ServerAccessGuard)
   readFile(
     @Param('id', ParseUuidPipe) id: string,
     @CurrentUser() u: ReqUser,
@@ -246,7 +247,7 @@ export class ServersController {
 
   @Put(':id/files/content')
   @Throttle({ default: { limit: 30, ttl: 60_000 } })
-  @UseGuards(ServerOwnerGuard)
+  @UseGuards(ServerAccessGuard)
   writeFile(
     @Param('id', ParseUuidPipe) id: string,
     @CurrentUser() u: ReqUser,
@@ -262,7 +263,7 @@ export class ServersController {
    */
   @Put(':id/files/upload')
   @Throttle({ default: { limit: 30, ttl: 60_000 } })
-  @UseGuards(ServerOwnerGuard)
+  @UseGuards(ServerAccessGuard)
   uploadFile(
     @Param('id', ParseUuidPipe) id: string,
     @CurrentUser() u: ReqUser,
@@ -277,7 +278,7 @@ export class ServersController {
   @Post(':id/files/mkdir')
   @HttpCode(200)
   @Throttle({ default: { limit: 30, ttl: 60_000 } })
-  @UseGuards(ServerOwnerGuard)
+  @UseGuards(ServerAccessGuard)
   mkdir(
     @Param('id', ParseUuidPipe) id: string,
     @CurrentUser() u: ReqUser,
@@ -288,7 +289,7 @@ export class ServersController {
 
   @Delete(':id/files')
   @Throttle({ default: { limit: 30, ttl: 60_000 } })
-  @UseGuards(ServerOwnerGuard)
+  @UseGuards(ServerAccessGuard)
   deleteFile(
     @Param('id', ParseUuidPipe) id: string,
     @CurrentUser() u: ReqUser,
@@ -300,7 +301,7 @@ export class ServersController {
   @Post(':id/files/rename')
   @HttpCode(200)
   @Throttle({ default: { limit: 30, ttl: 60_000 } })
-  @UseGuards(ServerOwnerGuard)
+  @UseGuards(ServerAccessGuard)
   renameFile(
     @Param('id', ParseUuidPipe) id: string,
     @CurrentUser() u: ReqUser,
@@ -312,7 +313,7 @@ export class ServersController {
   @Post(':id/files/archive')
   @HttpCode(200)
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
-  @UseGuards(ServerOwnerGuard)
+  @UseGuards(ServerAccessGuard)
   archiveFiles(
     @Param('id', ParseUuidPipe) id: string,
     @CurrentUser() u: ReqUser,
@@ -324,7 +325,7 @@ export class ServersController {
   @Post(':id/files/extract')
   @HttpCode(200)
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
-  @UseGuards(ServerOwnerGuard)
+  @UseGuards(ServerAccessGuard)
   extractFiles(
     @Param('id', ParseUuidPipe) id: string,
     @CurrentUser() u: ReqUser,
@@ -340,7 +341,7 @@ export class ServersController {
    */
   @Get(':id/backups/:backupId/download')
   @Throttle({ default: { limit: 30, ttl: 60_000 } })
-  @UseGuards(ServerOwnerGuard)
+  @UseGuards(ServerAccessGuard)
   async downloadBackup(
     @Param('id', ParseUuidPipe) id: string,
     @Param('backupId', ParseUuidPipe) backupId: string,
@@ -359,7 +360,7 @@ export class ServersController {
 
   @Get(':id/files/download')
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
-  @UseGuards(ServerOwnerGuard)
+  @UseGuards(ServerAccessGuard)
   async downloadFile(
     @Param('id', ParseUuidPipe) id: string,
     @CurrentUser() u: ReqUser,

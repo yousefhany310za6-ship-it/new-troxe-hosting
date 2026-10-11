@@ -1,10 +1,12 @@
 import { Controller, Get, HttpCode, Param, ParseUUIDPipe, Post, Req, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { JwtAuthGuard, type ReqUser } from '../auth/jwt.guard';
+import { ServerAccessGuard } from './server-access.guard';
 import { CurrentUser } from '../auth/current-user';
 import { ctxOf } from '../../common/request-context';
 import { PortsService } from './ports.service';
 import { ServersService } from './servers.service';
+import { ServerAccessService } from './server-access.service';
 import { DockerService } from './provisioning/docker.service';
 
 const UUID = new ParseUUIDPipe({ version: '4' });
@@ -19,13 +21,20 @@ const UUID = new ParseUUIDPipe({ version: '4' });
 @UseGuards(JwtAuthGuard)
 @Throttle({ default: { limit: 120, ttl: 60_000 } })
 export class PortsController {
-  constructor(private ports: PortsService, private servers: ServersService, private docker: DockerService) {}
+  constructor(
+    private ports: PortsService,
+    private servers: ServersService,
+    private docker: DockerService,
+    private access: ServerAccessService,
+  ) {}
 
   /** The server's published port(s) + the address to reach them on. */
   @Get(':id/ports')
+  @UseGuards(ServerAccessGuard)
   async show(@Param('id', UUID) id: string, @CurrentUser() u: ReqUser, @Req() req: { ip?: string; headers: Record<string, unknown> }) {
     const ctx = ctxOf(req);
-    await this.ports.requireOwned(id, u.sub);
+    const access = await this.access.resolve(id, u.sub);
+    this.access.requirePermission(access, 'server.view');
     void ctx;
     const [ports, address, pool] = await Promise.all([
       this.ports.listForServer(id),
@@ -46,10 +55,13 @@ export class PortsController {
    * container is recreated to publish it, and the attempt is audited.
    */
   @Post(':id/ports/allocate')
+  @UseGuards(ServerAccessGuard)
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   async allocate(@Param('id', UUID) id: string, @CurrentUser() u: ReqUser, @Req() req: { ip?: string; headers: Record<string, unknown> }) {
     const ctx = ctxOf(req);
-    const row = await this.ports.requireOwned(id, u.sub);
+    const access = await this.access.resolve(id, u.sub);
+    this.access.requirePermission(access, 'settings.update');
+    const row = access.row;
     const existing = await this.ports.listForServer(id);
     if (existing.length) {
       // A port can be allocated in the database but not live on the host (the

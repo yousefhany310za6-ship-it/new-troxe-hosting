@@ -8,12 +8,14 @@ import { decryptEnv, encryptEnv, maskEnv } from '../../common/crypto';
 import { AppError, Err } from '../../common/errors';
 import { ReqCtx } from '../../common/request-context';
 import { DB, Db } from '../../db/db.module';
-import { auditLogs, plans, servers, serverEvents, users, type EnvVar, type Server } from '../../db/schema';
+import { auditLogs, plans, serverUsers, servers, serverEvents, users, type EnvVar, type Server } from '../../db/schema';
 import { AuditService } from '../audit/audit.module';
 import { DockerService, startedAtToSince } from './provisioning/docker.service';
 import { ProvisionerService, type ProvisionResult } from './provisioning/provisioner.service';
 import { RUNTIMES, runtimeImage, type Runtime, applyTemplate, labelFor, resolveEggEnv, resolveVersion } from './provisioning/images';
 import { NodesService } from '../nodes/nodes.service';
+import { ServerAccessService } from './server-access.service';
+import { normalizePermissions, type ServerPermission } from './server-access-policy';
 import { defaultMainFile, migrateEnvForRuntime, recommendedStartup, runtimeChangeWarnings } from './runtime-switch';
 import { PortsService } from './ports.service';
 import { ChangeRuntimeDto, CreateServerDto, UpdateServerDto } from './dto';
@@ -37,6 +39,7 @@ export class ServersService {
     private realtime: RealtimeGateway,
     private geo: GeoIpService,
     private nodes: NodesService,
+    private access: ServerAccessService,
   ) {}
 
   /**
@@ -77,7 +80,22 @@ export class ServersService {
       .from(servers)
       .where(eq(servers.ownerId, ownerId))
       .orderBy(desc(servers.createdAt));
-    return rows.map((r) => this.toPublic(r));
+    const owned = rows.map((r) => ({ ...this.toPublic(r), shared: false as const }));
+    // Servers shared with me: same read model, flagged so the UI can show
+    // whose they are and hide owner-only actions. Permissions ride along so
+    // the client never has to guess what it may do (the server re-checks).
+    const shared = await this.db
+      .select({ server: servers, permissions: serverUsers.permissions })
+      .from(serverUsers)
+      .innerJoin(servers, eq(servers.id, serverUsers.serverId))
+      .where(eq(serverUsers.userId, ownerId))
+      .orderBy(desc(servers.createdAt));
+    const sharedViews = shared.map((r) => ({
+      ...this.toPublic(r.server),
+      shared: true as const,
+      permissions: normalizePermissions(r.permissions),
+    }));
+    return [...owned, ...sharedViews];
   }
 
   /** Egg catalog: versions + variables per runtime (no digests leak). */
@@ -96,7 +114,7 @@ export class ServersService {
 
   /** Owner-scoped single read — never trusts an id alone. */
   async getOne(ownerId: string, id: string) {
-    const row = await this.requireOwned(ownerId, id);
+    const row = await this.accessible(ownerId, id, 'server.view');
     return this.toPublic(row);
   }
 
@@ -198,6 +216,17 @@ export class ServersService {
     const [row] = await this.db.select().from(servers).where(eq(servers.id, id)).limit(1);
     if (!row) throw Err.notFound('SERVER_NOT_FOUND');
     return row;
+  }
+
+  /**
+   * Owner or subuser with the exact permission. Use this for every
+   * user-facing read/write; keep requireOwned for owner-only operations
+   * (delete, reinstall, runtime change) and internal re-reads.
+   */
+  async accessible(ownerId: string, id: string, perm: ServerPermission): Promise<Server> {
+    const access = await this.access.resolve(id, ownerId);
+    this.access.requirePermission(access, perm);
+    return access.row;
   }
 
   async requireOwned(ownerId: string, id: string): Promise<Server> {
@@ -444,14 +473,15 @@ export class ServersService {
     ctx: ReqCtx,
     opts?: { actorId?: string; actorEmail?: string | null; isAdmin?: boolean },
   ) {
-    let row = await this.requireOwned(ownerId, id);
+    let row = await this.accessible(ownerId, id, 'settings.update');
     const isAdmin = opts?.isAdmin ?? ownerId === 'admin';
     this.assertOperable(row, { admin: isAdmin });
     const actorId = opts?.actorId ?? ownerId;
     const release = await this.acquire(id);
     try {
       // re-read under the lock (see lifecycle): a concurrent suspension wins.
-      row = await this.requireOwned(ownerId, id);
+      // requireAny on purpose — access was already proven above.
+      row = await this.requireAny(id);
       this.assertOperable(row, { admin: isAdmin });
       if (row.status === 'deleting') throw Err.conflict('SERVER_DELETING', 'Server is being deleted');
       const patch: Partial<typeof servers.$inferInsert> = {};
@@ -544,7 +574,7 @@ export class ServersService {
         userAgent: ctx.device,
         meta: { fields: Object.keys(patch), isAdmin },
       });
-      return this.toPublic(await this.requireOwned(ownerId, id));
+      return this.toPublic(await this.requireAny(id));
     } finally {
       release();
     }
@@ -606,7 +636,7 @@ export class ServersService {
    * files stay exactly where they are.
    */
   async reprovision(ownerId: string, id: string, ctx: ReqCtx) {
-    const row = await this.requireOwned(ownerId, id);
+    const row = await this.accessible(ownerId, id, 'control.power');
     this.assertOperable(row);
     if (row.status === 'deleting') throw Err.conflict('SERVER_DELETING', 'Server is being deleted');
     const release = await this.acquire(id);
@@ -773,15 +803,35 @@ export class ServersService {
     return null; // verified at start time instead of guessing
   }
 
-  async lifecycle(ownerId: string, id: string, action: 'start' | 'stop' | 'restart' | 'reinstall', ctx: ReqCtx) {
-    let row = await this.requireOwned(ownerId, id);
+  async lifecycle(
+    ownerId: string,
+    id: string,
+    action: 'start' | 'stop' | 'restart' | 'reinstall',
+    ctx: ReqCtx,
+    trigger?: { scheduleId: string },
+  ) {
+    // reinstall wipes the volume: owner-only, never a granted permission.
+    // (The scheduler never asks for it — its actions are start/stop/restart.)
+    let row = action === 'reinstall'
+      ? await this.requireOwned(ownerId, id)
+      : await this.accessible(ownerId, id, 'control.power');
     this.assertOperable(row);
-    const actor = { actorId: ownerId, targetType: 'server', targetId: id, ip: ctx.ip, userAgent: ctx.device };
+    // A scheduled run is the platform acting, not the owner: the audit trail
+    // keeps actor null and names the schedule, so automation never wears a
+    // person's identity.
+    const actor = {
+      actorId: trigger ? null : ownerId,
+      targetType: 'server',
+      targetId: id,
+      ip: ctx.ip,
+      userAgent: ctx.device,
+    };
     const release = await this.acquire(id);
     try {
     // re-read under the lock: a suspension (or delete) that landed between
     // the pre-check above and now must still win over this operation.
-    row = await this.requireOwned(ownerId, id);
+    // requireAny on purpose — access was already proven above.
+    row = await this.requireAny(id);
     this.assertOperable(row);
     if (row.status === 'deleting') throw Err.conflict('SERVER_DELETING', 'Server is being deleted');
 
@@ -868,8 +918,15 @@ export class ServersService {
       const fresh = await this.docker.inspect(row.containerId!, row.nodeId);
       const status = fresh?.running ? 'online' : 'offline';
       await this.setField(id, { status });
-      await this.event(id, ownerId, action, { status });
-      await this.audit.record({ ...actor, action: `server.${action}` });
+      await this.event(id, trigger ? null : ownerId, action, {
+        status,
+        ...(trigger ? { scheduleId: trigger.scheduleId } : {}),
+      });
+      await this.audit.record({
+        ...actor,
+        action: `server.${action}`,
+        ...(trigger ? { meta: { scheduleId: trigger.scheduleId } } : {}),
+      });
       return { status };
     } catch (e) {
       await this.markError(id, (e as Error).message);
@@ -904,7 +961,7 @@ export class ServersService {
   // ---- observability --------------------------------------------------------
 
   async stats(ownerId: string, id: string) {
-    const row = await this.requireOwned(ownerId, id);
+    const row = await this.accessible(ownerId, id, 'server.view');
     this.assertOperable(row);
     const stats = row.containerId ? await this.docker.stats(row.containerId, row.nodeId) : null;
     // uptime of the current run (only meaningful while it is running)
@@ -921,7 +978,7 @@ export class ServersService {
   }
 
   async logs(ownerId: string, id: string, tail = 200) {
-    const row = await this.requireOwned(ownerId, id);
+    const row = await this.accessible(ownerId, id, 'server.view');
     this.assertOperable(row);
     if (!row.containerId) return { logs: '' };
     // current run only: a restart keeps the container (and its old log history)
@@ -935,7 +992,7 @@ export class ServersService {
    * the actor's profile joined and the country resolved offline via GeoIP.
    */
   async activity(ownerId: string, id: string, page = 1, limit = 30) {
-    await this.requireOwned(ownerId, id);
+    await this.accessible(ownerId, id, 'server.view');
     const safePage = Math.min(Math.max(Math.floor(page) || 1, 1), 100);
     const safeLimit = Math.min(Math.max(Math.floor(limit) || 30, 1), 100);
     const rows = await this.db
@@ -1000,7 +1057,7 @@ export class ServersService {
 
   /** Recent lifecycle events of a server (newest first), safe to show its owner. */
   async events(ownerId: string, id: string, limit = 20) {
-    await this.requireOwned(ownerId, id);
+    await this.accessible(ownerId, id, 'server.view');
     const rows = await this.db
       .select()
       .from(serverEvents)
@@ -1022,7 +1079,7 @@ export class ServersService {
   }
 
   async usage(ownerId: string, id: string) {
-    const row = await this.requireOwned(ownerId, id);
+    const row = await this.accessible(ownerId, id, 'server.view');
     this.assertOperable(row);
     const bytes = await this.provisioner.volumeUsage(row.volumeName ?? '', runtimeImage(row.runtime).image, row.nodeId);
     const capGb = await this.effectiveStorageGb(row);
@@ -1232,7 +1289,7 @@ export class ServersService {
     }
   }
 
-  private async event(serverId: string, actorId: string, type: string, detail?: Record<string, unknown>) {
+  private async event(serverId: string, actorId: string | null, type: string, detail?: Record<string, unknown>) {
     await this.db
       .insert(serverEvents)
       .values({ serverId, actorId, type, detail: detail ?? null } as never)
