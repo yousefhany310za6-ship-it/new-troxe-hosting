@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Save, Server as ServerIcon } from 'lucide-react';
 
 import { apiPatch } from '@/lib/api.js';
+import RuntimeSwitcher from '@/components/dashboard/RuntimeSwitcher.jsx';
 import { cn } from '@/lib/utils';
 
 const inputClass =
@@ -99,6 +100,8 @@ export default function ServerSettings({ server, onSaved, onTab }) {
                 />
                 Restart automatically if the process exits
             </label>
+
+            <RuntimeSwitcher server={server} onChanged={onSaved} />
 
             <div className="flex flex-wrap items-center gap-3 border-t border-hairline pt-4">
                 <button

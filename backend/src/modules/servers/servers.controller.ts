@@ -7,7 +7,7 @@ import { JwtAuthGuard, type ReqUser } from '../auth/jwt.guard';
 import { BackupsService } from './backups.service';
 import { FilesService } from './files.service';
 import { ParseUuidPipe } from '../../common/pipes/uuid.pipe';
-import { CreateServerDto, UpdateServerDto } from './dto';
+import { ChangeRuntimeDto, CreateServerDto, UpdateServerDto } from './dto';
 import { MkdirDto, RenameDto, WriteFileDto, FilesQuery, ArchiveDto, ExtractDto } from './files.dto';
 import { ServerOwnerGuard } from './server-owner.guard';
 import { ServersService } from './servers.service';
@@ -86,6 +86,19 @@ export class ServersController {
   @UseGuards(ServerOwnerGuard)
   restart(@Param('id', ParseUuidPipe) id: string, @CurrentUser() u: ReqUser, @Req() req: Request) {
     return this.svc.lifecycle(u.sub, id, 'restart', ctxOf(req));
+  }
+
+  /**
+   * Change the runtime (and language version). The image is always resolved
+   * by the backend from the allowlist; the volume and the user's files are
+   * untouched. The response lists what may break.
+   */
+  @Post(':id/runtime')
+  @HttpCode(202)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @UseGuards(ServerOwnerGuard)
+  changeRuntime(@Param('id', ParseUuidPipe) id: string, @Body() dto: ChangeRuntimeDto, @CurrentUser() u: ReqUser, @Req() req: Request) {
+    return this.svc.changeRuntime(u.sub, id, dto, ctxOf(req));
   }
 
   /**

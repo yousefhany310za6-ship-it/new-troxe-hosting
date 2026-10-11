@@ -58,6 +58,28 @@ export class CreateServerDto {
   autoBackupRetain?: number;
 }
 
+export class ChangeRuntimeDto {
+  /** must be one of the platform runtimes — the image is then chosen by the
+   *  backend from the allowlist, never taken from this request */
+  @IsIn(RUNTIMES as unknown as string[], { message: 'RUNTIME_UNSUPPORTED' })
+  runtime!: (typeof RUNTIMES)[number];
+
+  /** version selector, e.g. '22' — must exist for the runtime */
+  @IsOptional()
+  @IsString()
+  @MaxLength(16)
+  version?: string;
+
+  /**
+   * 'recommended' adopts the new runtime's startup command and drops its
+   * mechanical variables; 'keep' leaves the user's values untouched. Either
+   * way the response lists what would break, so nothing changes silently.
+   */
+  @IsOptional()
+  @IsIn(['recommended', 'keep'])
+  startupMode?: 'recommended' | 'keep';
+}
+
 export class UpdateServerDto {
   @IsOptional()
   @Matches(/^[a-z0-9-]{3,32}$/, { message: 'name must be 3-32 lowercase letters/digits/dashes' })
