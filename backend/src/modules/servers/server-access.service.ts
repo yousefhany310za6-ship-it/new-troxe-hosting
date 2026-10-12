@@ -3,7 +3,7 @@ import { and, eq } from 'drizzle-orm';
 import { AppError, Err } from '../../common/errors';
 import { DB, Db } from '../../db/db.module';
 import { serverUsers, servers, users, type Server } from '../../db/schema';
-import { normalizePermissions, type ServerPermission } from './server-access-policy';
+import { SERVER_PERMISSIONS, normalizePermissions, type ServerPermission } from './server-access-policy';
 
 export interface ServerAccess {
   row: Server;
@@ -57,6 +57,12 @@ export class ServerAccessService {
   async myGrant(serverId: string, userId: string): Promise<{ isOwner: boolean; permissions: string[] }> {
     const access = await this.resolve(serverId, userId).catch(() => null);
     if (!access) return { isOwner: false, permissions: [] };
-    return { isOwner: access.isOwner, permissions: access.permissions };
+    // Owners hold every permission implicitly — the UI checks permission KEYS
+    // (e.g. `permissions.includes('schedule.manage')`), so it must receive the
+    // full set for owners, or the owner loses management buttons in the UI.
+    return {
+      isOwner: access.isOwner,
+      permissions: access.isOwner ? [...SERVER_PERMISSIONS] : access.permissions,
+    };
   }
 }

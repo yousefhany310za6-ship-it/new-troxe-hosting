@@ -941,7 +941,7 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
             <div className="flex flex-col gap-2.5 border-b border-hairline px-3 py-2.5 sm:px-4">
                 <div className="flex items-center gap-1.5">
                     <button type="button" onClick={() => setTreeOpen(true)} aria-label="Browse folders" title="Browse folders" className={cn(btnIcon, 'border border-hairline lg:hidden')}>
-                        <FolderTree size={16} />
+                        <FolderTreeIcon size={16} />
                     </button>
                     <nav aria-label="Breadcrumb" className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto rounded-xl bg-veil/40 px-2 py-1 whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                         <button type="button" onClick={() => { setDir([]); setQuery(''); }} aria-label="Root directory" className="flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 font-mono text-[0.82rem] font-bold transition hover:bg-veil">

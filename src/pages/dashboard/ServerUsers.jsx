@@ -25,6 +25,24 @@ const PERMISSIONS = [
   { key: 'schedule.manage', title: 'Manage schedules', text: 'Create, edit, enable and delete scheduled tasks.' },
 ];
 
+/**
+ * The platform only shares with an account that already exists (a grant is a
+ * row between two real users, not an email invitation). The backend answers
+ * 404 for unknown emails — deliberately neutral, so this endpoint cannot be
+ * used to probe which addresses have accounts. The UI's job is to explain
+ * that honestly instead of showing a raw error code.
+ */
+const SHARE_ERRORS = {
+  USER_NOT_FOUND: 'No active Troxe account uses that email. They need to sign up first — then share with them here.',
+  ALREADY_OWNER: 'That account already owns this server.',
+  ADMIN_NO_GRANT: 'Administrators already have access to every server — no grant needed.',
+  ALREADY_SHARED: 'That account already has access to this server.',
+  QUOTA_SUBUSERS: 'This server is shared with 20 people already — the maximum.',
+  PERMISSION_DENIED: 'Only the owner can manage who has access.',
+};
+
+const friendly = (err) => SHARE_ERRORS[err?.code] ?? err?.message ?? 'Something went wrong.';
+
 function PermissionGrid({ value, onChange, disabled }) {
   const toggle = (key) => {
     onChange(value.includes(key) ? value.filter((k) => k !== key) : [...value, key]);
@@ -88,7 +106,7 @@ export default function ServerUsers({ server }) {
       setEmail('');
       setPerms(['server.view']);
     } catch (err) {
-      setFormError(err.message);
+      setFormError(friendly(err));
     }
   };
 
@@ -98,7 +116,7 @@ export default function ServerUsers({ server }) {
       await update.mutateAsync({ userId, permissions: editPerms });
       setEditing(null);
     } catch (err) {
-      setFormError(err.message);
+      setFormError(friendly(err));
     }
   };
 
@@ -112,6 +130,7 @@ export default function ServerUsers({ server }) {
         <p className="mt-1.5 max-w-2xl text-[0.82rem] leading-relaxed text-ink-secondary">
           They sign in with their own account and only get what you tick below. The really destructive actions —
           deleting the server, reinstalling it, changing its runtime and managing this list — always stay yours.
+          Sharing works with accounts that already exist on Troxe — so they need to sign up first.
         </p>
         <form onSubmit={submitAdd} className="mt-4 flex flex-col gap-3">
           <label className="block max-w-md">
@@ -239,7 +258,7 @@ export default function ServerUsers({ server }) {
             await remove.mutateAsync(confirmRemove.userId);
             setConfirmRemove(null);
           } catch (err) {
-            setFormError(err.message);
+            setFormError(friendly(err));
             setConfirmRemove(null);
           }
         }}
