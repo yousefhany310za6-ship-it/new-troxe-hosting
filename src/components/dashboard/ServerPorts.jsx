@@ -89,9 +89,14 @@ export default function ServerPorts({ server, adminMode = false }) {
             <div className="min-w-0">
               <p className="text-[0.78rem] font-semibold text-ink-secondary">Address</p>
               <p className="mt-1.5 font-mono text-[1.35rem] leading-none font-extrabold break-all text-foreground tabular-nums" dir="ltr">
-                {address.host}:{address.port}
+                <span className="text-ink-muted">http://</span>{address.host}:{address.port}
               </p>
               <p className="mt-2 text-[0.75rem] text-ink-muted">
+                Plain HTTP on a custom port — open it with <code className="font-mono">http://</code> explicitly, otherwise
+                browsers try <code className="font-mono">https://</code> and fail (there is no TLS certificate on custom
+                ports, same as any game-server panel).
+              </p>
+              <p className="mt-1.5 text-[0.75rem] text-ink-muted">
                 {address.protocol.toUpperCase()} · your app must listen on port{' '}
                 <span className="font-mono">{ports[0]?.containerPort ?? '—'}</span> inside the container
                 (e.g. <code className="font-mono">process.env.PORT</code>) — the platform maps it to this address
@@ -102,7 +107,7 @@ export default function ServerPorts({ server, adminMode = false }) {
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
-                onClick={() => copy(`${address.host}:${address.port}`, 'addr')}
+                onClick={() => copy(`http://${address.host}:${address.port}`, 'addr')}
                 className={cn(
                   'inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-[0.78rem] font-bold transition',
                   copied === 'addr'
