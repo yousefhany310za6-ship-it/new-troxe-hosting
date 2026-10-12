@@ -3,6 +3,8 @@ import {
     Archive,
     ArrowDownUp,
     ArrowLeft,
+    ChevronDown,
+    ChevronRight,
     ChevronUp,
     Eye,
     Loader2,
@@ -10,12 +12,13 @@ import {
     Minimize2,
     WrapText,
     Check,
-    ChevronRight,
     FilePlus,
     FileText,
     Folder,
     FolderPlus,
+    FolderTree as FolderTreeIcon,
     Grid2X2,
+    HardDrive,
     Home,
     LayoutList,
     List,
@@ -40,6 +43,7 @@ import {
     useDeleteFile,
     useExtractFiles,
     useFileContent,
+    useFolderChildren,
     useMkdir,
     useRenameFile,
     useServerFiles,
@@ -150,8 +154,7 @@ function notOpenableReason(entry) {
 }
 
 /** Kebab menu — the single entry point for every row action. */
-function RowMenu({ items, onSelect, disabled, align = 'right', trigger, label = 'Actions' }) {
-    const [open, setOpen] = useState(false);
+function RowMenu({ items, onSelect, disabled, align = 'right', trigger, label = 'Actions' }) {    const [open, setOpen] = useState(false);
     const [pos, setPos] = useState({ top: 0, left: 0 });
     const btnRef = useRef(null);
 
@@ -222,6 +225,118 @@ function RowMenu({ items, onSelect, disabled, align = 'right', trigger, label = 
     );
 }
 
+/**
+ * Sidebar folder tree. Each node fetches its children on first expand (or when
+ * the current path lives inside it, so the open folder is always visible).
+ * Clicking a node navigates the main pane to it.
+ */
+function TreeNode({ serverId, base, name, path, depth, dirPath, setDir, readOnly }) {
+    const [open, setOpen] = useState(() => dirPath === path || dirPath.startsWith(`${path}/`));
+    const { data, isFetching } = useFolderChildren(serverId, path, base, open);
+    const children = (data?.entries ?? []).filter((e) => e.type === 'dir');
+    const active = dirPath === path;
+
+    // keep the active branch open while navigating
+    useEffect(() => {
+        if (dirPath === path || dirPath.startsWith(`${path}/`)) setOpen(true);
+    }, [dirPath, path]);
+
+    return (
+        <li>
+            <div
+                className={cn(
+                    'group flex items-center gap-1 rounded-lg pr-1.5 transition',
+                    active ? 'bg-white/[0.09] text-foreground' : 'text-ink-secondary hover:bg-white/[0.05] hover:text-foreground',
+                )}
+                style={{ paddingLeft: `${depth * 10 + 4}px` }}
+            >
+                <button
+                    type="button"
+                    onClick={() => setOpen((o) => !o)}
+                    aria-label={open ? `Collapse ${name}` : `Expand ${name}`}
+                    aria-expanded={open}
+                    className="flex size-6 shrink-0 items-center justify-center rounded-md text-ink-muted transition hover:text-foreground"
+                >
+                    {isFetching ? <Loader2 size={12} className="animate-spin" /> : open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                </button>
+                <button
+                    type="button"
+                    onClick={() => setDir(path.split('/').filter(Boolean))}
+                    title={path}
+                    className="flex min-w-0 flex-1 items-center gap-2 py-1.5 text-left"
+                >
+                    <Folder size={14} className={cn('shrink-0', active ? 'text-foreground' : 'text-ink-muted')} />
+                    <span className="truncate text-[0.82rem] font-medium">{name}</span>
+                </button>
+            </div>
+            {open && children.length > 0 && (
+                <ul className="flex flex-col">
+                    {children.map((c) => (
+                        <TreeNode
+                            key={c.name}
+                            serverId={serverId}
+                            base={base}
+                            name={c.name}
+                            path={join([path, c.name])}
+                            depth={depth + 1}
+                            dirPath={dirPath}
+                            setDir={setDir}
+                            readOnly={readOnly}
+                        />
+                    ))}
+                </ul>
+            )}
+        </li>
+    );
+}
+
+function FolderTree({ serverId, base, dir, setDir, readOnly, onNavigate }) {
+    const { data, isFetching } = useFolderChildren(serverId, '', base, true);
+    const dirPath = join(dir);
+    const folders = (data?.entries ?? []).filter((e) => e.type === 'dir');
+
+    const go = (segs) => { setDir(segs); onNavigate?.(); };
+
+    return (
+        <nav aria-label="Folders" className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto py-1.5">
+            <button
+                type="button"
+                onClick={() => go([])}
+                className={cn(
+                    'flex items-center gap-2 rounded-lg px-2 py-1.5 text-[0.82rem] font-medium transition',
+                    dirPath === '' ? 'bg-white/[0.09] text-foreground' : 'text-ink-secondary hover:bg-white/[0.05] hover:text-foreground',
+                )}
+            >
+                <HardDrive size={14} className="shrink-0 text-ink-muted" />
+                Storage root
+            </button>
+            {isFetching && folders.length === 0 && (
+                <p className="flex items-center gap-2 px-2 py-1.5 text-[0.78rem] text-ink-muted">
+                    <Loader2 size={12} className="animate-spin" /> Loading…
+                </p>
+            )}
+            {!isFetching && folders.length === 0 && (
+                <p className="px-2 py-1.5 text-[0.76rem] text-ink-muted">No folders yet</p>
+            )}
+            <ul className="flex flex-col">
+                {folders.map((f) => (
+                    <TreeNode
+                        key={f.name}
+                        serverId={serverId}
+                        base={base}
+                        name={f.name}
+                        path={f.name}
+                        depth={0}
+                        dirPath={dirPath}
+                        setDir={go}
+                        readOnly={readOnly}
+                    />
+                ))}
+            </ul>
+        </nav>
+    );
+}
+
 export default function ServerFiles({ server, apiBase = '/servers', readOnly = false }) {
     const base = apiBase;
     const [dir, setDir] = useState([]);
@@ -245,7 +360,8 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
     const [query, setQuery] = useState('');
     const [sortBy, setSortBy] = useState('name');
     const [sortDir, setSortDir] = useState('asc');
-    const [view, setView] = useState(() => (typeof window !== 'undefined' && window.innerWidth < 640 ? 'grid' : 'list'));
+    const [view, setView] = useState(() => (typeof window !== 'undefined' && window.innerWidth < 640 ? 'tiles' : 'list'));
+    const [treeOpen, setTreeOpen] = useState(false);
     const [dragActive, setDragActive] = useState(false);
     const [queue, setQueue] = useState([]);
     const [download, setDownload] = useState(null);
@@ -339,7 +455,7 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
         const url = { current: null };
         setPreviewLoading(true);
         setPreviewError('');
-        apiDownload(`/servers/${server.id}/files/download?path=${encodeURIComponent(preview.rel)}`)
+        apiDownload(`${base}/${server.id}/files/download?path=${encodeURIComponent(preview.rel)}`)
             .then(({ blob }) => {
                 if (!alive) return;
                 url.current = URL.createObjectURL(blob);
@@ -768,19 +884,68 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
 
     return (
         <div
-            className="relative overflow-hidden rounded-2xl border border-hairline bg-card"
+            className="relative flex min-h-[70vh] overflow-hidden rounded-2xl border border-hairline bg-card"
             onDragEnter={(e) => { e.preventDefault(); dragDepth.current += 1; setDragActive(true); }}
             onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }}
             onDragLeave={() => { dragDepth.current = Math.max(0, dragDepth.current - 1); if (!dragDepth.current) setDragActive(false); }}
             onDrop={onDrop}
         >
             <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 z-10 h-px bg-gradient-to-r from-transparent via-white/30 to-transparent" />
-            {/* ============================ header ============================ */}
-            <div className="flex flex-col gap-3 border-b border-hairline px-4 py-3.5 sm:px-5">
-                <div className="flex items-center gap-2">
-                    <nav aria-label="Breadcrumb" className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto rounded-xl bg-veil/40 px-2 py-1 whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                        <button type="button" onClick={() => { setDir([]); setQuery(''); }} aria-label="Root directory" className="flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1.5 font-mono text-[0.85rem] font-bold transition hover:bg-veil">
-                            <Home size={15} className="text-ink-secondary" />
+
+            {/* ============================ sidebar: folder tree ============================ */}
+            <aside className="hidden w-60 shrink-0 flex-col border-r border-hairline bg-veil/25 lg:flex">
+                <div className="flex items-center gap-2 border-b border-hairline px-3.5 py-3">
+                    <FolderTreeIcon size={15} className="shrink-0 text-ink-muted" />
+                    <p className="text-[0.82rem] font-bold tracking-wide">Folders</p>
+                </div>
+                <FolderTree serverId={server.id} base={base} dir={dir} setDir={setDir} readOnly={readOnly} />
+                {!readOnly && (
+                    <div className="flex items-center gap-1.5 border-t border-hairline p-2.5">
+                        <button type="button" onClick={() => setSheet({ type: 'new-dir', value: '' })} disabled={busy} className={cn(btnSecondary, 'flex-1 justify-center')}>
+                            <FolderPlus size={15} /> New folder
+                        </button>
+                        <button type="button" onClick={() => uploadRef.current?.click()} disabled={busy || queue.some((q) => q.status === 'uploading')} aria-label="Upload files" title="Upload files" className={cn(btnIcon, 'border border-hairline')}>
+                            <Upload size={15} />
+                        </button>
+                    </div>
+                )}
+            </aside>
+
+            {/* mobile: tree as an overlay drawer */}
+            {treeOpen && (
+                <div className="fixed inset-0 z-[75] lg:hidden">
+                    <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setTreeOpen(false)} />
+                    <aside className="relative flex h-full w-72 max-w-[85vw] flex-col border-r border-hairline bg-card shadow-2xl">
+                        <div className="flex items-center gap-2 border-b border-hairline px-3.5 py-3">
+                            <FolderTreeIcon size={15} className="shrink-0 text-ink-muted" />
+                            <p className="flex-1 text-[0.82rem] font-bold tracking-wide">Folders</p>
+                            <button type="button" onClick={() => setTreeOpen(false)} aria-label="Close folder tree" className={btnIcon}>
+                                <X size={16} />
+                            </button>
+                        </div>
+                        <FolderTree serverId={server.id} base={base} dir={dir} setDir={setDir} readOnly={readOnly} onNavigate={() => setTreeOpen(false)} />
+                        {!readOnly && (
+                            <div className="border-t border-hairline p-2.5">
+                                <button type="button" onClick={() => { setSheet({ type: 'new-dir', value: '' }); setTreeOpen(false); }} className={cn(btnSecondary, 'w-full justify-center')}>
+                                    <FolderPlus size={15} /> New folder here
+                                </button>
+                            </div>
+                        )}
+                    </aside>
+                </div>
+            )}
+
+            {/* ============================ main pane ============================ */}
+            <div className="flex min-w-0 flex-1 flex-col">
+            {/* ============================ toolbar ============================ */}
+            <div className="flex flex-col gap-2.5 border-b border-hairline px-3 py-2.5 sm:px-4">
+                <div className="flex items-center gap-1.5">
+                    <button type="button" onClick={() => setTreeOpen(true)} aria-label="Browse folders" title="Browse folders" className={cn(btnIcon, 'border border-hairline lg:hidden')}>
+                        <FolderTree size={16} />
+                    </button>
+                    <nav aria-label="Breadcrumb" className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto rounded-xl bg-veil/40 px-2 py-1 whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                        <button type="button" onClick={() => { setDir([]); setQuery(''); }} aria-label="Root directory" className="flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 font-mono text-[0.82rem] font-bold transition hover:bg-veil">
+                            <Home size={14} className="text-ink-secondary" />
                             <span className="hidden sm:inline">root</span>
                         </button>
                         {dir.length > 0 && (
@@ -791,40 +956,35 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
                                 title="Go up one folder"
                                 className="flex shrink-0 items-center rounded-md p-1.5 text-ink-secondary transition hover:bg-veil hover:text-foreground"
                             >
-                                <ChevronUp size={15} />
+                                <ChevronUp size={14} />
                             </button>
                         )}
                         {dir.map((seg, i) => (
-                            <span key={i} className="flex shrink-0 items-center gap-1">
-                                <ChevronRight size={14} className="text-ink-muted" />
+                            <span key={i} className="flex shrink-0 items-center gap-0.5">
+                                <ChevronRight size={13} className="text-ink-muted" />
                                 <button
                                     type="button"
                                     onClick={() => { setDir(dir.slice(0, i + 1)); setQuery(''); }}
-                                    className="max-w-32 truncate rounded-md px-1.5 py-1 font-mono text-[0.85rem] text-ink-secondary transition hover:bg-veil hover:text-foreground"
+                                    className={cn(
+                                        'max-w-32 truncate rounded-md px-1.5 py-1 font-mono text-[0.82rem] transition hover:bg-veil',
+                                        i === dir.length - 1 ? 'font-bold text-foreground' : 'text-ink-secondary',
+                                    )}
                                 >
                                     {seg}
                                 </button>
                             </span>
                         ))}
                     </nav>
+                    {readOnly && (
+                        <span className="shrink-0 rounded-full border border-hairline bg-veil px-2.5 py-1 text-[0.68rem] font-semibold text-ink-secondary">Read-only</span>
+                    )}
                     <div className="flex shrink-0 items-center gap-1.5">
                         {!readOnly && <input ref={uploadRef} type="file" multiple className="hidden" onChange={onPick} />}
                         {!readOnly && (
-                        <button type="button" onClick={() => uploadRef.current?.click()} disabled={busy || queue.some((q) => q.status === 'uploading')} className={btnPrimary}>
-                            <Upload size={16} /> <span className="hidden sm:inline">Upload</span>
-                        </button>
+                            <button type="button" onClick={() => uploadRef.current?.click()} disabled={busy || queue.some((q) => q.status === 'uploading')} className={btnPrimary}>
+                                <Upload size={15} /> <span className="hidden sm:inline">Upload</span>
+                            </button>
                         )}
-                        {!readOnly && (
-                        <button type="button" onClick={() => setSheet({ type: 'new-dir', value: '' })} disabled={busy} className={btnSecondary}>
-                            <FolderPlus size={16} /> <span className="hidden sm:inline">New folder</span>
-                        </button>
-                        )}
-                        {readOnly && (
-                        <span className="rounded-full border border-hairline bg-veil px-2.5 py-1 text-[0.68rem] font-semibold text-ink-secondary">Read-only</span>
-                        )}
-                        <span className="hidden shrink-0 font-mono text-[0.68rem] text-ink-muted md:inline" title="Largest single file you can upload">
-                            max {fmtSize(UPLOAD_MAX)} per file
-                        </span>
                         <RowMenu
                             label="More file actions"
                             disabled={busy}
@@ -841,14 +1001,13 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
                     </div>
                 </div>
 
-                {/* search + sort + view */}
                 <div className="flex flex-wrap items-center gap-2">
-                    <div className="relative min-w-[180px] flex-1">
-                        <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ink-muted" />
+                    <div className="relative min-w-[170px] flex-1">
+                        <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ink-muted" />
                         <input
                             value={query}
                             onChange={(e) => setQuery(e.target.value)}
-                            placeholder="Search in this folder…" 
+                            placeholder="Search in this folder…"
                             aria-label="Search files in this folder"
                             className="input-field pl-9"
                         />
@@ -863,7 +1022,7 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
                         value={sortBy}
                         onChange={setSortBy}
                         options={SORTS}
-                        className="w-[130px]"
+                        className="w-[125px]"
                     />
                     <button
                         type="button"
@@ -881,26 +1040,290 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
                             aria-pressed={view === 'list'}
                             className={cn('rounded-full p-1.5 transition', view === 'list' ? 'bg-veil text-ink' : 'text-ink-muted hover:text-ink')}
                         >
-                            <LayoutList size={16} />
+                            <LayoutList size={15} />
                         </button>
                         <button
                             type="button"
-                            onClick={() => setView('grid')}
-                            aria-label="Grid view"
-                            aria-pressed={view === 'grid'}
-                            className={cn('rounded-full p-1.5 transition', view === 'grid' ? 'bg-veil text-ink' : 'text-ink-muted hover:text-ink')}
+                            onClick={() => setView('tiles')}
+                            aria-label="Tile view"
+                            aria-pressed={view === 'tiles'}
+                            className={cn('rounded-full p-1.5 transition', view === 'tiles' ? 'bg-veil text-ink' : 'text-ink-muted hover:text-ink')}
                         >
-                            <Grid2X2 size={16} />
+                            <Grid2X2 size={15} />
                         </button>
                     </div>
                 </div>
             </div>
 
-            {/* ============================ transfers ============================ */}
+            {/* ============================ content ============================ */}
+            <div className="min-h-0 flex-1 overflow-y-auto">
+                {isLoading && (
+                    <div className="flex flex-col gap-2 p-3 sm:p-4" aria-busy="true">
+                        {Array.from({ length: 6 }).map((_, i) => (
+                            <div key={i} className="flex items-center gap-3 rounded-xl border border-hairline/60 p-3">
+                                <Skeleton className="size-10 rounded-xl" />
+                                <div className="flex flex-1 flex-col gap-2">
+                                    <Skeleton className="h-3 w-2/5" />
+                                    <Skeleton className="h-2.5 w-1/6" />
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                )}
+
+                {!isLoading && error && (
+                    <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-red-500/40 px-4 py-12 text-center">
+                        <p className="text-[0.95rem] font-semibold text-red-400">Unable to load files</p>
+                        <p className="max-w-sm text-[0.82rem] text-ink-secondary">{error.message}</p>
+                        <button type="button" onClick={() => refetch()} className={btnPrimary}>
+                            <RotateCcw size={15} /> Retry
+                        </button>
+                    </div>
+                )}
+
+                {!isLoading && !error && !hasEntries && (
+                    <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-hairline px-4 py-14 text-center">
+                        <Folder size={34} className="text-ink-muted" />
+                        <p className="text-[0.95rem] font-semibold">This folder is empty</p>
+                        <p className="max-w-xs text-[0.84rem] text-ink-secondary">
+                            {readOnly ? 'Nothing has been uploaded here yet.' : 'Upload files or create a new folder to get started.'}
+                        </p>
+                        {!readOnly && (
+                            <div className="mt-1 flex flex-wrap items-center justify-center gap-2">
+                                <button type="button" onClick={() => uploadRef.current?.click()} className={btnPrimary}>
+                                    <Upload size={15} /> Upload files
+                                </button>
+                                <button type="button" onClick={() => setSheet({ type: 'new-dir', value: '' })} className={btnSecondary}>
+                                    <FolderPlus size={15} /> New folder
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {!isLoading && !error && hasEntries && filterActive && entries.length === 0 && (
+                    <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-hairline px-4 py-12 text-center">
+                        <Search size={28} className="text-ink-muted" />
+                        <p className="text-[0.92rem] font-semibold">No matches for “{query.trim()}”</p>
+                        <button type="button" onClick={() => setQuery('')} className={btnSecondary}>Clear search</button>
+                    </div>
+                )}
+
+                {!isLoading && !error && entries.length > 0 && view === 'tiles' && (
+                    <div className="grid grid-cols-2 gap-2.5 p-3 sm:grid-cols-3 sm:p-4 xl:grid-cols-4">
+                        {entries.map((entry) => {
+                            const isDir = entry.type === 'dir';
+                            const isArch = entry.type === 'file' && ARCHIVE_RE.test(entry.name);
+                            const icon = !isDir ? fileIcon(entry.name, entry.type) : null;
+                            const checked = selected.includes(entry.name);
+                            const kind = tileKind(entry);
+                            return (
+                                <div
+                                    key={entry.name}
+                                    {...pressHandlers(entry.name)}
+                                    onClick={() => {
+                                        if (wasLongPress()) return;
+                                        if (selectOn) { toggleSelect(entry.name); return; }
+                                        if (isDir) openEntry(entry);
+                                    }}
+                                    title={entry.name}
+                                    className={cn(
+                                        'group relative flex flex-col rounded-2xl border p-3.5 pt-2.5 transition duration-200 select-none hover:-translate-y-0.5',
+                                        checked ? 'border-blue-400/50 bg-blue-500/10 shadow-[0_16px_40px_-18px_rgba(96,165,250,0.4)]' : 'border-hairline/60 bg-white/[0.02] hover:border-hairline-hover hover:bg-white/[0.05] hover:shadow-[0_16px_40px_-18px_rgba(255,255,255,0.2)]',
+                                        (isDir || selectOn) && 'cursor-pointer',
+                                    )}
+                                >
+                                    <div className="flex items-center justify-between">
+                                        <input
+                                            type="checkbox"
+                                            checked={checked}
+                                            onChange={() => toggleSelect(entry.name)}
+                                            onClick={(e) => e.stopPropagation()}
+                                            aria-label={`Select ${entry.name}`}
+                                            className={cn(
+                                                'size-4 cursor-pointer accent-white transition-opacity',
+                                                selectOn || checked ? 'opacity-100' : 'opacity-0 focus-visible:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100',
+                                            )}
+                                        />
+                                        <span onClick={(e) => e.stopPropagation()} className={cn(!(selectOn || checked) && 'opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100')}>
+                                            <RowMenu
+                                                label={`Actions for ${entry.name}`}
+                                                items={rowMenuItems(entry, isDir, isArch)}
+                                                onSelect={(k) => onMenu(k, entry)}
+                                                disabled={busy}
+                                            />
+                                        </span>
+                                    </div>
+                                    <button type="button" onClick={(e) => { e.stopPropagation(); if (wasLongPress()) return; if (selectOn) { toggleSelect(entry.name); return; } openEntry(entry); }} className="flex min-w-0 flex-1 flex-col items-center gap-2 pt-1 text-center">
+                                        <span className={cn('flex size-14 items-center justify-center rounded-2xl', KIND_TILE[kind])}>
+                                            {isDir ? <Folder size={26} /> : icon ? <img src={icon} alt="" aria-hidden="true" className="size-7" draggable={false} /> : <FileText size={22} />}
+                                        </span>
+                                        <span className="w-full truncate text-[0.82rem] font-semibold">{entry.name}</span>
+                                        <span className="font-mono text-[0.68rem] text-ink-muted">{isDir ? 'Folder' : fmtSize(entry.size)}</span>
+                                    </button>
+                                </div>
+                            );
+                        })}
+                    </div>
+                )}
+
+                {!isLoading && !error && entries.length > 0 && view === 'list' && (
+                    <div className="flex flex-col p-3 sm:p-4">
+                        {[
+                            ['Folders', entries.filter((e) => e.type === 'dir')],
+                            ['Files', entries.filter((e) => e.type !== 'dir')],
+                        ]
+                            .filter(([, rows]) => rows.length > 0)
+                            .map(([label, rows]) => (
+                                <section key={label} className="mb-4 last:mb-0">
+                                    <div className="mb-1.5 flex items-center gap-2 px-1">
+                                        {label === 'Folders' ? <Folder size={13} className="text-ink-muted" /> : <FileText size={13} className="text-ink-muted" />}
+                                        <p className="text-[0.7rem] font-bold tracking-[0.14em] text-ink-muted uppercase">{label}</p>
+                                        <span className="font-mono text-[0.68rem] text-ink-muted tabular-nums">{rows.length}</span>
+                                    </div>
+                                    <div className="overflow-hidden rounded-xl border border-hairline">
+                                        {/* column headers */}
+                                        <div className="hidden items-center gap-3 border-b border-hairline bg-veil/30 px-3 py-1.5 sm:flex">
+                                            <span className="w-[18px] shrink-0" />
+                                            <span className="flex-1 text-[0.66rem] font-bold tracking-wide text-ink-muted uppercase">Name</span>
+                                            <span className="w-20 shrink-0 text-right text-[0.66rem] font-bold tracking-wide text-ink-muted uppercase">Size</span>
+                                            <span className="hidden w-32 shrink-0 text-right text-[0.66rem] font-bold tracking-wide text-ink-muted uppercase sm:block">Modified</span>
+                                            <span className="w-8 shrink-0" />
+                                        </div>
+                                        {rows.map((entry) => {
+                                            const isDir = entry.type === 'dir';
+                                            const isArch = entry.type === 'file' && ARCHIVE_RE.test(entry.name);
+                                            const icon = !isDir ? fileIcon(entry.name, entry.type) : null;
+                                            const checked = selected.includes(entry.name);
+                                            const kind = tileKind(entry);
+                                            const canPreview = !isDir && previewable(entry);
+                                            return (
+                                                <div
+                                                    key={entry.name}
+                                                    {...pressHandlers(entry.name)}
+                                                    onClick={() => {
+                                                        if (wasLongPress()) return;
+                                                        if (selectOn) { toggleSelect(entry.name); return; }
+                                                        if (isDir) openEntry(entry);
+                                                    }}
+                                                    className={cn(
+                                                        'group flex items-center gap-3 border-b border-hairline/60 px-3 py-2 transition duration-150 select-none last:border-b-0',
+                                                        checked ? 'bg-blue-500/10' : 'hover:bg-white/[0.05]',
+                                                        (isDir || selectOn) && 'cursor-pointer',
+                                                    )}
+                                                >
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={checked}
+                                                        onChange={() => toggleSelect(entry.name)}
+                                                        onClick={(e) => e.stopPropagation()}
+                                                        aria-label={`Select ${entry.name}`}
+                                                        className={cn(
+                                                            'size-[18px] shrink-0 cursor-pointer accent-white transition-opacity',
+                                                            selectOn || checked ? 'opacity-100' : 'opacity-0 focus-visible:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100',
+                                                        )}
+                                                    />
+                                                    <button
+                                                        type="button"
+                                                        onClick={(e) => { e.stopPropagation(); if (wasLongPress()) return; if (selectOn) { toggleSelect(entry.name); return; } openEntry(entry); }}
+                                                        onDoubleClick={() => openEntry(entry)}
+                                                        title={isDir ? 'Open folder' : canPreview ? 'Preview file' : 'Open file'}
+                                                        className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                                                    >
+                                                        <span className={cn('flex size-9 shrink-0 items-center justify-center rounded-lg', KIND_TILE[kind])}>
+                                                            {isDir ? <Folder size={18} /> : icon ? <img src={icon} alt="" aria-hidden="true" className="size-5" draggable={false} /> : <FileText size={17} />}
+                                                        </span>
+                                                        <span className="min-w-0 flex-1">
+                                                            <span className="block truncate text-[0.88rem] font-medium">{entry.name}</span>
+                                                            <span className="mt-0.5 block truncate font-mono text-[0.66rem] text-ink-muted sm:hidden">
+                                                                {isDir ? 'Folder' : (<>{fmtSize(entry.size)} <span className="mx-1 text-hairline">·</span> {fmtDate(entry.mtime)}</>)}
+                                                            </span>
+                                                        </span>
+                                                    </button>
+                                                    <span className="w-20 shrink-0 text-right font-mono text-[0.74rem] text-ink-secondary tabular-nums">
+                                                        {isDir ? <span className="text-ink-muted">—</span> : fmtSize(entry.size)}
+                                                    </span>
+                                                    <span className="hidden w-32 shrink-0 text-right font-mono text-[0.7rem] text-ink-muted sm:block">
+                                                        {fmtDate(entry.mtime)}
+                                                    </span>
+                                                    {canPreview && !selectOn && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={(e) => { e.stopPropagation(); const rel = relOf(entry.name); setPreview({ rel, name: entry.name, kind: previewKind(entry.name), size: entry.size }); }}
+                                                            aria-label={`Preview ${entry.name}`}
+                                                            title="Preview"
+                                                            className="hidden size-8 shrink-0 items-center justify-center rounded-lg text-ink-muted opacity-0 transition group-hover:opacity-100 hover:bg-white/10 hover:text-foreground focus-visible:opacity-100 sm:inline-flex"
+                                                        >
+                                                            <Eye size={15} />
+                                                        </button>
+                                                    )}
+                                                    <span onClick={(e) => e.stopPropagation()} className={cn('w-8 shrink-0', !(selectOn || checked) && 'opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100')}>
+                                                        <RowMenu
+                                                            label={`Actions for ${entry.name}`}
+                                                            items={rowMenuItems(entry, isDir, isArch)}
+                                                            onSelect={(k) => onMenu(k, entry)}
+                                                            disabled={busy || !!download}
+                                                        />
+                                                    </span>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </section>
+                            ))}
+                    </div>
+                )}
+            </div>
+
+            {/* ============================ bottom dock: selection / status ============================ */}
+            {!readOnly && !isLoading && !error && hasEntries && (
+                <div className="flex flex-wrap items-center gap-2 border-t border-hairline bg-veil/25 px-4 py-2.5">
+                    {selectOn ? (
+                        <>
+                            <input
+                                type="checkbox"
+                                checked={allChecked}
+                                onChange={() => setSelected(allChecked ? [] : entries.map((e) => e.name))}
+                                aria-label="Select all in this folder"
+                                className="size-5 shrink-0 cursor-pointer accent-white"
+                            />
+                            <span className="font-mono text-[0.75rem] text-ink-secondary">{selected.length} selected</span>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                                <button type="button" onClick={() => setSheet({ type: 'archive-many', names: [...selected], value: `${selected.length === 1 ? selected[0] : (dir[dir.length - 1] ?? server.name)}.tar.gz` })} disabled={busy} className={btnSecondary}>
+                                    <Archive size={15} /> <span className="hidden sm:inline">Archive</span>
+                                </button>
+                                <button type="button" onClick={() => setSheet({ type: 'move-many', names: [...selected], value: dirPath })} disabled={busy} className={btnSecondary}>
+                                    <FolderPlus size={15} /> <span className="hidden sm:inline">Move</span>
+                                </button>
+                                <button type="button" onClick={() => setSheet({ type: 'delete-many', names: [...selected], value: '' })} disabled={busy} className={btnSecondary}>
+                                    <Trash2 size={15} /> <span className="hidden sm:inline">Delete</span>
+                                </button>
+                                <button type="button" onClick={exitSelect} className="font-mono text-[0.75rem] text-ink-secondary hover:text-foreground">Cancel</button>
+                            </div>
+                        </>
+                    ) : (
+                        <span className="font-mono text-[0.72rem] text-ink-muted">
+                            {dirStats.count} item{dirStats.count === 1 ? '' : 's'} ({dirStats.dirs} folders · {dirStats.files} files) · {fmtSize(dirStats.bytes)}
+                        </span>
+                    )}
+                    <button
+                        type="button"
+                        onClick={() => refetch()}
+                        disabled={isFetching}
+                        aria-label="Refresh file list"
+                        className={cn(btnIcon, 'ml-auto')}
+                    >
+                        <RefreshCw size={16} className={cn(isFetching && 'animate-spin')} />
+                    </button>
+                </div>
+            )}
+
+            {/* ============================ transfers dock ============================ */}
             {(queue.length > 0 || download) && (
-                <div className="flex flex-col gap-2 border-b border-hairline bg-veil/40 px-4 py-3">
-                    <p className="text-[0.75rem] font-bold uppercase tracking-wide text-ink-muted">
-                        {queue.length ? `Uploading ${queue.length} file${queue.length === 1 ? '' : 's'}…` : `Downloading ${download?.name}…`}
+                <div className="flex flex-col gap-2 border-t border-hairline bg-card px-4 py-3">
+                    <p className="flex items-center gap-2 text-[0.72rem] font-bold tracking-[0.12em] text-ink-muted uppercase">
+                        <Upload size={12} />
+                        {queue.length ? `Uploading ${queue.length} file${queue.length === 1 ? '' : 's'}` : `Downloading ${download?.name ?? 'file'}`}
                     </p>
                     {queue.map((it) => (
                         <div key={it.id} className="flex flex-col gap-1.5">
@@ -939,241 +1362,13 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
                     )}
                 </div>
             )}
-
-            {/* ============================ content ============================ */}
-            <div className="p-3 sm:p-4">
-                {isLoading && (
-                    <div className="flex flex-col gap-2" aria-busy="true">
-                        {Array.from({ length: 6 }).map((_, i) => (
-                            <div key={i} className="flex items-center gap-3 rounded-xl border border-hairline/60 p-3">
-                                <Skeleton className="size-11 rounded-xl" />
-                                <div className="flex flex-1 flex-col gap-2">
-                                    <Skeleton className="h-3 w-2/5" />
-                                    <Skeleton className="h-2.5 w-1/6" />
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                )}
-
-                {!isLoading && error && (
-                    <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-red-500/40 px-4 py-12 text-center">
-                        <p className="text-[0.95rem] font-semibold text-red-400">Unable to load files</p>
-                        <p className="max-w-sm text-[0.82rem] text-ink-secondary">{error.message}</p>
-                        <button type="button" onClick={() => refetch()} className={btnPrimary}>
-                            <RotateCcw size={15} /> Retry
-                        </button>
-                    </div>
-                )}
-
-                {!isLoading && !error && !hasEntries && (
-                    <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-hairline px-4 py-14 text-center">
-                        <Folder size={34} className="text-ink-muted" />
-                        <p className="text-[0.95rem] font-semibold">No files here</p>
-                        <p className="max-w-xs text-[0.84rem] text-ink-secondary">Upload files or create a new folder to get started.</p>
-                        {!readOnly && (
-                        <div className="mt-1 flex flex-wrap items-center justify-center gap-2">
-                            <button type="button" onClick={() => uploadRef.current?.click()} className={btnPrimary}>
-                                <Upload size={15} /> Upload files
-                            </button>
-                            <button type="button" onClick={() => setSheet({ type: 'new-dir', value: '' })} className={btnSecondary}>
-                                <FolderPlus size={15} /> New folder
-                            </button>
-                        </div>
-                        )}
-                    </div>
-                )}
-
-                {!isLoading && !error && hasEntries && filterActive && entries.length === 0 && (
-                    <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-hairline px-4 py-12 text-center">
-                        <Search size={28} className="text-ink-muted" />
-                        <p className="text-[0.92rem] font-semibold">No matches for “{query.trim()}”</p>
-                        <button type="button" onClick={() => setQuery('')} className={btnSecondary}>Clear search</button>
-                    </div>
-                )}
-
-                {!isLoading && !error && entries.length > 0 && (
-                    view === 'grid' ? (
-                        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4">
-                            {entries.map((entry) => {
-                                const isDir = entry.type === 'dir';
-                                const isArch = entry.type === 'file' && ARCHIVE_RE.test(entry.name);
-                                const icon = !isDir ? fileIcon(entry.name, entry.type) : null;
-                                const checked = selected.includes(entry.name);
-                                const kind = tileKind(entry);
-                                return (
-                                    <div
-                                        key={entry.name}
-                                        {...pressHandlers(entry.name)}
-                                        onClick={() => {
-                                            if (wasLongPress()) return;
-                                            if (selectOn) { toggleSelect(entry.name); return; }
-                                            if (isDir) openEntry(entry);
-                                        }}
-                                        title={entry.name}
-                                        className={cn(
-                                            'group relative flex flex-col rounded-2xl border p-3.5 pt-2.5 transition duration-200 select-none hover:-translate-y-0.5',
-                                            checked ? 'border-blue-400/50 bg-blue-500/10 shadow-[0_16px_40px_-18px_rgba(96,165,250,0.4)]' : 'border-hairline/60 bg-white/[0.02] hover:border-hairline-hover hover:bg-white/[0.05] hover:shadow-[0_16px_40px_-18px_rgba(255,255,255,0.2)]',
-                                            (isDir || selectOn) && 'cursor-pointer',
-                                        )}
-                                    >
-                                        <div className="flex items-center justify-between">
-                                            <input
-                                                type="checkbox"
-                                                checked={checked}
-                                                onChange={() => toggleSelect(entry.name)}
-                                                onClick={(e) => e.stopPropagation()}
-                                                aria-label={`Select ${entry.name}`}
-                                                className={cn(
-                                                    'size-4 cursor-pointer accent-white transition-opacity',
-                                                    selectOn || checked ? 'opacity-100' : 'opacity-0 focus-visible:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100',
-                                                )}
-                                            />
-                                            <span onClick={(e) => e.stopPropagation()} className={cn(!(selectOn || checked) && 'opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100')}>
-                                                <RowMenu
-                                                    label={`Actions for ${entry.name}`}
-                                                    items={rowMenuItems(entry, isDir, isArch)}
-                                                    onSelect={(k) => onMenu(k, entry)}
-                                                    disabled={busy}
-                                                />
-                                            </span>
-                                        </div>
-                                        <button type="button" onClick={(e) => { e.stopPropagation(); if (wasLongPress()) return; if (selectOn) { toggleSelect(entry.name); return; } openEntry(entry); }} className="flex min-w-0 flex-1 flex-col items-center gap-2 pt-1 text-center">
-                                            <span className={cn('flex size-14 items-center justify-center rounded-2xl', KIND_TILE[kind])}>
-                                                {isDir ? <Folder size={26} /> : icon ? <img src={icon} alt="" aria-hidden="true" className="size-7" draggable={false} /> : <FileText size={22} />}
-                                            </span>
-                                            <span className="w-full truncate text-[0.82rem] font-semibold">{entry.name}</span>
-                                            <span className="font-mono text-[0.68rem] text-ink-muted">{isDir ? 'Folder' : fmtSize(entry.size)}</span>
-                                        </button>
-                                    </div>
-                                );
-                            })}
-                        </div>
-                                        ) : (
-                        <div className="flex flex-col gap-1">
-                            {entries.map((entry) => {
-                                const isDir = entry.type === 'dir';
-                                const isArch = entry.type === 'file' && ARCHIVE_RE.test(entry.name);
-                                const icon = !isDir ? fileIcon(entry.name, entry.type) : null;
-                                const checked = selected.includes(entry.name);
-                                const kind = tileKind(entry);
-                                const canPreview = !isDir && previewable(entry);
-                                return (
-                                    <div
-                                        key={entry.name}
-                                        {...pressHandlers(entry.name)}
-                                        onClick={() => {
-                                            if (wasLongPress()) return;
-                                            if (selectOn) { toggleSelect(entry.name); return; }
-                                            if (isDir) openEntry(entry);
-                                        }}
-                                        className={cn(
-                                            'group flex items-center gap-3 rounded-xl border border-transparent px-2.5 py-2 transition duration-150 select-none',
-                                            checked ? 'border-blue-400/50 bg-blue-500/10' : 'hover:border-hairline hover:bg-white/[0.05]',
-                                            (isDir || selectOn) && 'cursor-pointer',
-                                        )}
-                                    >
-                                        <input
-                                            type="checkbox"
-                                            checked={checked}
-                                            onChange={() => toggleSelect(entry.name)}
-                                            onClick={(e) => e.stopPropagation()}
-                                            aria-label={`Select ${entry.name}`}
-                                            className={cn(
-                                                'size-[18px] shrink-0 cursor-pointer accent-white transition-opacity',
-                                                selectOn || checked ? 'opacity-100' : 'opacity-0 focus-visible:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100',
-                                            )}
-                                        />
-                                        <button
-                                            type="button"
-                                            onClick={(e) => { e.stopPropagation(); if (wasLongPress()) return; if (selectOn) { toggleSelect(entry.name); return; } openEntry(entry); }}
-                                            onDoubleClick={() => openEntry(entry)}
-                                            title={isDir ? 'Open folder' : canPreview ? 'Preview file' : 'Open file'}
-                                            className="flex min-w-0 flex-1 items-center gap-3 text-left"
-                                        >
-                                            <span className={cn('flex size-9 shrink-0 items-center justify-center rounded-lg', KIND_TILE[kind])}>
-                                                {isDir ? <Folder size={18} /> : icon ? <img src={icon} alt="" aria-hidden="true" className="size-5" draggable={false} /> : <FileText size={17} />}
-                                            </span>
-                                            <span className="min-w-0 flex-1">
-                                                <span className="block truncate text-[0.88rem] font-medium">{entry.name}</span>
-                                                <span className="mt-0.5 block truncate font-mono text-[0.68rem] text-ink-muted">
-                                                    {isDir ? 'Folder' : (<>{fmtSize(entry.size)} <span className="mx-1 text-hairline">·</span> {fmtDate(entry.mtime)}</>)}
-                                                </span>
-                                            </span>
-                                        </button>
-                                        {canPreview && !selectOn && (
-                                            <button
-                                                type="button"
-                                                onClick={(e) => { e.stopPropagation(); const rel = relOf(entry.name); setPreview({ rel, name: entry.name, kind: previewKind(entry.name), size: entry.size }); }}
-                                                aria-label={`Preview ${entry.name}`}
-                                                title="Preview"
-                                                className="hidden size-8 shrink-0 items-center justify-center rounded-lg text-ink-muted opacity-0 transition group-hover:opacity-100 hover:bg-white/10 hover:text-foreground focus-visible:opacity-100 sm:inline-flex"
-                                            >
-                                                <Eye size={15} />
-                                            </button>
-                                        )}
-                                        <span onClick={(e) => e.stopPropagation()} className={cn('shrink-0', !(selectOn || checked) && 'opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100')}>
-                                            <RowMenu
-                                                label={`Actions for ${entry.name}`}
-                                                items={rowMenuItems(entry, isDir, isArch)}
-                                                onSelect={(k) => onMenu(k, entry)}
-                                                disabled={busy || !!download}
-                                            />
-                                        </span>
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    )
-                )}
             </div>
 
-            {/* ============================ footer / bulk bar ============================ */}
-            {!readOnly && !isLoading && !error && hasEntries && (
-                <div className="flex flex-wrap items-center gap-2 border-t border-hairline px-4 py-2.5">
-                    {selectOn ? (
-                        <>
-                            <input
-                                type="checkbox"
-                                checked={allChecked}
-                                onChange={() => setSelected(allChecked ? [] : entries.map((e) => e.name))}
-                                aria-label="Select all in this folder"
-                                className="size-5 shrink-0 cursor-pointer accent-white"
-                            />
-                            <span className="font-mono text-[0.75rem] text-ink-secondary">{selected.length} selected</span>
-                            <button type="button" onClick={() => setSheet({ type: 'archive-many', names: [...selected], value: `${selected.length === 1 ? selected[0] : (dir[dir.length - 1] ?? server.name)}.tar.gz` })} disabled={busy} className={btnSecondary}>
-                                <Archive size={15} /> Archive
-                            </button>
-                            <button type="button" onClick={() => setSheet({ type: 'move-many', names: [...selected], value: dirPath })} disabled={busy} className={btnSecondary}>
-                                <FolderPlus size={15} /> Move
-                            </button>
-                            <button type="button" onClick={() => setSheet({ type: 'delete-many', names: [...selected], value: '' })} disabled={busy} className={btnSecondary}>
-                                <Trash2 size={15} /> Delete
-                            </button>
-                            <button type="button" onClick={exitSelect} className="font-mono text-[0.75rem] text-ink-secondary hover:text-foreground">Cancel</button>
-                        </>
-                    ) : (
-                        <span className="font-mono text-[0.72rem] text-ink-muted">
-                            {dirStats.count} item{dirStats.count === 1 ? '' : 's'} ({dirStats.dirs} folders · {dirStats.files} files) · {fmtSize(dirStats.bytes)}
-                        </span>
-                    )}
-                    <button
-                        type="button"
-                        onClick={() => refetch()}
-                        disabled={isFetching}
-                        aria-label="Refresh file list"
-                        className={cn(btnIcon, "ml-auto")}
-                    >
-                        <RefreshCw size={16} className={cn(isFetching && 'animate-spin')} />
-                    </button>
-                </div>
-            )}
-
-            {/* ============================ preview ============================ */}
+            {/* ============================ preview drawer ============================ */}
             {preview && (
-                <div className="fixed inset-0 z-[80] flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label={`Preview ${preview.name}`}>
-                    <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={() => setPreview(null)} />
-                    <div className="relative flex max-h-[90dvh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-hairline bg-card shadow-2xl">
+                <div className="fixed inset-0 z-[80] flex justify-end" role="dialog" aria-modal="true" aria-label={`Preview ${preview.name}`}>
+                    <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setPreview(null)} />
+                    <div className="relative flex h-full w-full max-w-xl flex-col border-l border-hairline bg-card shadow-2xl">
                         <div className="flex items-center gap-2.5 border-b border-hairline px-4 py-3">
                             <span className={cn('flex size-8 shrink-0 items-center justify-center rounded-lg', KIND_TILE[tileKind({ type: 'file', name: preview.name })])}>
                                 <FileText size={16} />
@@ -1201,7 +1396,7 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
                                 <X size={16} />
                             </button>
                         </div>
-                        <div className="flex min-h-[200px] items-center justify-center overflow-auto bg-black/40 p-4">
+                        <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-black/40 p-4">
                             {previewLoading && <Loader2 size={28} className="animate-spin text-ink-muted" />}
                             {!previewLoading && previewError && (
                                 <div className="flex flex-col items-center gap-2 py-10 text-center">
@@ -1210,10 +1405,10 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
                                 </div>
                             )}
                             {!previewLoading && !previewError && previewUrl && preview.kind === 'image' && (
-                                <img src={previewUrl} alt={preview.name} className="max-h-[65dvh] max-w-full rounded-lg object-contain" draggable={false} />
+                                <img src={previewUrl} alt={preview.name} className="max-h-[70dvh] max-w-full rounded-lg object-contain" draggable={false} />
                             )}
                             {!previewLoading && !previewError && previewUrl && preview.kind === 'video' && (
-                                <video src={previewUrl} controls playsInline className="max-h-[65dvh] w-full rounded-lg bg-black" />
+                                <video src={previewUrl} controls playsInline className="max-h-[70dvh] w-full rounded-lg bg-black" />
                             )}
                             {!previewLoading && !previewError && previewUrl && preview.kind === 'audio' && (
                                 <div className="flex w-full flex-col items-center gap-4 py-8">
@@ -1224,7 +1419,7 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
                                 </div>
                             )}
                             {!previewLoading && !previewError && previewUrl && preview.kind === 'pdf' && (
-                                <iframe src={previewUrl} title={preview.name} className="h-[65dvh] w-full rounded-lg bg-white" />
+                                <iframe src={previewUrl} title={preview.name} className="h-[70dvh] w-full rounded-lg bg-white" />
                             )}
                         </div>
                     </div>

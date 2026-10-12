@@ -242,7 +242,22 @@ export function useRuntimeCatalog() {
 }
 
 // Files
-const fkey = (id, path) => ['servers', id, 'files', path || ''];export function useServerFiles(id, path, base = '/servers') {
+const fkey = (id, path) => ['servers', id, 'files', path || ''];/**
+ * Children of one folder, fetched lazily — powers the sidebar tree, where a
+ * deep folder must not cost a request until it is expanded. Same cache key
+ * shape as useServerFiles so an expanded folder never refetches what the main
+ * pane already loaded.
+ */
+export function useFolderChildren(id, path, base = '/servers', enabled = true) {
+  return useQuery({
+    queryKey: fkey(id, path),
+    queryFn: () => apiGet(`${base}/${id}/files?path=${encodeURIComponent(path || '')}`),
+    enabled: !!id && enabled,
+    staleTime: 30_000,
+  });
+}
+
+export function useServerFiles(id, path, base = '/servers') {
   return useQuery({
     queryKey: fkey(id, path),
     queryFn: () => apiGet(`${base}/${id}/files?path=${encodeURIComponent(path || '')}`),
