@@ -9,8 +9,20 @@ import {
 } from '../../src/modules/servers/provisioning/images.ts';
 
 describe('runtime image allowlist', () => {
-  it('exposes the four supported runtimes only', () => {
-    assert.deepEqual([...RUNTIMES].sort(), ['Bun', 'Node.js', 'PHP', 'Python']);
+  it('exposes the original four runtimes plus the added language runtimes', () => {
+    // The four the platform always had (so existing rows keep resolving), plus
+    // the runtimes added for the catalog. Every one must stay digest-pinned.
+    assert.deepEqual(
+      [...RUNTIMES].sort(),
+      ['.NET', 'Bun', 'Deno', 'Go', 'Java', 'Node.js', 'PHP', 'Python', 'Ruby', 'Rust'],
+    );
+  });
+
+  it('gives every runtime at least two selectable versions', () => {
+    for (const r of RUNTIMES) {
+      const img = runtimeImage(r);
+      assert.ok(img.versions.length >= 2, `${r} offers only ${img.versions.length} version(s)`);
+    }
   });
 
   it('pins the Node images to the glibc (Debian slim) variants', () => {

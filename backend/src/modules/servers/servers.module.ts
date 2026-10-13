@@ -18,14 +18,27 @@ import { DockerService } from './provisioning/docker.service';
 import { NetworkHardeningService } from './provisioning/network-hardening.service';
 import { ProvisionerService } from './provisioning/provisioner.service';
 import { ReconcilerService } from './reconciler.service';
+import { RenewalService } from './renewal.service';
+import { RenewalController, ExpiryRunnerService } from './renewal.controller';
+import { WorkinkService } from './workink.service';
 import { ServerOwnerGuard } from './server-owner.guard';
 import { ServersController } from './servers.controller';
 import { ServersService } from './servers.service';
 import { StatsStreamService } from './stats-stream.service';
+import { TemplatesService } from './templates/templates.service';
+import { AdminTemplatesController } from './templates/admin-templates.controller';
 
 @Module({
   imports: [AuthModule, NodesModule],
-  controllers: [ServersController, PortsController, PackagesController, ServerCollabController],
+  controllers: [
+    ServersController,
+    PortsController,
+    PackagesController,
+    ServerCollabController,
+    RenewalController,
+    // the verification matrix + enable/disable, admin-guarded
+    AdminTemplatesController,
+  ],
   providers: [
     ServersService,
     PortsService,
@@ -44,7 +57,13 @@ import { StatsStreamService } from './stats-stream.service';
     ProvisionerService,
     ReconcilerService,
     StatsStreamService,
+    // free-plan expiry & renewal
+    RenewalService,
+    WorkinkService,
+    ExpiryRunnerService,
+    // template catalog administration
+    TemplatesService,
   ],
-  exports: [ServersService, PortsService, ServerAccessService, BackupsService, FilesService, DockerService, ProvisionerService, ReconcilerService, ExecGateway],
+  exports: [ServersService, PortsService, ServerAccessService, BackupsService, FilesService, DockerService, ProvisionerService, ReconcilerService, ExecGateway, TemplatesService],
 })
 export class ServersModule {}

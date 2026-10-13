@@ -19,7 +19,27 @@ export const serverStatus = pgEnum('server_status', [
   'error',        // provisioning/runtime failure (see lastError)
   'suspended',    // admin suspension: kept intact, all user operations blocked
 ]);
-export const serverRuntime = pgEnum('server_runtime', ['Node.js', 'Python', 'Bun', 'PHP']);
+/**
+ * The image family a server runs on.
+ *
+ * WIDENING NOTE: adding a language means adding a value here. Postgres enums
+ * are extended with `ALTER TYPE ... ADD VALUE`, which cannot run inside a
+ * transaction on older engines — see `0030_templates_and_runtimes.sql`, which
+ * deliberately does NOT wrap the ALTER TYPE in BEGIN/COMMIT. The original four
+ * values keep their exact spelling so every existing row still validates.
+ */
+export const serverRuntime = pgEnum('server_runtime', [
+  'Node.js',
+  'Python',
+  'Bun',
+  'PHP',
+  'Go',
+  'Rust',
+  'Java',
+  'Ruby',
+  '.NET',
+  'Deno',
+]);
 export const backupType = pgEnum('backup_type', ['auto', 'manual']);
 export const backupStatus = pgEnum('backup_status', ['pending', 'ready', 'failed']);
 export const avatarSource = pgEnum('avatar_source', ['oauth', 'custom', 'default']);
@@ -227,6 +247,13 @@ export const plans = pgTable('plans', {
   storageGb: integer('storage_gb').default(1).notNull(),
   maxServers: integer('max_servers').default(1).notNull(),
   maxBackupSlots: integer('max_backup_slots').default(0).notNull(),
+  /**
+   * How long ONE server may run before it is suspended, in hours. NULL (the
+   * default for every paid plan) = never expires. Set on the free plan only:
+   * its servers expire, and their owner can extend them through the
+   * Work.ink-based renewal flow (see modules/servers/renewal).
+   */
+  serverLifetimeHours: integer('server_lifetime_hours'),
   custom: boolean('custom').default(false).notNull(),
   sortOrder: integer('sort_order').default(0).notNull(),
 });
@@ -259,6 +286,14 @@ export const nodes = pgTable('nodes', {
    * (only correct for the local node).
    */
   subnetBase: varchar('subnet_base', { length: 18 }),
+  /**
+   * Host-port pool this node publishes from (inclusive). Null (both) = use the
+   * platform default from `PORT_RANGE_FROM/TO`. Set from the admin dashboard,
+   * validated against every other node sharing the same host: two overlapping
+   * pools would hand one host port to two different daemons.
+   */
+  portRangeFrom: integer('port_range_from'),
+  portRangeTo: integer('port_range_to'),
   lastSeenAt: timestamp('last_seen_at'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
@@ -271,6 +306,17 @@ export const servers = pgTable('servers', {
   nodeId: varchar('node_id', { length: 32 }).default('local').notNull().references(() => nodes.id),
   name: varchar('name', { length: 32 }).notNull(),
   runtime: serverRuntime('runtime').notNull(),
+  /**
+   * The catalog template this server was created from (e.g. `framework-fastapi`,
+   * `bot-discord-python`). It decides the install/build steps, the port plan and
+   * the default startup.
+   *
+   * NULLABLE AND DELIBERATELY SO: every server created before templates existed
+   * has NULL here and keeps its original runtime-derived behaviour, so this
+   * migration cannot brick or silently reconfigure a running customer server.
+   * A NULL row resolves through `legacyTemplateFor(runtime)` at read time.
+   */
+  templateId: varchar('template_id', { length: 64 }),
   runtimeVersion: varchar('runtime_version', { length: 128 }),
   status: serverStatus('status').default('provisioning').notNull(),
   lastError: text('last_error'),
@@ -311,6 +357,25 @@ export const servers = pgTable('servers', {
   autoBackup: boolean('auto_backup').default(true).notNull(),
   /** keep the N newest automatic backups (manual ones are never pruned) */
   autoBackupRetain: integer('auto_backup_retain').default(7).notNull(),
+
+  /**
+   * When this server's paid-for runtime runs out. NULL = never expires (every
+   * paid plan). Set from `plans.server_lifetime_hours` at creation and moved
+   * forward — never backwards — by a verified renewal.
+   *
+   * This is the AUTHORITATIVE clock: the suspension sweep reads it, and
+   * `assertOperable` independently blocks power operations on an expired row,
+   * so a delayed or crashed sweep can never let an expired server run.
+   */
+  expiresAt: timestamp('expires_at'),
+  /**
+   * Why the server is `suspended`: 'admin' (a moderator) or 'expired' (its
+   * runtime ran out). Distinguishes the two so unsuspend rules, the renewal
+   * path and the audit trail never conflate them, and so the sweep can tell a
+   * genuinely-newly-expired row from one it already handled.
+   */
+  suspendedReason: varchar('suspended_reason', { length: 16 }),
+
   provisionedAt: timestamp('provisioned_at'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
@@ -321,6 +386,87 @@ export const servers = pgTable('servers', {
   index('servers_owner_idx').on(t.ownerId),
   index('servers_status_idx').on(t.status),
   index('servers_node_idx').on(t.nodeId),
+  // the expiry sweep scans "suspended-or-running rows whose deadline passed"
+  index('servers_expires_at_idx').on(t.expiresAt),
+]);
+
+// ---- Free-plan renewal ------------------------------------------------------
+// Two tables, two jobs. `serverRenewalSessions` is a short-lived ATTEMPT (one
+// per click on "Renew", expiring in minutes); `serverRenewals` is the durable
+// ledger of what was actually granted, and is what stops a server being
+// extended twice for one Work.ink step.
+
+export const renewalSessionStatus = pgEnum('renewal_session_status', [
+  'pending', // created, waiting for the user to come back with a key
+  'verifying', // a completion is being checked against Work.ink
+  'completed', // verified AND granted — terminal, never reusable
+  'failed', // Work.ink rejected it (invalid / expired / wrong link / reused)
+  'expired', // the user never came back in time — terminal
+]);
+
+export const serverRenewalSessions = pgTable('server_renewal_sessions', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  /** the user who started the attempt — the only one who may finish it */
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  /** the server this attempt may renew — a session can NEVER move to another */
+  serverId: uuid('server_id').references(() => servers.id, { onDelete: 'cascade' }).notNull(),
+  status: renewalSessionStatus('status').default('pending').notNull(),
+  /** bounded lifetime of the attempt itself (never the server's) */
+  expiresAt: timestamp('expires_at').notNull(),
+  verifiedAt: timestamp('verified_at'),
+  /**
+   * SHA-256 of the Work.ink key, never the key itself. Uniqueness across ALL
+   * sessions is the replay guard: a second redemption of the same key hits
+   * this unique index even if the provider's single-use delete raced or failed.
+   */
+  tokenHash: varchar('token_hash', { length: 64 }),
+  /**
+   * Work.ink's own view of the key, for auditing only: which link minted it,
+   * when, from which IP. `linkId` is the binding that proves the key came from
+   * OUR monetized link and not from some other publisher's.
+   */
+  tokenLinkId: varchar('token_link_id', { length: 32 }),
+  tokenCreatedAt: timestamp('token_created_at'),
+  tokenIp: varchar('token_ip', { length: 45 }),
+  /** machine-readable failure reason for `failed`/`expired` */
+  failureReason: varchar('failure_reason', { length: 64 }),
+  ip: varchar('ip', { length: 45 }),
+  userAgent: varchar('user_agent', { length: 255 }),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (t) => [
+  // THE replay guard. Applied across every status, not just completed ones, so
+  // a key that was rejected once can never be tried again against another
+  // server either.
+  uniqueIndex('server_renewal_sessions_token_hash_unique').on(t.tokenHash),
+  index('server_renewal_sessions_server_idx').on(t.serverId, t.createdAt),
+  index('server_renewal_sessions_user_idx').on(t.userId, t.createdAt),
+  index('server_renewal_sessions_status_idx').on(t.status, t.expiresAt),
+]);
+
+export const serverRenewals = pgTable('server_renewals', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  serverId: uuid('server_id').references(() => servers.id, { onDelete: 'cascade' }).notNull(),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
+  /** the attempt that produced this grant — one session yields at most one row */
+  sessionId: uuid('session_id').references(() => serverRenewalSessions.id, { onDelete: 'set null' }),
+  /** hours granted, resolved server-side (never taken from the request body) */
+  hours: integer('hours').notNull(),
+  expiresBefore: timestamp('expires_before').notNull(),
+  expiresAfter: timestamp('expires_after').notNull(),
+  /** whether the container was successfully brought back up afterwards */
+  restarted: boolean('restarted').default(false).notNull(),
+  restartError: varchar('restart_error', { length: 300 }),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (t) => [
+  // One grant per attempt. Even a concurrent double-submit cannot produce two
+  // 24-hour extensions for one Work.ink step: the second insert violates this.
+  uniqueIndex('server_renewals_session_unique').on(t.sessionId),
+  // And one completed attempt per server: the session table's status plus this
+  // index mean a single session cannot renew the same server twice either.
+  uniqueIndex('server_renewals_server_session_unique').on(t.serverId, t.sessionId),
+  index('server_renewals_server_idx').on(t.serverId, t.createdAt),
+  index('server_renewals_user_idx').on(t.userId, t.createdAt),
 ]);
 
 // ---- Backups ----------------------------------------------------------------
@@ -472,6 +618,18 @@ export const portState = pgEnum('port_state', ['allocated', 'released']);
  * pool and a concurrent allocation is resolved by the database, not by a
  * check-then-insert race.
  */
+/**
+ * One published host port per allocation. The pair (node_id, port) is unique
+ * among ALLOCATED rows only, so releasing a port hands it straight back to the
+ * pool and a concurrent allocation is resolved by the database, not by a
+ * check-then-insert race.
+ *
+ * The three health columns below are a CACHE of what was actually observed on
+ * the host, never the source of truth: `null` means "not measured (or not
+ * measurable from here)" and is deliberately distinct from `false`. The
+ * reconciler refreshes them; the ports endpoint reports them with their age so
+ * the UI never presents a stale "reachable" as a live fact.
+ */
 export const serverPorts = pgTable('server_ports', {
   id: uuid('id').defaultRandom().primaryKey(),
   serverId: uuid('server_id').notNull().references(() => servers.id, { onDelete: 'cascade' }),
@@ -482,13 +640,67 @@ export const serverPorts = pgTable('server_ports', {
   containerPort: integer('container_port').notNull(),
   state: portState('state').default('allocated').notNull(),
   reason: varchar('reason', { length: 120 }),
+  // --- observed health (cache; null = unknown, never "false by default") ---
+  /** the daemon actually binds this host port with this protocol */
+  containerListening: boolean('container_listening'),
+  containerCheckedAt: timestamp('container_checked_at'),
+  /** the published host port answered a connect from the node itself */
+  hostReachable: boolean('host_reachable'),
+  hostCheckedAt: timestamp('host_checked_at'),
+  /** 'missing' = allocated but not published | 'extra' = published but unallocated */
+  drift: varchar('drift', { length: 16 }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   releasedAt: timestamp('released_at'),
 }, (t) => [
-  uniqueIndex('server_ports_node_port_unique').on(t.nodeId, t.port),
+  // PARTIAL, and declared as such here. Declaring it without `.where(...)`
+  // made the ORM want to drop the predicate: a later `db:generate` would have
+  // burned every released port forever and exhausted the pool permanently.
+  uniqueIndex('server_ports_node_port_unique')
+    .on(t.nodeId, t.port)
+    .where(sql`${t.state} = 'allocated'`),
   index('server_ports_server_idx').on(t.serverId, t.state),
-  uniqueIndex('server_ports_server_proto_unique').on(t.serverId, t.protocol),
+  // one published port per protocol per server; same partial predicate
+  uniqueIndex('server_ports_server_proto_unique')
+    .on(t.serverId, t.protocol)
+    .where(sql`${t.state} = 'allocated'`),
 ]);
+
+// ---- Template verification results --------------------------------------------
+
+/**
+ * Per-run verification results for a hosting template.
+ *
+ * The whole point is that a template's `verified` status must be a CLAIM with
+ * evidence behind it, so every run is recorded rather than overwriting the
+ * previous row — otherwise a flaky template can hide its own flakiness. The
+ * four phase columns are deliberately separate: a template that installed its
+ * dependencies but failed to compile is NOT verified, and conflating those
+ * into one boolean is exactly how a catalog turns into a wish list.
+ */
+export const templateVerifications = pgTable(
+  'template_verifications',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    templateId: varchar('template_id', { length: 64 }).notNull(),
+    templateVersion: integer('template_version').default(1).notNull(),
+    status: varchar('status', { length: 16 }).notNull(),
+    installStatus: varchar('install_status', { length: 16 }).default('unknown').notNull(),
+    buildStatus: varchar('build_status', { length: 16 }).default('unknown').notNull(),
+    startupStatus: varchar('startup_status', { length: 16 }).default('unknown').notNull(),
+    healthStatus: varchar('health_status', { length: 16 }).default('unknown').notNull(),
+    detail: jsonb('detail').default({}).notNull(),
+    /** client-safe explanation; never secrets, never daemon internals */
+    reason: text('reason'),
+    /** which runtime version was exercised, so one pin can be re-tested alone */
+    runtimeVersion: varchar('runtime_version', { length: 16 }),
+    durationMs: integer('duration_ms'),
+    ranAt: timestamp('ran_at').defaultNow().notNull(),
+  },
+  (t) => ({
+    // newest result per template is an index scan, not a max()/join
+    templateIdx: index('template_verifications_tpl_idx').on(t.templateId, t.ranAt),
+  }),
+);
 
 // ---- Server subusers & schedules -----------------------------------------------
 export const scheduleAction = pgEnum('schedule_action', ['backup', 'start', 'stop', 'restart']);

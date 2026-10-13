@@ -217,6 +217,7 @@ sudo PG_CONTAINER=troxe-postgres BACKUP_DIR=/var/backups/troxe-postgres \
 | Caddy TLS fails | Ensure DNS A record propagated; ports 80/443 open on firewall |
 | Migration errors | Migrations run on API boot — `docker compose logs api | grep -i migrat`; a failure exits the process. Never use `npx drizzle-kit migrate` in the container (drizzle-kit is a devDependency, absent from the image). |
 | Port 3300 in use | API uses host port 3300; ensure nothing else binds it |
+| Published ports unreachable | The host-port range must be open on the provider firewall AND pointed at by DNS — see **[docs/NODE-PORT-SETUP.md](docs/NODE-PORT-SETUP.md)**. This is the single most common cause and it is invisible from inside the node. |
 
 ---
 

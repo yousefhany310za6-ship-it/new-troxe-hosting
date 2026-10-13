@@ -36,6 +36,7 @@ export default function AdminNodes() {
     const [editTls, setEditTls] = useState(null); // node id being rotated
     const [hostOpen, setHostOpen] = useState(null); // node id whose client host is being set
     const [hostValue, setHostValue] = useState('');
+    const [rangeOpen, setRangeOpen] = useState(null); // node id whose port range is being set
 
     const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
@@ -110,6 +111,7 @@ export default function AdminNodes() {
                                 finally { setChecking((c) => ({ ...c, [n.id]: false })); }
                             }}
                             onRotate={() => setEditTls(n.id)}
+                            onRange={() => setRangeOpen(n.id)}
                         />
                     ))}
                     {(nodes ?? []).length === 0 && (
@@ -184,6 +186,25 @@ export default function AdminNodes() {
                     onClose={() => { setEditTls(null); refetch(); }}
                 />
             )}
+
+            {/* Rendered for the LOCAL node too: the client host is what clients
+                are told to connect to, and the local node is the one serving
+                them today. */}
+            {hostOpen && (
+                <ClientHostModal
+                    nodeId={hostOpen}
+                    value={hostValue}
+                    onChange={setHostValue}
+                    onClose={() => { setHostOpen(null); refetch(); }}
+                />
+            )}
+
+            {rangeOpen && (
+                <PortRangeModal
+                    node={nodes?.find((n) => n.id === rangeOpen)}
+                    onClose={() => { setRangeOpen(null); refetch(); }}
+                />
+            )}
         </div>
     );
 }
@@ -191,7 +212,7 @@ export default function AdminNodes() {
 const actionBtn =
     'inline-flex items-center gap-1.5 rounded-md border border-hairline bg-veil px-3 py-1.5 text-[0.8rem] font-semibold text-ink-secondary transition hover:border-hairline-hover hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40';
 
-function NodeCard({ node, checking, fw, onCheck, onRotate }) {
+function NodeCard({ node, checking, fw, onCheck, onRotate, onRange }) {
     const toast = useToast();
     const check = useAdminCheckNode(node.id);
     const update = useAdminUpdateNode(node.id);
@@ -226,11 +247,15 @@ function NodeCard({ node, checking, fw, onCheck, onRotate }) {
                         label={`Node actions for ${node.id}`}
                         items={[
                             { key: 'check', label: checking ? 'Checking…' : 'Run health check', disabled: checking, onSelect: () => onCheck(check) },
+                            { key: 'range', label: 'Set port range', onSelect: onRange },
+                            // the client host is what customers are told to
+                            // connect to — available on the local node too,
+                            // which is the one actually serving customers now
+                            { key: 'host', label: 'Set client host', onSelect: () => { setHostValue(node.publicHost ?? ''); setHostOpen(node.id); } },
                             ...(!isLocal ? [
                                 { key: 'drain', label: node.drained ? 'Undrain' : 'Drain', onSelect: () => toggle('drained', !node.drained, 'Drain') },
                                 { key: 'toggle', label: node.enabled ? 'Disable' : 'Enable', onSelect: () => toggle('enabled', !node.enabled, 'Node') },
                                 { key: 'tls', label: 'Rotate TLS', onSelect: onRotate },
-                                { key: 'host', label: 'Set client host', onSelect: () => { setHostValue(node.publicHost ?? ''); setHostOpen(node.id); } },
                                 { key: 'remove', label: 'Remove', danger: true, onSelect: () => setRemoveOpen(true) },
                             ] : []),
                         ]}
@@ -242,6 +267,25 @@ function NodeCard({ node, checking, fw, onCheck, onRotate }) {
                 <div className="flex gap-2"><dt className="w-20 shrink-0">clients</dt><dd className="truncate text-ink-secondary">{node.publicHost ?? <span className="text-ink-muted">not set — ports fall back to the global host</span>}</dd></div>
                 <div className="flex gap-2"><dt className="w-20 shrink-0">supernet</dt><dd className="truncate text-ink-secondary">{node.subnetBase ?? '— (legacy)'}</dd></div>
                 <div className="flex gap-2"><dt className="w-20 shrink-0">servers</dt><dd className="text-ink-secondary tabular-nums">{node.serverCount ?? '—'}</dd></div>
+                <div className="flex gap-2">
+                    <dt className="w-20 shrink-0">port pool</dt>
+                    <dd className={cn(
+                        'text-ink-secondary tabular-nums',
+                        node.portPool?.free <= 5 && 'font-bold text-amber-400',
+                    )}>
+                        {node.portRange
+                            ? `${node.portRange.from}–${node.portRange.to}`
+                            : '—'}{' '}
+                        <span className="text-ink-muted">
+                            ({node.portPool ? `${node.portPool.used}/${node.portPool.capacity} used` : '—'})
+                        </span>
+                        {!node.portRange?.nodeOverride && (
+                            <span className="ml-1 text-ink-muted" title="No override set — the platform default range is in use.">
+                                (default)
+                            </span>
+                        )}
+                    </dd>
+                </div>
                 <div className="flex gap-2"><dt className="w-20 shrink-0">last seen</dt><dd className="text-ink-secondary">{node.lastSeenAt ? timeAgo(node.lastSeenAt) : 'never'}</dd></div>
                 {fw && (
                     <div className="flex gap-2 sm:col-span-2">
@@ -320,6 +364,115 @@ function TlsRotateModal({ nodeId, onClose }) {
                         <textarea value={v} onChange={(e) => fn(e.target.value)} rows={3} placeholder="-----BEGIN ..." className="input-field font-mono text-[0.75rem]" />
                     </Field>
                 ))}
+            </form>
+        </Modal>
+    );
+}
+
+/**
+ * Sets the host-port pool a node publishes from.
+ *
+ * Deliberately two explicit fields rather than a single "how many ports"
+ * number: an admin closing a support ticket needs to know exactly which ports
+ * must be opened on the firewall, and a count cannot answer that. Clearing
+ * both fields restores the platform default.
+ */
+function PortRangeModal({ node, onClose }) {
+    const toast = useToast();
+    const update = useAdminUpdateNode(node?.id);
+    const [from, setFrom] = useState(node?.portRange?.nodeOverride ? String(node.portRange.from) : '');
+    const [to, setTo] = useState(node?.portRange?.nodeOverride ? String(node.portRange.to) : '');
+    const [busy, setBusy] = useState(false);
+
+    if (!node) return null;
+
+    const clear = () => {
+        setFrom('');
+        setTo('');
+    };
+
+    const save = async (e) => {
+        e.preventDefault();
+        setBusy(true);
+        try {
+            if (!from.trim() && !to.trim()) {
+                // null on BOTH ends = back to the platform default
+                await update.mutateAsync({ portRangeFrom: null, portRangeTo: null });
+                toast.success('Port range reset to the platform default.');
+                onClose();
+                return;
+            }
+            const a = Number(from);
+            const b = Number(to);
+            if (!Number.isInteger(a) || !Number.isInteger(b)) {
+                toast.error('Both ends must be whole numbers.');
+                return;
+            }
+            await update.mutateAsync({ portRangeFrom: a, portRangeTo: b });
+            toast.success(`Port range set to ${a}–${b}.`);
+            onClose();
+        } catch (err) {
+            // the API returns the reason (overlap, privileged, too small, …)
+            toast.error(err.message);
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    return (
+        <Modal
+            open
+            onClose={onClose}
+            title={`Port range — ${node.id}`}
+            description="The host ports this node publishes client sandboxes on. They must be open on the host firewall and reachable from the internet."
+            footer={
+                <>
+                    <button type="button" onClick={onClose} className="rounded-full border border-hairline px-6 py-2.5 text-sm font-bold text-ink-secondary transition hover:text-foreground">
+                        Cancel
+                    </button>
+                    <button type="submit" form="port-range-form" disabled={busy} className="rounded-full bg-white px-6 py-2.5 text-sm font-bold text-black transition hover:bg-gray-200 disabled:opacity-50">
+                        {busy ? 'Saving…' : 'Save'}
+                    </button>
+                </>
+            }
+        >
+            <form id="port-range-form" onSubmit={save} className="flex flex-col gap-4">
+                <div className="grid grid-cols-2 gap-3">
+                    <Field label="From" htmlFor="pr-from">
+                        <input
+                            id="pr-from"
+                            value={from}
+                            onChange={(e) => setFrom(e.target.value)}
+                            placeholder={String(node.portRange?.from ?? 20000)}
+                            className="input-field font-mono"
+                            dir="ltr"
+                            inputMode="numeric"
+                        />
+                    </Field>
+                    <Field label="To" htmlFor="pr-to">
+                        <input
+                            id="pr-to"
+                            value={to}
+                            onChange={(e) => setTo(e.target.value)}
+                            placeholder={String(node.portRange?.to ?? 32000)}
+                            className="input-field font-mono"
+                            dir="ltr"
+                            inputMode="numeric"
+                        />
+                    </Field>
+                </div>
+                <p className="text-[0.75rem] text-ink-muted">
+                    Leave both empty to use the platform default. The range must stay below 32768 — the kernel hands
+                    out 32768–60999 as outbound source ports, and a listener there collides with the host&rsquo;s own
+                    traffic. Two nodes on the same host may not overlap.
+                </p>
+                <p className="text-[0.75rem] text-ink-muted">
+                    Currently <span className="font-mono text-ink-secondary">{node.portPool?.used ?? 0}/{node.portPool?.capacity ?? '—'}</span>{' '}
+                    ports in use.
+                </p>
+                <button type="button" onClick={clear} className="self-start text-[0.75rem] font-bold text-ink-secondary underline underline-offset-4 hover:text-foreground">
+                    Reset to platform default
+                </button>
             </form>
         </Modal>
     );

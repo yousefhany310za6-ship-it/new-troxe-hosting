@@ -4,6 +4,7 @@ import { Save, Server as ServerIcon } from 'lucide-react';
 import { apiPatch } from '@/lib/api.js';
 import RuntimeSwitcher from '@/components/dashboard/RuntimeSwitcher.jsx';
 import ResourceEditor from '@/components/dashboard/ResourceEditor.jsx';
+import RenewalPanel from '@/components/dashboard/RenewalPanel.jsx';
 import { cn } from '@/lib/utils';
 
 const labelClass = 'mb-1.5 block text-small font-semibold text-foreground';
@@ -102,6 +103,10 @@ export default function ServerSettings({ server, onSaved, onTab }) {
             <RuntimeSwitcher server={server} onChanged={onSaved} />
 
             <ResourceEditor server={server} onSaved={onSaved} />
+
+            {/* Only renders for expiring (free-plan) servers; paid plans get
+                nothing. This is the countdown BEFORE a server expires. */}
+            <RenewalPanel serverId={server.id} onRenewed={onSaved} />
 
             <div className="flex flex-wrap items-center gap-3 border-t border-hairline pt-4">
                 <button

@@ -352,6 +352,20 @@ export class AdminService {
       .returning({ id: users.id, planId: users.planId });
     if (!updated) throw new NotFoundException('USER_NOT_FOUND');
 
+    // Moving a customer OFF an expiring plan must clear the deadlines on the
+    // servers they already have. Otherwise an upgraded customer keeps a 24h
+    // countdown on a paid server — and since their new plan has no lifetime,
+    // the renewal flow would refuse them (PLAN_NOT_EXPIRING) and the server
+    // would be suspended with no way to recover it. Upgrading to a plan that
+    // still has a lifetime keeps the existing deadlines untouched.
+    if (!plan.serverLifetimeHours) {
+      await this.db
+        .update(servers)
+        .set({ expiresAt: null, suspendedReason: null, status: sql`case when status = 'suspended' and suspended_reason = 'expired' then 'offline' else status end` })
+        .where(eq(servers.ownerId, userId));
+      await this.serversSvc.liftExpirySuspensions(userId);
+    }
+
     await this.audit.record({
       actorId,
       actorEmail: actorEmail ?? null,

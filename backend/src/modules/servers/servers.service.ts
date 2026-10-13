@@ -13,6 +13,12 @@ import { AuditService } from '../audit/audit.module';
 import { DockerService, startedAtToSince } from './provisioning/docker.service';
 import { ProvisionerService, type ProvisionResult } from './provisioning/provisioner.service';
 import { RUNTIMES, runtimeImage, type Runtime, applyTemplate, labelFor, resolveEggEnv, resolveVersion } from './provisioning/images';
+import {
+  TEMPLATE_BY_ID,
+  creatableTemplates,
+  legacyTemplateFor,
+} from './templates/catalog';
+import type { TemplateDefinition } from './templates/types';
 import { NodesService } from '../nodes/nodes.service';
 import { ServerAccessService } from './server-access.service';
 import { normalizePermissions, type ServerPermission } from './server-access-policy';
@@ -21,6 +27,7 @@ import { PortsService } from './ports.service';
 import { ChangeRuntimeDto, CreateServerDto, RescaleServerDto, UpdateServerDto } from './dto';
 import { backupDirFor, backupOwnerDir } from './backup-paths';
 import { RESOURCE_KEYS, platformHardMax, resolveLimits, resolveRequest, serverHeadroom } from './resource-policy';
+import { initialExpiry } from './renewal-policy';
 import type { PlanResourceRow, ResourceGrant, ResourceUsage } from './resource-policy';
 import { RealtimeGateway } from '../auth/realtime.gateway';
 import { GeoIpService } from '../../common/geoip/geoip.service';
@@ -127,18 +134,64 @@ export class ServersService {
     return [...owned, ...sharedViews];
   }
 
-  /** Egg catalog: versions + variables per runtime (no digests leak). */
+  /**
+   * The create-form catalog: every template a client may pick right now.
+   *
+   * Deliberately built from the CATALOG and not from `RUNTIMES`. The old
+   * endpoint returned one entry per runtime, which is why the UI could not
+   * offer "Discord bot" and "Express" separately — they were both "Node.js".
+   *
+   * Disabled and deprecated templates are NOT returned as creatable. They stay
+   * resolvable through `resolveTemplateFor` so servers already running on one
+   * are never bricked by a later disable.
+   *
+   * Digests never appear here: only labels and version selectors.
+   */
   catalog() {
-    return RUNTIMES.map((r) => {
-      const img = runtimeImage(r);
+    return creatableTemplates().map((t) => {
+      const img = runtimeImage(t.runtime);
+      const versions = t.versions.map((v) => {
+        const entry = img.versions.find((rv) => rv.version === v);
+        return { version: v, label: entry?.label ?? `${t.runtime} ${v}` };
+      });
       return {
-        runtime: img.runtime,
-        label: img.label,
-        versions: img.versions.map((v) => ({ version: v.version, label: v.label })),
-        variables: img.variables,
-        defaultStartup: img.defaultStartup,
+        id: t.id,
+        name: t.name,
+        description: t.description,
+        category: t.category,
+        language: t.language ?? null,
+        runtime: t.runtime,
+        runtimeLabel: img.label,
+        versions,
+        variables: t.variables,
+        defaultStartup: t.startup,
+        ports: t.ports,
+        recommended: t.recommended,
+        minimum: t.minimum ?? null,
+        expectedFiles: t.expectedFiles,
+        docs: t.docs,
+        // Surfaced so the create form can show an honest label. A template that
+        // has not passed its suite must not read as fully supported.
+        status: t.status,
+        note: t.note ?? null,
       };
     });
+  }
+
+  /**
+   * The template that governs an existing server row.
+   *
+   * A row with `template_id` uses that template. A row created BEFORE templates
+   * existed has NULL, and resolves to its runtime's default template — so the
+   * provisioning path has one code path while old servers keep their exact
+   * legacy behaviour (they are only ever READ through this, never rewritten).
+   */
+  resolveTemplateFor(row: Pick<Server, 'templateId' | 'runtime'>): TemplateDefinition | undefined {
+    if (row.templateId) {
+      const found = TEMPLATE_BY_ID.get(row.templateId);
+      if (found) return found;
+    }
+    return legacyTemplateFor(row.runtime);
   }
 
   /** Owner-scoped single read — never trusts an id alone. */
@@ -178,13 +231,35 @@ export class ServersService {
    * (lifecycle, files, backups, console, stats) while the row, volume and
    * configuration are preserved. Admin paths pass `{ admin: true }` — the
    * bypass is explicit at each call site, never a hidden role check.
+   *
+   * EXPIRY is enforced here, independently of the sweep, and that is the point:
+   * the sweep is a courtesy (it stops the container within a minute), while
+   * this gate is the actual guarantee. A crashed, delayed or never-started
+   * scheduler cannot let an expired server be started, because every power
+   * operation re-reads `expiresAt` from the database and refuses.
    */
-  assertOperable(row: Pick<Server, 'status'>, opts?: { admin?: boolean }): void {
+  assertOperable(row: Pick<Server, 'status' | 'expiresAt' | 'suspendedReason'>, opts?: { admin?: boolean; now?: Date }): void {
     if (row.status === 'suspended' && !opts?.admin) {
+      if (row.suspendedReason === 'expired') {
+        throw new AppError(
+          'SERVER_EXPIRED',
+          403,
+          'This server’s free runtime has ended. Renew it to get another 24 hours.',
+        );
+      }
       throw new AppError(
         'SERVER_SUSPENDED',
         403,
         'This server has been suspended by the administration. Contact support if you believe this was a mistake.',
+      );
+    }
+    // A row whose deadline passed but whose sweep has not run yet (or whose
+    // container is still up because the docker call failed) is still refused.
+    if (!opts?.admin && row.expiresAt && row.expiresAt.getTime() <= (opts?.now ?? new Date()).getTime()) {
+      throw new AppError(
+        'SERVER_EXPIRED',
+        403,
+        'This server’s free runtime has ended. Renew it to get another 24 hours.',
       );
     }
   }
@@ -203,7 +278,7 @@ export class ServersService {
         ? await this.docker.inspect(row.containerId, row.nodeId).catch(() => null)
         : null;
       if (state?.running) await this.docker.stop(row.containerId!, 15, row.nodeId).catch(() => undefined);
-      await this.db.update(servers).set({ status: 'suspended' }).where(eq(servers.id, id));
+      await this.db.update(servers).set({ status: 'suspended', suspendedReason: 'admin' }).where(eq(servers.id, id));
       await this.event(id, opts.adminId, 'suspend', { reason: opts.reason ?? null, wasStatus: row.status });
       await this.audit.record({
         actorId: opts.adminId,
@@ -223,7 +298,7 @@ export class ServersService {
   async unsuspend(ownerId: string, id: string, opts: { adminId: string; ip?: string }) {
     const row = await this.requireOwned(ownerId, id);
     if (row.status !== 'suspended') return this.toPublic(row);
-    await this.db.update(servers).set({ status: 'offline' }).where(eq(servers.id, id));
+    await this.db.update(servers).set({ status: 'offline', suspendedReason: null }).where(eq(servers.id, id));
     await this.event(id, opts.adminId, 'unsuspend', { wasStatus: row.status });
     await this.audit.record({
       actorId: opts.adminId,
@@ -401,6 +476,41 @@ export class ServersService {
     );
   }
 
+  /**
+   * Which template a create request means.
+   *
+   * `templateId` is the current path. `runtime` alone is the legacy path and
+   * maps to that runtime's default template, so an older API client keeps
+   * working — it can never choose an image, only a runtime, and the image is
+   * still chosen from the allowlist.
+   *
+   * A disabled or deprecated template is refused for NEW servers even when the
+   * client names it explicitly. Existing servers on such a template are
+   * untouched: they resolve through `resolveTemplateFor`, which does not check
+   * `enabled`. That asymmetry is the point — stop the bleeding without cutting
+   * off servers already running.
+   */
+  private resolveCreateTemplate(dto: CreateServerDto): TemplateDefinition {
+    const id = dto.templateId ?? (dto.runtime ? legacyTemplateFor(dto.runtime)?.id : undefined);
+    if (!id) {
+      throw Err.invalid(
+        'TEMPLATE_UNSUPPORTED',
+        dto.runtime
+          ? `No template is available for runtime "${dto.runtime}".`
+          : 'Choose a template for this server.',
+      );
+    }
+    const template = TEMPLATE_BY_ID.get(id);
+    if (!template) throw Err.invalid('TEMPLATE_UNSUPPORTED', `Unknown template "${id}"`);
+    if (!template.enabled || template.status === 'disabled' || template.status === 'deprecated') {
+      throw Err.invalid(
+        'TEMPLATE_UNAVAILABLE',
+        `${template.name} is no longer available for new servers.${template.note ? ` (${template.note})` : ''}`,
+      );
+    }
+    return template;
+  }
+
   async create(
     ownerId: string,
     dto: CreateServerDto,
@@ -416,20 +526,36 @@ export class ServersService {
     if (!config.REGIONS.includes(region)) throw Err.invalid('REGION_UNSUPPORTED', `Allowed regions: ${config.REGIONS.join(', ')}`);
     const nodeId = await this.pickHealthyNode(opts?.nodeId);
 
+    // The template decides the runtime, so it is resolved FIRST and the
+    // request's runtime is only honoured as a legacy alias. Nothing about the
+    // image is ever taken from the body — `resolveVersion` picks it from the
+    // allowlist below.
+    const template = this.resolveCreateTemplate(dto);
+    const runtime = template.runtime as Runtime;
+
     const storedEnv = this.cleanEnv(dto.env);
     // egg defaults apply at RESOLVE time only — storage keeps exactly what
     // the user set (no surprise rows in the API/UI); missing variables fall
     // back to their defaults when the startup template is rendered.
-    const env = resolveEggEnv(dto.runtime, storedEnv);
+    const env = resolveEggEnv(runtime, storedEnv);
     // row.startup keeps the RAW template ({{VAR}} re-resolves on every
     // provision, so later variable edits apply); `startup` is the resolved
     // command actually executed.
-    const startupRaw = this.cleanStartup(dto.startup) || runtimeImage(dto.runtime).defaultStartup;
+    const startupRaw = this.cleanStartup(dto.startup) || template.startup;
     let version;
     try {
-      version = resolveVersion(dto.runtime, dto.version);
+      version = resolveVersion(runtime, dto.version);
     } catch {
-      throw Err.invalid('VERSION_UNSUPPORTED', `Unknown version "${dto.version}" for ${dto.runtime}`);
+      throw Err.invalid('VERSION_UNSUPPORTED', `Unknown version "${dto.version}" for ${runtime}`);
+    }
+    // A template may restrict which of its runtime's versions it supports, and
+    // it may declare a different default than the runtime's first entry. Both
+    // are checked here rather than trusting the pick.
+    if (!template.versions.includes(version.version)) {
+      throw Err.invalid(
+        'VERSION_UNSUPPORTED',
+        `${template.name} supports ${template.versions.join(', ')} — "${dto.version}" is not one of them.`,
+      );
     }
     let startup: string;
     try {
@@ -478,7 +604,8 @@ export class ServersService {
         ownerId,
         nodeId,
         name: dto.name,
-        runtime: dto.runtime,
+        runtime,
+        templateId: template.id,
         runtimeVersion: version.image,
         status: 'provisioning',
         region,
@@ -486,6 +613,10 @@ export class ServersService {
         cpuMilli: resolved.grant.cpuMilli,
         ramMb: resolved.grant.ramMb,
         storageGb: resolved.grant.storageGb,
+        // The free plan's servers run for a bounded time. The deadline comes
+        // from the plan row resolved INSIDE this transaction, never from the
+        // request body, and is null for every plan without a lifetime.
+        expiresAt: initialExpiry(plan.serverLifetimeHours, new Date()),
         startup: startupRaw,
         envEncrypted: storedEnv.length ? encryptEnv(storedEnv) : null,
         autoRestart: dto.autoRestart ?? true,
@@ -527,25 +658,37 @@ export class ServersService {
       // Host port first: it is allocated atomically in the database (unique on
       // node+port among allocated rows) and provision fails when the pool runs
       // dry — the honest outcome, since a server without a published port is a
-      // different product than the one requested.
-      const allocated = await this.ports.allocate({
-        serverId: row.id,
-        nodeId,
-        containerPort: runtimeImage(dto.runtime as Runtime).port,
-        protocol: 'tcp',
-      });
-      this.log.log(`server ${row.id}: published host port ${allocated.port}`);
+      // different product than the one requested. `created: false` means the
+      // server already held a live allocation (re-entrant create path), which
+      // keeps its address stable instead of burning a second port.
+      // The template's PORT PLAN decides how many host ports this server gets, and
+      // whether it gets any at all. A bot template declares none, so it consumes
+      // no port from the pool — which is both correct (it only dials out) and
+      // the reason a fleet of bots does not exhaust the pool.
+      const portPlan = template.ports.length ? template.ports : [{ protocol: 'tcp' as const, containerPort: runtimeImage(runtime).port }];
+      for (const p of portPlan) {
+        const { allocation, created } = await this.ports.allocate({
+          serverId: row.id,
+          nodeId,
+          containerPort: p.containerPort,
+          protocol: p.protocol,
+        });
+        this.log.log(
+          `server ${row.id}: ${created ? 'published host port' : 'reusing host port'} ${p.protocol}/${allocation.port} -> container ${p.containerPort}`,
+        );
+      }
       const result = await this.provisioner.provision({
         id: row.id,
         ownerId,
         nodeId,
-        runtime: dto.runtime as Runtime,
+        runtime,
         image: version.image,
         startup,
         env,
         cpuMilli: grant.cpuMilli,
         ramMb: grant.ramMb,
         autoRestart: row.autoRestart,
+        template,
       });
       const updated = await this.persistProvision(row.id, result, { start: config.AUTO_START_ON_CREATE, nodeId });
       // same fast-fail as start/: a doomed entry file must surface as an
@@ -713,11 +856,15 @@ export class ServersService {
     try {
       await this.db.update(servers).set({ status: 'deleting' }).where(eq(servers.id, id)).catch(() => undefined);
 
-      // give the published port back to the pool BEFORE the row disappears
-      // (the allocations cascade with it, which would lose the port and its
-      // history together).
-      await this.ports.releaseAll(id);
-
+      // ORDER MATTERS: the container goes FIRST, then the port.
+      //
+      // Releasing first opened a window where a brand-new server could be
+      // handed the port of a container that was still running: its
+      // provision would fail on Docker's "port is already allocated", leaving
+      // an allocation behind that nothing owned. Destroying first and only
+      // releasing ports nothing binds anymore closes that window; anything
+      // still bound stays `allocated` with a reason and the reconciler
+      // finishes the job when the container is really gone.
       const errors = await this.provisioner.destroy({
         nodeId: row.nodeId,
         containerId: row.containerId,
@@ -726,6 +873,13 @@ export class ServersService {
         networkSubnet: row.networkSubnet,
         volumeName: row.volumeName,
       });
+
+      // Read the host ports that are STILL bound after the destroy, and hand
+      // back only the rest. An empty read is the normal, healthy case.
+      const stillBound = new Set<number>(
+        row.containerId ? await this.docker.publishedPorts(row.containerId, row.nodeId).catch(() => []) : [],
+      );
+      await this.ports.releaseWhenUnbound(id, stillBound);
 
       // backup rows cascade with the server row, but archive files on disk do
       // not — remove them so deleted servers (and their PII) leave nothing.
@@ -755,11 +909,106 @@ export class ServersService {
   // ---- lifecycle ------------------------------------------------------------
 
   /**
+   * Lift an EXPIRY suspension on every server of one owner.
+   *
+   * Used when the account moves to a plan that does not expire: the deadline
+   * is gone, so a server stopped for expiry must not stay stopped. An admin
+   * suspension is never touched.
+   */
+  async liftExpirySuspensions(ownerId: string): Promise<number> {
+    const rows = await this.db
+      .select({ id: servers.id, containerId: servers.containerId, nodeId: servers.nodeId })
+      .from(servers)
+      .where(and(eq(servers.ownerId, ownerId), eq(servers.status, 'suspended'), eq(servers.suspendedReason, 'expired')));
+    if (!rows.length) return 0;
+    await this.db
+      .update(servers)
+      .set({ status: 'offline', suspendedReason: null, updatedAt: new Date() })
+      .where(and(eq(servers.ownerId, ownerId), eq(servers.suspendedReason, 'expired')));
+    for (const r of rows) {
+      this.realtime.broadcastServerStatus(r.id, 'offline');
+      if (r.containerId) await this.docker.start(r.containerId, r.nodeId).catch(() => undefined);
+    }
+    return rows.length;
+  }
+
+  /**
+   * Stop a container because its free runtime ended (the expiry sweep).
+   *
+   * The database row is ALREADY `suspended` by the caller before this runs, so
+   * the backend gate holds even if docker is unreachable — an expired server
+   * that failed to stop is blocked, not running-and-usable.
+   */
+  async stopForExpiry(id: string): Promise<void> {
+    const row = await this.requireAny(id);
+    if (!row.containerId) return;
+    const state = await this.docker.inspect(row.containerId, row.nodeId).catch(() => null);
+    if (!state?.running) return;
+    await this.docker.stop(row.containerId, 15, row.nodeId);
+  }
+
+  /**
+   * Lift an EXPIRY suspension after a verified renewal.
+   *
+   * Refuses to touch a server suspended by an administrator — a moderator's
+   * decision is not undone by a customer renewal. Also refuses if the deadline
+   * is still in the past, which would otherwise be a path to a free extension.
+   */
+  async restoreFromExpiry(id: string): Promise<void> {
+    const row = await this.requireAny(id);
+    if (row.status !== 'suspended') return;
+    if (row.suspendedReason === 'admin') {
+      throw Err.forbidden('SERVER_SUSPENDED_BY_ADMIN');
+    }
+    if (row.expiresAt && row.expiresAt.getTime() <= Date.now()) {
+      // the renewal did not actually move the deadline — do not start it
+      throw Err.conflict('SERVER_STILL_EXPIRED', 'This server is still past its expiry deadline.');
+    }
+    await this.db
+      .update(servers)
+      .set({ status: 'offline', suspendedReason: null, lastError: null, updatedAt: new Date() })
+      .where(eq(servers.id, id));
+    await this.event(id, null, 'renewal_restore', { expiresAt: row.expiresAt?.toISOString() ?? null });
+    this.realtime.broadcastServerStatus(id, 'offline');
+
+    // Bring it back up when it was running when the deadline hit; otherwise
+    // leave it offline and let the owner press start (same contract as
+    // `unsuspend`, which always lands on offline).
+    if (row.containerId) {
+      const state = await this.docker.inspect(row.containerId, row.nodeId).catch(() => null);
+      if (state?.running) return;
+      if (!state?.exists) return; // nothing to start; lifecycle repairs on demand
+      await this.docker.start(row.containerId, row.nodeId).catch(() => undefined);
+    }
+  }
+
+  /**
    * Recreate the container WITHOUT touching the volume, so settings that only
    * take effect at create time (published ports) apply while the client's
    * files stay exactly where they are.
    */
-  async reprovision(ownerId: string, id: string, ctx: ReqCtx) {
+  /**
+ * Recreate a server's container through the SAME network + volume, without the
+ * permission and power checks the user-facing path applies.
+ *
+ * The reconciler calls this only for a server that is NOT running, where
+ * "recreate" cannot interrupt anything the client is doing — it is the only
+ * way `PortBindings` come back after the container was recreated without them.
+ * Keeping it separate from reprovision() means the reconciler can never widen
+ * itself past the checks a user request has to pass.
+ */
+async reprovisionInternal(row: Server): Promise<void> {
+  if (row.status === 'deleting' || row.status === 'suspended') return;
+  await this.rebuild(row, false);
+  await this.db
+    .update(servers)
+    .set({ status: 'offline' })
+    .where(eq(servers.id, row.id))
+    .catch(() => undefined);
+  this.log.log(`port repair: recreated the container of ${row.name} (${row.id})`);
+}
+
+async reprovision(ownerId: string, id: string, ctx: ReqCtx) {
     const row = await this.accessible(ownerId, id, 'control.power');
     this.assertOperable(row);
     if (row.status === 'deleting') throw Err.conflict('SERVER_DELETING', 'Server is being deleted');
@@ -1579,6 +1828,9 @@ export class ServersService {
       cpuMilli: row.cpuMilli,
       ramMb: row.ramMb,
       storageGb: row.storageGb,
+      // null on every paid plan (they never expire); set on free-plan servers
+      expiresAt: row.expiresAt ? row.expiresAt.toISOString() : null,
+      suspendedReason: row.suspendedReason ?? null,
       startup: row.startup,
       // legacy rows keep MAIN_FILE only in the (encrypted) env: read the
       // decrypted value, never the masked one the UI shows.

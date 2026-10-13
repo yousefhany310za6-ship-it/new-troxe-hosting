@@ -8,10 +8,11 @@ import { and, eq } from 'drizzle-orm';
 import { DockerService } from './docker.service';
 import { NetworkHardeningService } from './network-hardening.service';
 import { resolveRuntimeImage, runtimeImage, type Runtime } from './images';
-import { starterSeed } from './starter';
+import { starterFilesSeed } from './starter';
 import { ownershipRepairScript } from './volume-ownership';
 import { intToIp, ipToInt } from '../../nodes/nodes.service';
 import { buildSandboxConfig, resourceNames } from './sandbox';
+import type { TemplateDefinition } from '../templates/types';
 
 export interface ProvisionInput {
   id: string;
@@ -26,6 +27,12 @@ export interface ProvisionInput {
   cpuMilli: number;
   ramMb: number;
   autoRestart: boolean;
+  /**
+   * The template that owns this server's install/build steps and port plan.
+   * Optional: a row created before templates existed carries only a runtime and
+   * must keep working, so its absence is a normal state, not an error.
+   */
+  template?: TemplateDefinition;
 }
 
 export interface ProvisionResult {
@@ -251,7 +258,15 @@ export class ProvisionerService {
       // preparing WorkingDir (/data) at create time, so the helper must
       // guarantee ownership + a non-empty dir first (see chownVolume).
       await this.getOrCreateVolume(input.nodeId, names.volumeName, labels).then((v) => (created.volume = v));
-      await this.chownVolume(input.nodeId, names.volumeName, image, spec.starter);
+      // A template may seed a compilable starter project (Go, Rust) instead of the
+      // runtime's single-file starter.
+      const starterProject = input.template ? undefined : spec.starterFiles;
+      await this.chownVolume(
+        input.nodeId,
+        names.volumeName,
+        image,
+        starterProject ?? spec.starter,
+      );
 
       // 4. the sandbox container itself (replaces any previous one).
       // Ports are NOT chosen here: they were already allocated (atomically, in
@@ -276,6 +291,10 @@ export class ProvisionerService {
           volumeName: names.volumeName,
           autoRestart: input.autoRestart,
           pidsLimit: config.CONTAINER_PIDS_LIMIT,
+          // Drives the install/build prelude and the exposed port set. Absent
+          // for servers created before templates existed — those keep the
+          // legacy per-runtime behaviour byte for byte.
+          template: input.template,
         }),
         input.nodeId,
       );
@@ -408,10 +427,17 @@ export class ProvisionerService {
     nodeId: string,
     volumeName: string,
     image: string,
-    starter?: { path: string; content: string },
+    starter?: { path: string; content: string }[] | { path: string; content: string },
   ): Promise<void> {
-    const seed = starterSeed(starter);
-    if (starter && seed === ':') this.log.warn(`starter NOT seeded for path "${starter.path}" (empty content or invalid path)`);
+    // A runtime starter is one file (index.js); Go and Rust need a small
+    // compilable PROJECT (go.mod + main.go, Cargo.toml + src/main.rs), because
+    // a lone file would not build and the first start would fail for a reason
+    // that has nothing to do with the client.
+    const files = Array.isArray(starter) ? starter : starter ? [starter] : undefined;
+    const seed = starterFilesSeed(files);
+    if (files && seed === ':') {
+      this.log.warn(`starter NOT seeded (${files.map((f) => f.path).join(', ')}) — empty content or invalid path`);
+    }
     try {
       const res = await this.docker.runHelper({
         image,

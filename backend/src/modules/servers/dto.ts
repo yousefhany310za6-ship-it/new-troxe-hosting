@@ -2,8 +2,15 @@ import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsInt, IsOptional, IsString, Ma
 import { Type } from 'class-transformer';
 import { config } from '../../config/env';
 import { RUNTIMES } from './provisioning/images';
+import { TEMPLATE_BY_ID, creatableTemplates } from './templates/catalog';
 
 export { RUNTIMES };
+
+/** Ids a client may actually pick right now. A disabled or deprecated template
+ *  is NOT creatable, but it stays resolvable so existing servers keep running. */
+export const CREATABLE_TEMPLATE_IDS = Object.freeze(
+  creatableTemplates().map((t) => t.id),
+);
 
 export class EnvVarDto {
   @MinLength(1)
@@ -19,8 +26,23 @@ export class CreateServerDto {
   @Matches(/^[a-z0-9-]{3,32}$/, { message: 'name must be 3-32 lowercase letters/digits/dashes' })
   name!: string;
 
+  /**
+   * The catalog entry that decides the runtime, install/build steps, port plan
+   * and default startup. Checked against the CREATABLE list, so a disabled or
+   * deprecated template cannot be selected — while a server already running on
+   * one is untouched.
+   */
+  @IsIn(CREATABLE_TEMPLATE_IDS as unknown as string[], { message: 'TEMPLATE_UNSUPPORTED' })
+  templateId!: string;
+
+  /**
+   * Legacy path: a bare runtime with no template. Still accepted so older API
+   * clients keep working; it is mapped to that runtime's default template
+   * server-side and never trusted for the image (see `resolveVersion`).
+   */
+  @IsOptional()
   @IsIn(RUNTIMES as unknown as string[], { message: 'RUNTIME_UNSUPPORTED' })
-  runtime!: (typeof RUNTIMES)[number];
+  runtime?: (typeof RUNTIMES)[number];
 
   /** version selector, e.g. '22' — must exist for the runtime (default: first) */
   @IsOptional()

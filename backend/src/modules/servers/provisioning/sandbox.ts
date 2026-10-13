@@ -1,6 +1,8 @@
 import type { ContainerCreateOptions, HostConfig } from 'dockerode';
 import type { EnvVar } from '../../../db/schema';
 import type { Runtime, RuntimeImage } from './images';
+import { compileBuildPrelude, compileInstallPrelude } from '../templates/steps';
+import type { TemplateDefinition } from '../templates/types';
 
 /** Deterministic, globally unique docker resource names for one server. */
 export function resourceNames(serverId: string) {
@@ -26,6 +28,16 @@ export interface SandboxSpec {
   pidsLimit: number;
   /** host ports already allocated by PortsService (published on the host) */
   ports?: Array<{ port: number; protocol: string; containerPort: number }>;
+  /**
+   * The template driving this sandbox. It supplies the install and build steps
+   * that a hardcoded per-runtime prelude could never express: a template may
+   * install with pnpm, Yarn, Composer, Poetry or Bundler, and may compile Go,
+   * Rust, Maven, Gradle or .NET.
+   *
+   * Optional because a server created before templates existed has no template
+   * row — it keeps the legacy per-runtime behaviour unchanged.
+   */
+  template?: TemplateDefinition;
 }
 
 const TROXE_LABELS = (serverId: string, ownerId: string) => ({
@@ -36,6 +48,40 @@ const TROXE_LABELS = (serverId: string, ownerId: string) => ({
 });
 
 /**
+ * The container ports this sandbox exposes.
+ *
+ * Driven by the template's port plan, so a bot publishes nothing and a game or
+ * web app publishes the one port it declares. Legacy rows without a template
+ * fall back to their runtime's single port, which is exactly how they behaved
+ * before templates existed.
+ */
+export function exposedPorts(spec: SandboxSpec): Record<string, Record<string, never>> {
+  const out: Record<string, Record<string, never>> = {};
+  if (spec.template) {
+    for (const p of spec.template.ports) out[`${p.containerPort}/${p.protocol}`] = {};
+    // A template that declares no port still needs its runtime's default
+    // exported for env, but exposes nothing — that is what makes a bot
+    // unreachable from the network.
+    return out;
+  }
+  out[`${spec.image.port}/tcp`] = {};
+  return out;
+}
+
+/**
+ * The container port an app should bind, i.e. the value of $PORT.
+ *
+ * The template wins when it declares one, so a Flask app on 8000 or a Go
+ * service on 8080 each advertise the right thing instead of inheriting
+ * whatever their runtime happened to use. Templates with no port (bots and
+ * workers) fall back to the runtime default so $PORT is still defined.
+ */
+export function primaryContainerPort(spec: SandboxSpec): number {
+  const declared = spec.template?.ports[0];
+  return declared?.containerPort ?? spec.image.port;
+}
+
+/**
  * Compose the client environment: runtime baseline first, then the client's
  * own variables (they win). Values never touch a shell — they are passed as a
  * plain env array to the container process.
@@ -44,7 +90,7 @@ export function buildEnv(spec: SandboxSpec): string[] {
   const merged = new Map<string, string>();
   for (const [k, v] of Object.entries(spec.image.env)) merged.set(k, v);
   // the client's own code/config lives on the persistent volume
-  merged.set('PORT', String(spec.image.port));
+  merged.set('PORT', String(primaryContainerPort(spec)));
   merged.set('HOST', '0.0.0.0');
   // The PUBLIC port clients use, for display only (invite links, status pages,
   // "connect to host:port" banners). Apps must still BIND the container port
@@ -130,7 +176,19 @@ export function portBindings(ports: Array<{ port: number; protocol: string; cont
   return out;
 }
 
-/** Shell prefix for the sandbox command, including the trailing `&& ` (or empty). */
+/**
+ * Shell prefix for the sandbox command, including the trailing `&& ` (or empty).
+ *
+ * DEPRECATED as an install mechanism: this hardcodes ONE dependency strategy
+ * per runtime, which is exactly why Composer, pnpm, Yarn, Poetry, Cargo,
+ * Maven, Gradle and `go build` never existed. It survives only so that server
+ * rows created before templates existed keep booting exactly as they did; any
+ * server on a template gets its steps from the template instead.
+ *
+ * `npm install`, never `npm ci`: the file manager lets the manifest drift ahead
+ * of the lock, and `ci` aborts on that drift ("lock and package.json are out of
+ * sync") which reads to the client as a crash loop.
+ */
 export function depsPrelude(runtime: Runtime): string {
   switch (runtime) {
     case 'Node.js':
@@ -139,7 +197,9 @@ export function depsPrelude(runtime: Runtime): string {
       return `${jsPrelude('bun')} && `;
     case 'Python':
       return `${pyPrelude()} && `;
-    case 'PHP':
+    default:
+      // PHP, Go, Rust, Java, Ruby, .NET and Deno either get their install and
+      // build steps from a template, or have no dependency step at all.
       return '';
   }
 }
@@ -218,11 +278,26 @@ export function buildSandboxConfig(spec: SandboxSpec): ContainerCreateOptions {
     // CgroupnsMode is supported by the engine but missing from @types/dockerode
   } as HostConfig;
 
+  // The install/build prelude for this sandbox.
+  //
+  // A template's own steps win: that is how Composer, pnpm, Yarn, Poetry,
+  // Bundler, `go build`, `cargo build`, Maven, Gradle and `dotnet publish`
+  // exist at all. Without a template (a server row created before templates
+  // existed) the legacy per-runtime prelude applies, unchanged, so those
+  // servers keep behaving exactly as they did.
+  //
+  // Order matters and is fixed: INSTALL → BUILD → START. A failed install or
+  // build `exit 1`s inside its own step, so the app is never started against a
+  // half-installed tree or a stale binary.
+  const prelude = spec.template
+    ? `${compileInstallPrelude(spec.template.install)}; ${compileBuildPrelude(spec.template.build)}`
+    : depsPrelude(spec.image.runtime);
+
   // Wrap the startup command so the container STAYS RUNNING after the process
   // exits (crashes or clean). This keeps the exec shell connected so the user
   // can see the crash output, type commands, inspect files, etc.
   const wrappedStartup = `
-${depsPrelude(spec.image.runtime)}${spec.startup}
+${prelude}${spec.startup}
 EXIT_CODE=$?
 echo
 echo "[troxe] Process exited with code $EXIT_CODE"
@@ -240,7 +315,11 @@ exec tail -f /dev/null
     WorkingDir: spec.image.workdir,
     Env: buildEnv(spec),
     Labels: labels,
-    ExposedPorts: { [`${spec.image.port}/tcp`]: {} },
+    // Expose exactly the container ports this workload declares. A bot template
+    // declares none and stays unreachable from outside, which is the point; a
+    // template with a TCP port exposes it so Docker may publish it. The
+    // runtime's legacy `image.port` remains the fallback for template-less rows.
+    ExposedPorts: exposedPorts(spec),
     StopSignal: 'SIGTERM',
     StopTimeout: 30,
     HostConfig: hostConfig,

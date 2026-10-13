@@ -24,6 +24,7 @@ import Overview from '../src/pages/dashboard/Overview.jsx';
 import Servers from '../src/pages/dashboard/Servers.jsx';
 import CreateServer from '../src/pages/dashboard/CreateServer.jsx';
 import ServerDetail from '../src/pages/dashboard/ServerDetail.jsx';
+import RenewalReturn from '../src/pages/dashboard/RenewalReturn.jsx';
 import ExecTerminal, { ConsoleOffline } from '../src/pages/dashboard/ExecTerminal.jsx';
 import Activity from '../src/pages/dashboard/Activity.jsx';
 import Settings from '../src/pages/dashboard/Settings.jsx';
@@ -135,6 +136,7 @@ export const cases = [
   { name: 'Dashboard/Overview', path: '/dashboard', el: dash('index', <Overview />) },
   { name: 'Dashboard/Servers', path: '/dashboard/servers', el: dash('servers', <Servers />) },
   { name: 'Dashboard/CreateServer', path: '/dashboard/servers/new', el: dash('servers/new', <CreateServer />) },
+  { name: 'Dashboard/RenewalReturn', path: '/dashboard/renew/return', el: dash('renew/return', <RenewalReturn />) },
   { name: 'Dashboard/ServerDetail', path: `/dashboard/servers/${UID}`, el: dash('servers/:id', <ServerDetail />) },
   {
     name: 'Dashboard/Console (live)',

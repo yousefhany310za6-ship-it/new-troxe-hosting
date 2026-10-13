@@ -19,9 +19,28 @@ import { useAdminUserCreateLimits } from '@/hooks/useAdminQueries.jsx';
 import { useToast } from '@/hooks/useToast.jsx';
 import { Select } from '@/components/ui/select.jsx';
 import ResourcePicker, { RESOURCE_META, ResourceGauge, formatResource } from '@/components/dashboard/ResourcePicker.jsx';
-import { IconBun, IconNode, IconPhp, IconPython } from '@/components/icons.jsx';
+import { IconBun, IconGo, IconNode, IconPhp, IconPython, IconRust } from '@/components/icons.jsx';
 
-const RUNTIME_ICONS = { 'Node.js': IconNode, Bun: IconBun, Python: IconPython, PHP: IconPhp };
+const RUNTIME_ICONS = {
+    'Node.js': IconNode,
+    Bun: IconBun,
+    Python: IconPython,
+    PHP: IconPhp,
+    Go: IconGo,
+    Rust: IconRust,
+    // Java, Ruby, .NET and Deno have no icon in components/icons.jsx yet; they
+    // fall back to the Node mark rather than shipping a broken glyph.
+};
+
+// Category names shown in the template picker, in the order they are listed.
+const CATEGORY_LABEL = {
+    application: 'Application',
+    bot: 'Bot',
+    language: 'Language',
+    framework: 'Framework',
+    game: 'Game',
+    other: 'Other',
+};
 
 const STEPS = [
     { id: 'basics', title: 'Basics', hint: 'Name & runtime' },
@@ -53,7 +72,7 @@ export default function CreateServer({ adminMode = false }) {
 
     const [step, setStep] = useState(0);
     const [name, setName] = useState('');
-    const [runtime, setRuntime] = useState('Node.js');
+    const [templateId, setTemplateId] = useState('');
     const [version, setVersion] = useState('');
     const [startup, setStartup] = useState('');
     const [vars, setVars] = useState({});
@@ -77,7 +96,11 @@ export default function CreateServer({ adminMode = false }) {
     const { data: ownerLimits } = useAdminUserCreateLimits(adminMode ? ownerId : undefined);
     const limits = adminMode ? ownerLimits : myLimits;
 
-    const entry = (catalog ?? []).find((c) => c.runtime === runtime);
+    // The catalog is now TEMPLATES (not runtimes): "Discord bot" and "Express"
+    // are separate entries that happen to share a runtime. Nothing here is
+    // hardcoded — every option, version and default comes from the API.
+    const templates = catalog ?? [];
+    const entry = templates.find((c) => c.id === templateId);
     const runtimeDefault = entry?.defaultStartup ?? '';
     const backTo = adminMode ? '/admin/servers' : '/dashboard/servers';
 
@@ -92,7 +115,13 @@ export default function CreateServer({ adminMode = false }) {
         if (adminMode && ownerId && limits?.defaults) setRes({ ...limits.defaults });
     }, [ownerId, adminMode, limits?.defaults]);
 
-    // reset version + variables when the runtime changes
+    // Default to the first creatable template once the catalog arrives, and reset
+    // version + variables whenever the selected template changes.
+    useEffect(() => {
+        if (!templates.length) return;
+        setTemplateId((cur) => (cur && templates.some((t) => t.id === cur) ? cur : templates[0].id));
+    }, [templates]);
+
     useEffect(() => {
         if (!entry) return;
         setVersion((v) => (entry.versions.some((x) => x.version === v) ? v : (entry.versions[0]?.version ?? '')));
@@ -102,7 +131,7 @@ export default function CreateServer({ adminMode = false }) {
             return next;
         });
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [runtime, catalog]);
+    }, [templateId, catalog]);
 
     // ?owner=<id> e.g. from the user-detail page — skip the picker entirely
     useEffect(() => {
@@ -194,7 +223,9 @@ export default function CreateServer({ adminMode = false }) {
             const filteredEnv = [...varEnv, ...env.filter((r) => r.k.trim() && r.v.trim())];
             const payload = {
                 name: name.trim(),
-                runtime,
+                // The TEMPLATE is what the client picks; the backend derives the
+                // runtime from it and never takes an image from the request.
+                templateId,
                 env: filteredEnv,
                 autoRestart,
                 autoBackup,
@@ -219,7 +250,7 @@ export default function CreateServer({ adminMode = false }) {
         }
     };
 
-    const RuntimeIcon = RUNTIME_ICONS[runtime];
+    const RuntimeIcon = RUNTIME_ICONS[entry?.runtime] || IconNode;
 
     return (
         <div className="flex flex-col gap-5">
@@ -338,17 +369,23 @@ export default function CreateServer({ adminMode = false }) {
 
                             <div className="grid gap-4 sm:grid-cols-2">
                                 <div>
-                                    <span className={labelClass}>Runtime</span>
+                                    <span className={labelClass}>Template</span>
                                     <Select
-                                        ariaLabel="Runtime"
-                                        value={runtime}
-                                        onChange={setRuntime}
+                                        ariaLabel="Template"
+                                        value={templateId}
+                                        onChange={setTemplateId}
                                         disabled={creating}
                                         loading={!catalog}
                                         searchable
-                                        options={(catalog ?? []).map((c) => ({ value: c.runtime, label: c.label }))}
+                                        options={templates.map((c) => ({
+                                            value: c.id,
+                                            label: `${c.name} — ${CATEGORY_LABEL[c.category] ?? c.category}`,
+                                        }))}
                                         className="w-full"
                                     />
+                                    {entry?.description && (
+                                        <p className="mt-1 text-tiny text-ink-secondary">{entry.description}</p>
+                                    )}
                                 </div>
                                 <div>
                                     <span className={labelClass}>Version</span>
@@ -360,8 +397,36 @@ export default function CreateServer({ adminMode = false }) {
                                         options={(entry?.versions ?? []).map((v) => ({ value: v.version, label: v.label }))}
                                         className="w-full"
                                     />
+                                    {/* Honest disclosure: a template that has not been
+                                        integration-tested says so, rather than being
+                                        presented as fully supported. */}
+                                    {entry && entry.status !== 'verified' && (
+                                        <p className="mt-1 text-tiny text-ink-secondary">
+                                            {entry.status === 'unverified'
+                                                ? 'Not yet verified by the platform test suite.'
+                                                : `Status: ${entry.status}.`}
+                                        </p>
+                                    )}
+                                    {entry?.recommended && (
+                                        <p className="mt-1 text-tiny text-ink-secondary">
+                                            Suggested: {entry.recommended.cpuMilli / 1000} vCPU ·{' '}
+                                            {entry.recommended.ramMb >= 1024
+                                                ? `${(entry.recommended.ramMb / 1024).toFixed(1)} GB`
+                                                : `${entry.recommended.ramMb} MB`}{' '}
+                                            RAM · {entry.recommended.storageGb} GB disk
+                                        </p>
+                                    )}
                                 </div>
                             </div>
+                            {entry && (
+                                <p className="text-tiny text-ink-secondary">
+                                    {entry.ports.length
+                                        ? `Publishes ${entry.ports
+                                              .map((p) => `${p.protocol.toUpperCase()} port ${p.containerPort}`)
+                                              .join(' and ')} — ${entry.ports[0].description}`
+                                        : 'No published port — this workload only makes outbound connections.'}
+                                </p>
+                            )}
                         </section>
                     )}
 
@@ -542,7 +607,7 @@ export default function CreateServer({ adminMode = false }) {
                         <Row label="Name" value={name.trim() || '—'} mono />
                         <Row
                             label="Runtime"
-                            value={version ? `${runtime} ${version}` : runtime || '—'}
+                            value={version ? `${entry?.runtimeLabel ?? ''} ${version}` : entry?.runtimeLabel ?? '—'}
                             icon={RuntimeIcon ? <RuntimeIcon className="size-3.5" /> : null}
                         />
                         <Row label="Plan" value={limits?.plan?.name ?? '—'} badge={limits?.plan?.id} />

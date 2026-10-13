@@ -4,6 +4,7 @@ import {
     Activity,
     ArrowLeft,
     Ban,
+    Hourglass,
     CalendarClock,
     Check,
     Database,
@@ -38,6 +39,7 @@ import ServerStartup from './ServerStartup.jsx';
 import ServerActivity from './ServerActivity.jsx';
 import ServerUsers from './ServerUsers.jsx';
 import ServerSchedules from './ServerSchedules.jsx';
+import RenewalPanel from '@/components/dashboard/RenewalPanel.jsx';
 import { useServerGrant } from '@/hooks/useQueries.jsx';
 
 const TABS = [
@@ -412,6 +414,21 @@ export default function ServerDetail() {
             </div>
 
             {status === 'suspended' ? (
+                <section className="flex flex-col gap-4">
+                {server?.suspendedReason === 'expired' ? (
+                    <section className="console-card relative overflow-hidden p-8 text-center sm:p-12">
+                        <span className="mx-auto flex size-16 items-center justify-center rounded-2xl border border-hairline bg-veil">
+                            <Hourglass className="size-8 text-ink-secondary" />
+                        </span>
+                        <h2 className="mt-4 text-display font-extrabold">Server Expired</h2>
+                        <p className="mt-2 max-w-md text-body leading-relaxed text-ink-secondary">
+                            This free server’s 24 hours are up, so it was stopped automatically.
+                        </p>
+                        <p className="mt-1 max-w-md text-small text-ink-secondary">
+                            Your files are safe. Renew below to get another 24 hours.
+                        </p>
+                    </section>
+                ) : (
                 <section className="console-card relative overflow-hidden border-red-500/30! p-8 text-center sm:p-12">
                     <div
                         aria-hidden="true"
@@ -433,6 +450,11 @@ export default function ServerDetail() {
                             Contact Support
                         </Link>
                     </div>
+                </section>
+                )}
+                {/* The renewal panel is the ONLY way out of an expiry, and it is
+                    rendered here so the user never has to hunt for it. */}
+                <RenewalPanel serverId={server.id} onRenewed={fetchServer} />
                 </section>
             ) : (
             <>

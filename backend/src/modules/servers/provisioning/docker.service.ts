@@ -36,6 +36,15 @@ export const finiteNum = (v: unknown): number => {
 /** Daemon-provided strings are unbounded: bound whatever we store or send. */
 export const boundedStr = (v: unknown, max: number): string => (typeof v === 'string' ? v.slice(0, max) : '');
 
+/** One host port exactly as the DAEMON has it bound. */
+export interface PublishedBinding {
+  hostPort: number;
+  /** 'tcp' | 'udp' — read from the binding key, never assumed */
+  protocol: 'tcp' | 'udp';
+  /** the container-side port the binding key names */
+  containerPort: number;
+}
+
 /** Free/used space of the filesystem a node's Docker root lives on. */
 export interface DiskUsage {
   totalBytes: number;
@@ -514,23 +523,62 @@ export class DockerService {
   // ---- observation ----------------------------------------------------------
 
   /**
-   * Host ports the container ACTUALLY publishes. Read from the container
-   * config, so a caller can tell "allocated in the database" from "live on the
-   * host" and reconcile the two.
+   * Host ports the container ACTUALLY publishes, with the protocol and the
+   * container port they map to.
+   *
+   * Returning the protocol matters: a database row that says `tcp` while
+   * docker has bound `udp` is drift, and a boolean "has ports" can never see
+   * it. Empty result means either "publishes nothing" or "the container is
+   * gone" — callers that must tell those apart check `inspect()` first.
    */
-  async publishedPorts(id: string, nodeId = 'local'): Promise<number[]> {
+  async publishedBindings(id: string, nodeId = 'local'): Promise<PublishedBinding[]> {
     const d = await this.cx(nodeId).catch(() => null);
     if (!d) return [];
     try {
       const info: any = await withTimeout(d.getContainer(id).inspect(), 10_000, 'container inspect');
       const bindings = (info?.HostConfig?.PortBindings ?? {}) as Record<string, Array<{ HostPort?: string }>>;
-      return Object.values(bindings)
-        .flat()
-        .map((b) => Number(b?.HostPort))
-        .filter((n) => Number.isInteger(n) && n > 0);
+      const out: PublishedBinding[] = [];
+      for (const [key, list] of Object.entries(bindings)) {
+        const [portPart, protoPart] = key.split('/');
+        const containerPort = Number(portPart);
+        const protocol = protoPart === 'udp' ? 'udp' : 'tcp';
+        if (!Number.isInteger(containerPort) || containerPort <= 0) continue;
+        for (const b of list ?? []) {
+          const hostPort = Number(b?.HostPort);
+          if (!Number.isInteger(hostPort) || hostPort <= 0) continue;
+          out.push({ hostPort, protocol, containerPort });
+        }
+      }
+      return out;
     } catch {
       return [];
     }
+  }
+
+  /**
+   * The container's IP on its sandbox network. Needed to prove the service is
+   * reachable INSIDE the sandbox, which `docker inspect` alone cannot show.
+   */
+  async containerAddress(id: string, networkName: string, nodeId = 'local'): Promise<string | null> {
+    const d = await this.cx(nodeId).catch(() => null);
+    if (!d) return null;
+    try {
+      const info: any = await withTimeout(d.getContainer(id).inspect(), 10_000, 'container inspect');
+      const nets = info?.NetworkSettings?.Networks ?? {};
+      const ip = nets?.[networkName]?.IPAddress;
+      return typeof ip === 'string' && ip ? ip : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Host ports the container ACTUALLY publishes. Numbers only — kept for the
+   * callers that only need a set to diff against the database. Use
+   * publishedBindings() when the protocol matters.
+   */
+  async publishedPorts(id: string, nodeId = 'local'): Promise<number[]> {
+    return (await this.publishedBindings(id, nodeId)).map((b) => b.hostPort);
   }
 
   async inspect(id: string, nodeId = 'local'): Promise<ContainerState | null> {

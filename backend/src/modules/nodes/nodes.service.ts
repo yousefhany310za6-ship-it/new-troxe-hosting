@@ -1,13 +1,14 @@
 import { ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { and, count, eq } from 'drizzle-orm';
+import { and, count, eq, ne } from 'drizzle-orm';
 import { randomBytes } from 'crypto';
 import { DB, Db } from '../../db/db.module';
-import { nodes, servers } from '../../db/schema';
+import { nodes, serverPorts, servers } from '../../db/schema';
 import { Err } from '../../common/errors';
 import { encryptSecret } from '../../common/crypto';
 import { AuditService } from '../audit/audit.module';
 import { NodePoolService } from './node-pool.service';
 import { CreateNodeDto, UpdateNodeDto } from './dto';
+import { explainRange, validateRange, DEFAULT_PORT_RANGE } from '../servers/ports-policy';
 
 /** The API host's own daemon — always present, never remote, never deleted. */
 export const LOCAL_NODE_ID = 'local';
@@ -54,6 +55,52 @@ export class NodesService {
     private audit: AuditService,
   ) {}
 
+  /**
+   * A node's port pool: its own override when set, else the platform default.
+   * Same rule as PortsService.rangeFor, kept as a pure function so the admin
+   * list and the allocator cannot drift apart.
+   */
+  private effectiveRange(from: number | null, to: number | null): { from: number; to: number; nodeOverride: boolean } {
+    if (from !== null && to !== null && from <= to) return { from, to, nodeOverride: true };
+    return { from: DEFAULT_PORT_RANGE.from, to: DEFAULT_PORT_RANGE.to, nodeOverride: false };
+  }
+
+  /**
+   * A node's port pool may only claim ports no OTHER node on the SAME host is
+   * using. Two overlapping pools would hand one host port to two different
+   * daemons: Docker refuses the second bind, the allocation is left behind,
+   * and the server is created in `error` with a port it can never have.
+   *
+   * "Same host" = the same daemon address. The local node has no `docker_host`
+   * (unix socket), so it is its own host and never collides with a remote one.
+   * Returns null when the range is acceptable, or the refusal text.
+   */
+  private async validatePortRange(nodeId: string, range: { from: number; to: number }): Promise<string | null> {
+    const mine = await this.daemonKey(nodeId);
+    const siblings = await this.db
+      .select({ id: nodes.id, dockerHost: nodes.dockerHost, from: nodes.portRangeFrom, to: nodes.portRangeTo })
+      .from(nodes)
+      .where(ne(nodes.id, nodeId));
+    const others: Array<{ from: number; to: number }> = [];
+    for (const s of siblings) {
+      if ((s.dockerHost ?? null) !== mine) continue;
+      if (s.from === null || s.to === null) continue; // platform default is checked below
+      others.push({ from: s.from, to: s.to });
+    }
+    const rejection = validateRange(range, others);
+    return rejection ? explainRange(rejection, range) : null;
+  }
+
+  /** Identity of the daemon a node's containers live on (null = local socket). */
+  private async daemonKey(nodeId: string): Promise<string | null> {
+    const [n] = await this.db
+      .select({ dockerHost: nodes.dockerHost })
+      .from(nodes)
+      .where(eq(nodes.id, nodeId))
+      .limit(1);
+    return n?.dockerHost ?? null;
+  }
+
   /** Strip TLS secrets — the API never returns key material, only its presence. */
   private strip<T extends { tlsCa?: unknown; tlsCert?: unknown; tlsKey?: unknown }>(row: T) {
     const { tlsCa: _ca, tlsCert: _cert, tlsKey: _key, ...safe } = row;
@@ -61,7 +108,7 @@ export class NodesService {
   }
 
   async list() {
-    const [rows, counts] = await Promise.all([
+    const [rows, counts, portCounts] = await Promise.all([
       this.db
         .select({
           id: nodes.id,
@@ -73,15 +120,37 @@ export class NodesService {
           tlsKey: nodes.tlsKey,
           enabled: nodes.enabled,
           drained: nodes.drained,
+          subnetBase: nodes.subnetBase,
+          publicHost: nodes.publicHost,
+          portRangeFrom: nodes.portRangeFrom,
+          portRangeTo: nodes.portRangeTo,
           lastSeenAt: nodes.lastSeenAt,
           createdAt: nodes.createdAt,
         })
         .from(nodes)
         .orderBy(nodes.id),
       this.db.select({ nodeId: servers.nodeId, n: count() }).from(servers).groupBy(servers.nodeId),
+      this.db
+        .select({ nodeId: serverPorts.nodeId, n: count() })
+        .from(serverPorts)
+        .where(eq(serverPorts.state, 'allocated'))
+        .groupBy(serverPorts.nodeId),
     ]);
     const serverCount = new Map(counts.map((c) => [c.nodeId, c.n]));
-    return rows.map((r) => ({ ...this.strip(r), serverCount: serverCount.get(r.id) ?? 0 }));
+    // port occupancy travels with the node so the admin can see exhaustion
+    // before the next server creation fails with PORT_POOL_EXHAUSTED
+    const portCount = new Map(portCounts.map((c) => [c.nodeId, Number(c.n)]));
+    return rows.map((r) => {
+      const range = this.effectiveRange(r.portRangeFrom, r.portRangeTo);
+      const used = portCount.get(r.id) ?? 0;
+      const capacity = range.to - range.from + 1;
+      return {
+        ...this.strip(r),
+        serverCount: serverCount.get(r.id) ?? 0,
+        portRange: { from: range.from, to: range.to, nodeOverride: range.nodeOverride },
+        portPool: { used, capacity, free: Math.max(0, capacity - used) },
+      };
+    });
   }
 
   async get(id: string) {
@@ -156,6 +225,25 @@ export class NodesService {
       patch.enabled = dto.enabled;
     }
     if (dto.drained !== undefined) patch.drained = dto.drained;
+    // Port range is a node-level pool the admin owns. BOTH ends or neither:
+    // a half-set range would silently fall back to the platform default and
+    // look like the change was ignored.
+    if (dto.portRangeFrom !== undefined || dto.portRangeTo !== undefined) {
+      const from = dto.portRangeFrom;
+      const to = dto.portRangeTo;
+      if ((from === null) !== (to === null)) {
+        throw Err.invalid('NODE_PORT_RANGE_PARTIAL', 'Set both ends of the port range, or clear both to use the platform default');
+      }
+      if (from !== null && from !== undefined && to !== null && to !== undefined) {
+        const refusal = await this.validatePortRange(id, { from, to });
+        if (refusal) throw Err.invalid('NODE_PORT_RANGE_REJECTED', refusal);
+        patch.portRangeFrom = from;
+        patch.portRangeTo = to;
+      } else {
+        patch.portRangeFrom = null;
+        patch.portRangeTo = null;
+      }
+    }
     if (!Object.keys(patch).length) throw Err.invalid('NODE_NO_CHANGES', 'Nothing to update');
     const [updated] = await this.db.update(nodes).set(patch).where(eq(nodes.id, id)).returning();
     this.pool.refresh(id);

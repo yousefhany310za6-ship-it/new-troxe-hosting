@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { hkdfSync, randomBytes } from 'crypto';
 import type { StringValue } from 'ms';
 import { RESOURCE_HARD_MAX, RESOURCE_MIN } from '../modules/servers/resource-policy';
+import { DEFAULT_PORT_RANGE, explainRange, validateRange } from '../modules/servers/ports-policy';
 
 /**
  * Central, validated configuration.
@@ -59,6 +60,24 @@ function bool(name: string, def: boolean): boolean {
 
 function ephemeralSecret(): string {
   return randomBytes(48).toString('base64url');
+}
+
+/**
+ * Host-port pool bounds, validated AS A PAIR before the app may serve a single
+ * request. A typo here is not cosmetic: too narrow and every server creation
+ * fails with PORT_POOL_EXHAUSTED; overlapping the ephemeral range and the pool
+ * fights the host's own outbound sockets. Both ends are checked here so the
+ * process refuses to boot rather than discovering it at the 100th server.
+ */
+const PORT_RANGE_FROM = num('PORT_RANGE_FROM', DEFAULT_PORT_RANGE.from, 1024, 65535);
+const PORT_RANGE_TO = num('PORT_RANGE_TO', DEFAULT_PORT_RANGE.to, 1024, 65535);
+{
+  const rejection = validateRange({ from: PORT_RANGE_FROM, to: PORT_RANGE_TO });
+  if (rejection) {
+    errors.push(
+      `PORT_RANGE_FROM/PORT_RANGE_TO rejected: ${explainRange(rejection, { from: PORT_RANGE_FROM, to: PORT_RANGE_TO })}`,
+    );
+  }
 }
 
 const LOG_LEVELS = ['verbose', 'debug', 'log', 'warn', 'error'] as const;
@@ -208,6 +227,31 @@ if (RESEND_FROM_EMAIL && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(RESEND_FROM_EMAIL))
 if (APP_URL && !/^https?:\/\/[^/]+$/.test(APP_URL))
   errors.push('APP_URL must be a bare origin with no path (e.g. https://troxe.net).');
 
+// ---- Work.ink (free-plan server renewal) -----------------------------------
+// Off unless explicitly enabled: the renewal path grants runtime, so a
+// half-configured integration must never silently hand out 24-hour extensions.
+const WORKINK_ENABLED = bool('WORKINK_ENABLED', false);
+const WORKINK_API_BASE_URL = (raw.WORKINK_API_BASE_URL ?? 'https://work.ink/_api/v2').trim().replace(/\/+$/, '');
+const WORKINK_LINK_URL = (raw.WORKINK_LINK_URL ?? '').trim();
+const WORKINK_LINK_ID = (raw.WORKINK_LINK_ID ?? '').trim();
+const WORKINK_RETURN_URL = (raw.WORKINK_RETURN_URL ?? '').trim();
+const WORKINK_DELETE_TOKEN = bool('WORKINK_DELETE_TOKEN', true);
+
+// Only hard-fail on a misconfiguration that would send traffic somewhere we
+// do not control — an allowlist violation is a security error, not a warning.
+if (WORKINK_API_BASE_URL && !/^https:\/\/(api\.)?work\.ink(\/|$)/.test(WORKINK_API_BASE_URL))
+  errors.push('WORKINK_API_BASE_URL must be an https work.ink URL.');
+if (WORKINK_LINK_URL && !/^https:\/\/work\.ink\//.test(WORKINK_LINK_URL))
+  errors.push('WORKINK_LINK_URL must be an https://work.ink/... dashboard link.');
+if (WORKINK_LINK_ID && !/^\d{1,12}$/.test(WORKINK_LINK_ID))
+  errors.push('WORKINK_LINK_ID must be the numeric link id shown in the Work.ink dashboard.');
+if (WORKINK_RETURN_URL && !/^https:\/\//.test(WORKINK_RETURN_URL))
+  errors.push('WORKINK_RETURN_URL must be an absolute https URL on this site.');
+if (WORKINK_ENABLED && !WORKINK_LINK_URL) errors.push('WORKINK_LINK_URL is required when WORKINK_ENABLED=true.');
+if (WORKINK_ENABLED && !WORKINK_LINK_ID) errors.push('WORKINK_LINK_ID is required when WORKINK_ENABLED=true.');
+if (WORKINK_ENABLED && !WORKINK_RETURN_URL)
+  errors.push('WORKINK_RETURN_URL is required when WORKINK_ENABLED=true.');
+
 if (errors.length) {
   const body = ['Invalid environment configuration — refusing to start:', ...errors.map((e) => `  • ${e}`)].join('\n');
   throw new Error(body);
@@ -252,6 +296,13 @@ export interface AppConfig {
   readonly HELPER_IMAGE: string;
   readonly HARDEN_NETWORK: boolean;
   readonly CONTAINER_PIDS_LIMIT: number;
+  /**
+   * Platform-wide host-port pool for sandboxes (inclusive). A node may narrow
+   * or move its own range in the admin dashboard (`nodes.port_range_*`); this
+   * is the fallback every node without an override uses.
+   */
+  readonly PORT_RANGE_FROM: number;
+  readonly PORT_RANGE_TO: number;
   readonly BACKUP_DIR: string;
   readonly AVATAR_STORAGE_PATH: string;
   readonly AVATAR_MAX_SIZE_BYTES: number;
@@ -293,6 +344,18 @@ export interface AppConfig {
   /** user-facing site origin for email links (reset, unsubscribe) */
   readonly APP_URL: string;
   readonly EMAIL_ENABLED: boolean;
+  /**
+   * Work.ink — monetised-link provider used to renew free-plan servers.
+   * `WORKINK_ENABLED` gates the whole flow; the rest are read only once it is on.
+   */
+  readonly WORKINK_ENABLED: boolean;
+  readonly WORKINK_API_BASE_URL: string;
+  readonly WORKINK_LINK_URL: string;
+  readonly WORKINK_LINK_ID: string;
+  /** where Work.ink returns the user; `{TOKEN}` is substituted by them */
+  readonly WORKINK_RETURN_URL: string;
+  /** consume the key after validation so it cannot back a second renewal */
+  readonly WORKINK_DELETE_TOKEN: boolean;
 }
 
 export const config: AppConfig = Object.freeze({
@@ -334,6 +397,9 @@ export const config: AppConfig = Object.freeze({
   HARDEN_NETWORK: bool('HARDEN_NETWORK', true),
   CONTAINER_PIDS_LIMIT: num('CONTAINER_PIDS_LIMIT', 512, 32, 8192),
 
+  PORT_RANGE_FROM,
+  PORT_RANGE_TO,
+
   BACKUP_DIR: raw.BACKUP_DIR ?? './data/backups',
   AVATAR_STORAGE_PATH: raw.AVATAR_STORAGE_PATH ?? './data/avatars',
   AVATAR_MAX_SIZE_BYTES: num('AVATAR_MAX_SIZE_BYTES', 5 * 1024 * 1024, 64 * 1024, 25 * 1024 * 1024),
@@ -365,6 +431,13 @@ export const config: AppConfig = Object.freeze({
   RESEND_WEBHOOK_SECRET,
   APP_URL,
   EMAIL_ENABLED: emailConfigured && !!RESEND_API_KEY && !!RESEND_FROM_EMAIL,
+
+  WORKINK_ENABLED,
+  WORKINK_API_BASE_URL,
+  WORKINK_LINK_URL,
+  WORKINK_LINK_ID,
+  WORKINK_RETURN_URL,
+  WORKINK_DELETE_TOKEN,
 
   LOG_LEVEL: logLevel(raw.LOG_LEVEL),
 });

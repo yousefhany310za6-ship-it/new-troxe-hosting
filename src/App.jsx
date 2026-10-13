@@ -34,6 +34,7 @@ const Overview = lazy(() => import('./pages/dashboard/Overview.jsx'));
 const Activity = lazy(() => import('./pages/dashboard/Activity.jsx'));
 const Servers = lazy(() => import('./pages/dashboard/Servers.jsx'));
 const ServerDetail = lazy(() => import('./pages/dashboard/ServerDetail.jsx'));
+const RenewalReturn = lazy(() => import('./pages/dashboard/RenewalReturn.jsx'));
 const CreateServer = lazy(() => import('./pages/dashboard/CreateServer.jsx'));
 const Settings = lazy(() => import('./pages/dashboard/Settings.jsx'));
 const MyTickets = lazy(() => import('./pages/dashboard/MyTickets.jsx'));
@@ -90,6 +91,8 @@ export default function App() {
                             <Route path="servers" element={<Servers />} />
                             <Route path="servers/new" element={<CreateServer />} />
                             <Route path="servers/:id" element={<ServerDetail />} />
+                            {/* Where Work.ink returns the user after a renewal. */}
+                            <Route path="renew/return" element={<RenewalReturn />} />
                             <Route path="activity" element={<Activity />} />
                             <Route path="support" element={<MyTickets />} />
                             <Route path="support/queue" element={<SupportDesk />} />

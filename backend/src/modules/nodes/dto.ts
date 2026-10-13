@@ -122,4 +122,28 @@ export class UpdateNodeDto {
   })
   @MaxLength(18)
   subnetBase?: string | null;
+
+  /**
+   * Host-port pool this node publishes from (inclusive). Set BOTH ends, or
+   * clear BOTH to fall back to the platform default (PORT_RANGE_FROM/TO).
+   *
+   * Only ever written by an admin on the node itself — no client request can
+   * reach this endpoint, and there is deliberately no way for a user to ask
+   * for a specific host port anywhere in the API.
+   */
+  @IsOptional()
+  @ValidateIf((o: UpdateNodeDto) => o.portRangeFrom !== null)
+  @Type(() => Number)
+  @IsInt()
+  @Min(1024)
+  @Max(65535)
+  portRangeFrom?: number | null;
+
+  @IsOptional()
+  @ValidateIf((o: UpdateNodeDto) => o.portRangeTo !== null)
+  @Type(() => Number)
+  @IsInt()
+  @Min(1024)
+  @Max(65535)
+  portRangeTo?: number | null;
 }

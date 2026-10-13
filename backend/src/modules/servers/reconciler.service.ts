@@ -1,13 +1,14 @@
 import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
-import { eq, lt } from 'drizzle-orm';
+import { and, eq, lt } from 'drizzle-orm';
 import { config } from '../../config/env';
 import { DB, Db } from '../../db/db.module';
-import { auditLogs, authSessions, nodes, serverEvents, servers, sessions } from '../../db/schema';
+import { auditLogs, authSessions, nodes, serverEvents, serverPorts, servers, sessions } from '../../db/schema';
 import { DockerService } from './provisioning/docker.service';
 import { NetworkHardeningService } from './provisioning/network-hardening.service';
 import { ProvisionerService } from './provisioning/provisioner.service';
 import { runtimeImage } from './provisioning/images';
 import { BackupsService } from './backups.service';
+import { PortsService } from './ports.service';
 import { ServersService } from './servers.service';
 
 const GRACE_MS = 5 * 60 * 1000; // never GC a resource that is seconds old
@@ -64,6 +65,7 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
     private provisioner: ProvisionerService,
     private backups: BackupsService,
     private serversSvc: ServersService,
+    private ports: PortsService,
   ) {}
 
   onModuleInit() {
@@ -110,6 +112,11 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
         const subset = byNode.get(n.id) ?? [];
         await this.warnIfDiskFull(n.id);
         await this.syncStatuses(subset, n.id);
+        // published ports must match the allocations in the database — a
+        // container created before its port existed publishes nothing, and
+        // `docker restart` never re-applies PortBindings, so that gap would
+        // otherwise stay invisible while the panel shows a healthy address.
+        await this.syncPorts(subset, n.id);
         // daemon restarts flush DOCKER-USER: converge local rules on recovery
         if (n.id === 'local' && (wasDown || this.tickCount % 5 === 0)) await this.syncHardening();
         // remote: static supernet, verified hourly against the live ruleset
@@ -217,6 +224,98 @@ export class ReconcilerService implements OnModuleInit, OnModuleDestroy {
       const live = new Set(rows.map((r) => r.id));
       for (const id of this.restarts.keys()) if (!live.has(id)) this.restarts.delete(id);
     }
+  }
+
+  /**
+   * Host ports must match the allocations in the database.
+   *
+   * Three facts are compared per server: what the database says is allocated,
+   * what the daemon actually has bound (host port AND protocol), and whether
+   * anything LISTENS inside the sandbox. The first two are what "drift" means;
+   * the third is what the dashboard reports.
+   *
+   * Auto-repair runs ONLY for a server that is not running: recreating a
+   * stopped container cannot interrupt a client, and it is the only way the
+   * bindings come back. A RUNNING server is never touched here — a drifting
+   * running container is logged and surfaced in the admin UI instead, because
+   * the only fix is a restart and that is the owner's call, not the
+   * reconciler's.
+   */
+  private async syncPorts(rows: (typeof servers.$inferSelect)[], nodeId: string): Promise<void> {
+    for (const row of rows) {
+      // suspended servers are frozen by administration — never touch them here
+      if (row.status === 'suspended' || row.status === 'deleting' || !row.containerId) continue;
+      try {
+        const allocations = await this.ports.listForServer(row.id);
+        const state = await this.docker.inspect(row.containerId, nodeId);
+        if (!state) continue; // syncStatuses already flagged it as an error
+        const bindings = await this.docker.publishedBindings(row.containerId, nodeId);
+        const bound = new Set(bindings.map((b) => `${b.hostPort}/${b.protocol}`));
+        const wanted = new Set(allocations.map((a) => `${a.port}/${a.protocol}`));
+
+        const missing = allocations.filter((a) => !bound.has(`${a.port}/${a.protocol}`));
+        const extra = [...bound].filter((k) => !wanted.has(k));
+
+        // nothing to reconcile and the container is up: just refresh the
+        // listening/reachable cache so the panel is never showing stale facts.
+        if (!missing.length && !extra.length) {
+          await this.probeOnce(row, nodeId, allocations, state.running);
+          continue;
+        }
+
+        await this.db
+          .update(serverPorts)
+          .set({ drift: missing.length ? 'missing' : 'extra' })
+          .where(and(eq(serverPorts.serverId, row.id), eq(serverPorts.state, 'allocated')))
+          .catch(() => undefined);
+
+        this.log.error(
+          `port drift on ${row.name} (${row.id}): ${missing.length ? `${missing.length} allocated but not published` : ''}` +
+            `${missing.length && extra.length ? ', ' : ''}${extra.length ? `${extra.length} published but not allocated` : ''}`,
+        );
+
+        if (state.running) continue; // owner's call to restart, not ours
+        await this.reprovisionQuiet(row).catch((e: Error) =>
+          this.log.warn(`port repair failed for ${row.id}: ${e.message.slice(0, 160)}`),
+        );
+      } catch (e) {
+        this.log.debug(`syncPorts ${row.id}: ${(e as Error).message}`);
+      }
+    }
+  }
+
+  /**
+   * Refresh the cached "is anything actually listening" facts for one server.
+   *
+   * Bounded and best-effort: a node that is busy, or a container whose network
+   * has not come up yet, simply leaves the previous value in place rather than
+   * being recorded as unreachable.
+   */
+  private async probeOnce(
+    row: typeof servers.$inferSelect,
+    nodeId: string,
+    allocations: Array<{ id: string; port: number; protocol: 'tcp' | 'udp'; containerPort: number }>,
+    running: boolean,
+  ): Promise<void> {
+    const a = allocations[0];
+    if (!a) return;
+    let listening: boolean | null = null;
+    let reachable: boolean | null = null;
+    if (running) {
+      const ip = row.networkName ? await this.docker.containerAddress(row.containerId!, row.networkName, nodeId) : null;
+      if (ip) listening = await this.ports.probeService(ip, a.containerPort, { timeoutMs: 1_500 }).catch(() => null);
+      // the published port is only reachable from here on the LOCAL node — the
+      // API shares no loopback with a remote daemon
+      if (nodeId === 'local') reachable = await this.ports.probeService('127.0.0.1', a.port).catch(() => null);
+    }
+    await this.ports
+      .recordHealth(a.id, { containerListening: listening, hostReachable: reachable, drift: null })
+      .catch(() => undefined);
+  }
+
+  /** Recreate a STOPPED server's container so its published ports come back. */
+  private async reprovisionQuiet(row: typeof servers.$inferSelect): Promise<void> {
+    await this.serversSvc.reprovisionInternal(row);
   }
 
   /**

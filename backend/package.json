@@ -11,8 +11,13 @@
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
     "db:seed": "ts-node --transpile-only src/db/seed.ts",
-    "test:unit": "DATABASE_URL=postgresql://test:test@localhost:5432/test node --experimental-strip-types --loader ./test/loader.mjs --test test/unit/oauth-helpers.test.ts test/unit/oauth-service.test.ts test/unit/email-templates.test.ts test/unit/email-tokens.test.ts test/unit/email-service.test.ts test/unit/deps-prelude.test.ts test/unit/two-factor.test.ts test/unit/announcements.test.ts test/unit/support-policy.test.ts test/unit/runtime-images.test.ts test/unit/request-context.test.ts test/unit/ports.test.ts test/unit/resource-policy.test.ts test/unit/package-policy.test.ts test/unit/runtime-switch.test.ts test/unit/cron.test.ts test/unit/server-access-policy.test.ts test/unit/sandbox-env.test.ts",
-    "typecheck": "tsc --noEmit"
+    "test:unit": "DATABASE_URL=postgresql://test:test@localhost:5432/test node --experimental-strip-types --loader ./test/loader.mjs --test test/unit/oauth-helpers.test.ts test/unit/oauth-service.test.ts test/unit/email-templates.test.ts test/unit/email-tokens.test.ts test/unit/email-service.test.ts test/unit/deps-prelude.test.ts test/unit/two-factor.test.ts test/unit/announcements.test.ts test/unit/support-policy.test.ts test/unit/runtime-images.test.ts test/unit/request-context.test.ts test/unit/ports.test.ts test/unit/resource-policy.test.ts test/unit/renewal-policy.test.ts test/unit/workink-client.test.ts test/unit/package-policy.test.ts test/unit/runtime-switch.test.ts test/unit/cron.test.ts test/unit/server-access-policy.test.ts test/unit/sandbox-env.test.ts test/unit/templates.test.ts test/unit/template-security.test.ts test/unit/starter-projects.test.ts",
+    "typecheck": "tsc --noEmit",
+    "test:integration": "node --test --test-concurrency=1 test/integration/*.test.mjs",
+    "test:ports:db": "node scripts/prepare-port-test-db.mjs && TEST_SCHEMA_SQL=test/integration/.schema.sql node --experimental-strip-types --loader ./test/loader.mjs --test test/integration/ports.db.test.ts",
+    "test:ports:docker": "node --experimental-strip-types --loader ./test/loader.mjs --test test/integration/ports.docker.test.ts",
+    "test:templates": "node --experimental-strip-types --loader ./test/loader.mjs --test --test-concurrency=1 --test-timeout=1500000 test/templates/*.test.ts",
+    "image:php-composer": "docker build -t troxe-php-composer:8.3 docker/images/php-composer"
   },
   "dependencies": {
     "@nestjs/common": "^11.2.6",

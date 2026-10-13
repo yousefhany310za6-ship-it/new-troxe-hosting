@@ -278,7 +278,14 @@ export function useRestoreBackup(serverId, backupId) {
   });
 }
 
-// Runtime egg catalog (versions + variables, no digests)
+/**
+ * The template catalog (what a client can actually create).
+ *
+ * The endpoint path is unchanged, but the payload is now the TEMPLATE list
+ * rather than one entry per runtime: each item carries an id, a category, its
+ * own version list, the ports it publishes and its verification status. Digests
+ * are never exposed.
+ */
 export function useRuntimeCatalog() {
   return useQuery({ queryKey: ['runtimes', 'catalog'], queryFn: () => apiGet('/servers/runtimes/catalog'), staleTime: 60000 });
 }
