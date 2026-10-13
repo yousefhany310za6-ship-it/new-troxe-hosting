@@ -59,6 +59,16 @@ services:
       - RESEND_FROM_NAME=${RESEND_FROM_NAME:-Troxe}
       - RESEND_WEBHOOK_SECRET=${RESEND_WEBHOOK_SECRET:-}
       - APP_URL=${APP_URL:-}
+      # Free-plan server renewal via Work.ink. Off unless WORKINK_ENABLED is
+      # explicitly true; with it off the free plan still expires but renewals
+      # are refused with RENEWAL_UNAVAILABLE, so a half-configured deployment
+      # can never hand out free runtime.
+      - WORKINK_ENABLED=${WORKINK_ENABLED:-false}
+      - WORKINK_API_BASE_URL=${WORKINK_API_BASE_URL:-https://work.ink/_api/v2}
+      - WORKINK_LINK_URL=${WORKINK_LINK_URL:-}
+      - WORKINK_LINK_ID=${WORKINK_LINK_ID:-}
+      - WORKINK_RETURN_URL=${WORKINK_RETURN_URL:-}
+      - WORKINK_DELETE_TOKEN=${WORKINK_DELETE_TOKEN:-true}
       # Caddy always sets X-Forwarded-For: trust it so rate limits and
       # audit IPs see real clients (never enable without a proxy in front).
       - TRUST_PROXY=true
