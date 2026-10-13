@@ -6,17 +6,18 @@ import { cn } from '@/lib/utils';
 /**
  * The resource step of the create form (and the resize card in settings).
  *
- * Everything it shows comes from the API's `create-limits` / `resource-limits`
- * payload, which already accounts for the owner's plan AND for what their
- * other servers already consume — the sliders can never offer a number the
- * backend would refuse.
+ * The plan's numbers are the ACCOUNT's budget: whatever the owner's other
+ * servers already hold is subtracted, and the slider stops at what is left.
+ * Everything shown comes from the API's `create-limits` /
+ * `resource-limits` payload, so it can never offer a number the backend would
+ * refuse with QUOTA_*.
  */
 
 export const RESOURCE_META = {
     cpuMilli: {
         key: 'cpuMilli',
         label: 'CPU',
-        hint: 'vCPU share (1000 = 1 full core)',
+        hint: 'Your share of the plan’s CPU',
         unit: 'milli-vCPU',
         Icon: Cpu,
         format: (v) => `${Number((v / 1000).toFixed(2))} vCPU`,
@@ -26,7 +27,7 @@ export const RESOURCE_META = {
     ramMb: {
         key: 'ramMb',
         label: 'Memory',
-        hint: 'Hard limit — the container is killed above it',
+        hint: 'Your share of the plan’s RAM',
         unit: 'MB',
         Icon: MemoryStick,
         format: (v) => (v >= 1024 && v % 1024 === 0 ? `${v / 1024} GB` : `${v} MB`),
@@ -36,7 +37,7 @@ export const RESOURCE_META = {
     storageGb: {
         key: 'storageGb',
         label: 'Storage',
-        hint: 'Disk quota for /data — the volume is not pre-allocated',
+        hint: 'Your share of the plan’s disk',
         unit: 'GB',
         Icon: HardDrive,
         format: (v) => `${v} GB`,
@@ -148,10 +149,12 @@ export default function ResourcePicker({ limits, value, onChange, disabled = fal
 function ResourceCard({ limit, value, onChange, disabled }) {
     const meta = RESOURCE_META[limit.key];
     const { Icon } = meta;
+    // `max` is what is left of the ACCOUNT budget — the slider may never offer
+    // more than the plan actually has spare.
     const max = Math.max(limit.min, limit.max);
     const current = Math.max(limit.min, Math.min(value ?? limit.min, max));
-    const usedPct = limit.poolMax > 0 ? Math.min(100, Math.round((limit.used / limit.poolMax) * 100)) : 0;
-    const afterPct = limit.poolMax > 0 ? Math.min(100, Math.round(((limit.used + current) / limit.poolMax) * 100)) : 0;
+    const usedPct = limit.total > 0 ? Math.min(100, Math.round((limit.used / limit.total) * 100)) : 0;
+    const afterPct = limit.total > 0 ? Math.min(100, Math.round(((limit.used + current) / limit.total) * 100)) : 0;
     const left = Math.max(0, limit.available);
 
     return (
@@ -202,12 +205,12 @@ function ResourceCard({ limit, value, onChange, disabled }) {
                     />
                 </div>
                 <p className="font-mono text-micro text-ink-muted tabular-nums">
-                    {meta.short(current)} of {meta.short(limit.poolMax)} {meta.unit}
+                    {meta.short(limit.used)} + {meta.short(current)} of {meta.short(limit.total)} {meta.unit}
                 </p>
                 <p className={cn('text-micro', limit.exhausted ? 'text-red-300' : 'text-ink-muted')}>
                     {limit.exhausted
-                        ? `Nothing left — all ${meta.format(limit.poolMax)} are in use by your other servers.`
-                        : `${meta.format(left)} left of your ${meta.format(limit.poolMax)} plan pool · up to ${meta.format(limit.perServerMax)} per server`}
+                        ? `All ${meta.format(limit.total)} is in use by your other servers — delete one or shrink it to free some.`
+                        : `${meta.format(left)} left of the ${meta.format(limit.total)} your plan includes`}
                 </p>
             </div>
         </div>

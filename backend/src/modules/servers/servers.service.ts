@@ -20,7 +20,7 @@ import { defaultMainFile, migrateEnvForRuntime, recommendedStartup, runtimeChang
 import { PortsService } from './ports.service';
 import { ChangeRuntimeDto, CreateServerDto, RescaleServerDto, UpdateServerDto } from './dto';
 import { backupDirFor, backupOwnerDir } from './backup-paths';
-import { platformHardMax, resolveLimits, resolveRequest, serverHeadroom } from './resource-policy';
+import { RESOURCE_KEYS, platformHardMax, resolveLimits, resolveRequest, serverHeadroom } from './resource-policy';
 import type { PlanResourceRow, ResourceGrant, ResourceUsage } from './resource-policy';
 import { RealtimeGateway } from '../auth/realtime.gateway';
 import { GeoIpService } from '../../common/geoip/geoip.service';
@@ -299,7 +299,9 @@ export class ServersService {
   /** Shared read model for the user and admin forms. */
   private quotaPayload(plan: PlanResourceRow, usage: ResourceUsage) {
     const limits = resolveLimits(plan, usage);
-    const maxServers = Math.min(plan.maxServers || 0, config.MAX_SERVERS_PER_USER);
+    // "can I add a server at all" needs BOTH the count and the budget: a
+    // Platinum account with 11 servers and no free RAM is done either way.
+    const budgetLeft = RESOURCE_KEYS.every((key) => !limits[key].exhausted);
     return {
       plan: { id: plan.id, name: plan.name },
       servers: {
@@ -307,6 +309,12 @@ export class ServersService {
         max: plan.maxServers,
         accountMax: config.MAX_SERVERS_PER_USER,
         remaining: serverHeadroom(plan, usage.servers, config.MAX_SERVERS_PER_USER),
+        /** a server can be added: under the count cap AND with budget left */
+        canCreate: serverHeadroom(plan, usage.servers, config.MAX_SERVERS_PER_USER) > 0 && budgetLeft,
+        /** the count cap is what stops them (vs. the resource budget) */
+        countBlocked: serverHeadroom(plan, usage.servers, config.MAX_SERVERS_PER_USER) === 0,
+        /** the resource budget is what stops them */
+        budgetBlocked: !budgetLeft,
       },
       resources: limits,
       defaults: {
@@ -432,7 +440,7 @@ export class ServersService {
 
     // quota + insert are ONE transaction holding a row lock on the owner:
     // two concurrent creates cannot both pass the count check or both spend
-    // the same leftover pool (TOCTOU).
+    // the same leftover budget (TOCTOU).
     // Docker provisioning stays outside (saga: reconciler heals orphans).
     const { plan, row, grant } = await this.db.transaction(async (tx) => {
       const [owner] = await tx
@@ -454,8 +462,9 @@ export class ServersService {
       if (owned.length >= config.MAX_SERVERS_PER_USER)
         throw Err.quota('QUOTA_SERVERS', `Account limit of ${config.MAX_SERVERS_PER_USER} servers reached.`);
 
-      // What this server gets: the client's request clamped to BOTH the
-      // plan's per-server ceiling and what the account pool still has free.
+      // What this server gets: the client's request clamped to what is LEFT of the
+      // plan's account budget (the plan values are the whole account, shared
+      // with the servers this owner already has).
       const resolved = resolveRequest({
         limits: resolveLimits(plan, sumUsage(owned)),
         planName: plan.name,

@@ -108,10 +108,16 @@ const row = (icon, label) => ({ icon, label, included: true });
    keyed off. */
 const ROW_ORDER = ['cpu', 'ram', 'storage', 'backup', 'support'];
 
+/* CPU / RAM / storage are the ACCOUNT's total, shared across every server the
+   customer runs — the create form divides them as servers are added. Say so on
+   the card, otherwise "1.5 vCPU" reads as per-server and the account ends up
+   overcommitted the moment they spin up a second one. */
+const SHARED_NOTE = 'shared across your servers';
+
 const ROW_LABEL = {
-    cpu: (p) => formatCpu(p.cpu),
-    ram: (p) => formatRam(p.ram),
-    storage: (p) => `${p.storage}GB Storage`,
+    cpu: (p) => `${formatCpu(p.cpu)} ${SHARED_NOTE}`,
+    ram: (p) => `${formatRam(p.ram)} ${SHARED_NOTE}`,
+    storage: (p) => `${p.storage}GB Storage, ${SHARED_NOTE}`,
     backup: (p) => `${p.backups} Backup Slots`,
     support: (p) =>
         p.servers >= 12

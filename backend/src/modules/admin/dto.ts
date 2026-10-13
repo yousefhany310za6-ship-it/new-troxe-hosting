@@ -72,10 +72,6 @@ export class CreatePlanDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(64000) cpuMilli?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(16) @Max(524288) ramMb?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(10240) storageGb?: number;
-  // account-wide pools (sum of every server the account holds)
-  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(64000) poolCpuMilli?: number;
-  @IsOptional() @Type(() => Number) @IsInt() @Min(16) @Max(524288) poolRamMb?: number;
-  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(10240) poolStorageGb?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(500) maxServers?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(100) maxBackupSlots?: number;
 }
@@ -86,9 +82,6 @@ export class UpdatePlanDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(64000) cpuMilli?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(16) @Max(524288) ramMb?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(10240) storageGb?: number;
-  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(64000) poolCpuMilli?: number;
-  @IsOptional() @Type(() => Number) @IsInt() @Min(16) @Max(524288) poolRamMb?: number;
-  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(10240) poolStorageGb?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(500) maxServers?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(100) maxBackupSlots?: number;
 }

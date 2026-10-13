@@ -140,7 +140,9 @@ export default function CreateServer({ adminMode = false }) {
 
     const stepValid = (i) => {
         if (i === 0) return !problems.owner && !problems.name;
-        if (i === 1) return !!res && !limits?.servers?.exhausted;
+        // can't reach the resources step with nothing left to allocate (the
+        // admin override is the one way past it)
+        if (i === 1) return !!res && (limits?.servers?.canCreate || (adminMode && override));
         return true;
     };
 
@@ -158,6 +160,17 @@ export default function CreateServer({ adminMode = false }) {
         if (adminMode && !ownerId) {
             setStep(0);
             setMsg({ text: 'Please select the owning user first.', ok: false });
+            return;
+        }
+        // the budget is spent, or the plan's server cap is reached
+        if (limits && !limits.servers.canCreate && !(adminMode && override)) {
+            setStep(1);
+            setMsg({
+                text: limits.servers.budgetBlocked
+                    ? 'Your plan has no CPU, memory or storage left to allocate. Delete a server, make one smaller, or upgrade your plan.'
+                    : `Your "${limits.plan.name}" plan allows ${limits.servers.max} server(s). Upgrade to add more.`,
+                ok: false,
+            });
             return;
         }
         if (!name.trim() || !NAME_RE.test(name.trim())) {
@@ -359,8 +372,8 @@ export default function CreateServer({ adminMode = false }) {
                                 {limits?.plan && (
                                     <p className="text-tiny text-ink-secondary">
                                         <span className="font-bold text-foreground">{limits.plan.name}</span> plan
-                                        {adminMode && limits.plan.id !== 'free' ? ' (owner)' : ''} ·{' '}
-                                        {limits.servers.max - limits.servers.used} of {limits.servers.max} servers free
+                                        {adminMode ? ' (owner)' : ''} · {limits.servers.remaining} of {limits.servers.max}{' '}
+                                        server slots free
                                     </p>
                                 )}
                             </header>
@@ -389,9 +402,21 @@ export default function CreateServer({ adminMode = false }) {
                                 </label>
                             )}
 
+                            {limits?.servers?.budgetBlocked && (
+                                <p className="flex items-start gap-2 rounded-xl border border-red-500/30 bg-red-500/5 px-3.5 py-3 text-tiny text-red-200">
+                                    <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+                                    <span>
+                                        Your plan’s CPU, memory or storage is fully used by the servers you already have. Delete a
+                                        server, make one smaller, or upgrade the plan to add another.
+                                    </span>
+                                </p>
+                            )}
+
                             <p className="text-tiny text-ink-muted">
-                                CPU and memory become hard container limits. You can change them later from the server’s settings;
-                                changing them restarts the container (your files are never touched).
+                                These numbers come out of what your plan includes, shared across all your servers — so a second
+                                server can only take what the first one left behind. CPU and memory become hard container limits; you
+                                can change them later from the server’s settings, which restarts the container but never touches your
+                                files.
                             </p>
                         </section>
                     )}
@@ -534,7 +559,7 @@ export default function CreateServer({ adminMode = false }) {
                                     key={key}
                                     label={RESOURCE_META[key].label}
                                     current={res[key] ?? 0}
-                                    total={limits.resources[key].poolMax}
+                                    total={limits.resources[key].total}
                                     format={(v) => formatResource(key, v)}
                                 />
                             ))

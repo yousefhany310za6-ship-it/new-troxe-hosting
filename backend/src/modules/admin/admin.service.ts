@@ -18,6 +18,7 @@ import { GeoIpService } from '../../common/geoip/geoip.service';
 import { config } from '../../config/env';
 import { Err } from '../../common/errors';
 import type { CreateServerDto, RescaleServerDto, UpdateServerDto } from '../servers/dto';
+import { RESOURCE_MIN } from '../servers/resource-policy';
 import * as crypto from 'crypto';
 
 /** Columns an admin may write on a plan row. */
@@ -27,25 +28,26 @@ type PlanWrite = {
   cpuMilli?: number;
   ramMb?: number;
   storageGb?: number;
-  poolCpuMilli?: number;
-  poolRamMb?: number;
-  poolStorageGb?: number;
   maxServers?: number;
   maxBackupSlots?: number;
 };
 
 /**
- * A pool below the plan's own per-server ceiling is self-contradictory (the
- * account could never host a server at the size it just paid for), so it is
- * rejected here rather than silently normalised.
+ * A plan budget below the smallest server we can boot is self-contradictory:
+ * nobody on it could ever create a server. Refuse it at write time rather
+ * than letting the account discover it at create time.
  */
-function assertPoolsCoverServers(data: PlanWrite): void {
-  if (data.poolCpuMilli !== undefined && data.cpuMilli !== undefined && data.poolCpuMilli < data.cpuMilli)
-    throw Err.invalid('PLAN_POOL_TOO_SMALL', 'The CPU pool cannot be smaller than the per-server CPU limit');
-  if (data.poolRamMb !== undefined && data.ramMb !== undefined && data.poolRamMb < data.ramMb)
-    throw Err.invalid('PLAN_POOL_TOO_SMALL', 'The memory pool cannot be smaller than the per-server memory limit');
-  if (data.poolStorageGb !== undefined && data.storageGb !== undefined && data.poolStorageGb < data.storageGb)
-    throw Err.invalid('PLAN_POOL_TOO_SMALL', 'The storage pool cannot be smaller than the per-server storage limit');
+function assertPlanBootable(data: PlanWrite): void {
+  const tooSmall: [number | undefined, number, string][] = [
+    [data.cpuMilli, RESOURCE_MIN.cpuMilli, 'CPU budget'],
+    [data.ramMb, RESOURCE_MIN.ramMb, 'memory budget'],
+    [data.storageGb, RESOURCE_MIN.storageGb, 'storage budget'],
+  ];
+  for (const [value, floor, label] of tooSmall) {
+    if (value !== undefined && value > 0 && value < floor) {
+      throw Err.invalid('PLAN_BUDGET_TOO_SMALL', `The ${label} must be at least ${floor} so one server can run on this plan`);
+    }
+  }
 }
 
 export interface AdminUserListParams {
@@ -908,10 +910,7 @@ export class AdminService {
   }
 
   async createPlan(data: PlanWrite & { id: string; name: string }, actorId: string, actorEmail?: string) {
-    assertPoolsCoverServers(data);
-    const maxServers = data.maxServers ?? 1;
-    // A plan created without explicit pools gets the legacy pool (per-server ×
-    // maxServers), which is what its servers would have consumed anyway.
+    assertPlanBootable(data);
     const [plan] = await this.db.insert(plans).values({
       id: data.id,
       name: data.name,
@@ -919,10 +918,7 @@ export class AdminService {
       cpuMilli: data.cpuMilli ?? 250,
       ramMb: data.ramMb ?? 256,
       storageGb: data.storageGb ?? 1,
-      poolCpuMilli: data.poolCpuMilli ?? (data.cpuMilli ?? 250) * maxServers,
-      poolRamMb: data.poolRamMb ?? (data.ramMb ?? 256) * maxServers,
-      poolStorageGb: data.poolStorageGb ?? (data.storageGb ?? 1) * maxServers,
-      maxServers,
+      maxServers: data.maxServers ?? 1,
       maxBackupSlots: data.maxBackupSlots ?? 0,
     }).returning();
     await this.audit.record({ actorId, actorEmail: actorEmail ?? null, action: 'admin.plan.create', targetType: 'plan', targetId: plan.id });
@@ -930,7 +926,7 @@ export class AdminService {
   }
 
   async updatePlan(planId: string, data: PlanWrite, actorId: string, actorEmail?: string) {
-    assertPoolsCoverServers(data);
+    assertPlanBootable(data);
     const clean = Object.fromEntries(Object.entries(data).filter(([, v]) => v !== undefined));
     if (!Object.keys(clean).length) throw Err.invalid('PLAN_NO_CHANGES', 'Nothing to update');
     const [plan] = await this.db.update(plans).set(clean).where(eq(plans.id, planId)).returning();

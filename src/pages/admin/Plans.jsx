@@ -7,20 +7,20 @@ import { Modal } from '@/components/ui/modal.jsx';
 import { Field } from '@/components/ui/field.jsx';
 import { EmptyState, ErrorState, PageHeader, TableSkeleton } from './components.jsx';
 
-const blank = { id: '', name: '', priceCents: 0, cpuMilli: 250, ramMb: 256, storageGb: 1, poolCpuMilli: 250, poolRamMb: 256, poolStorageGb: 1, maxServers: 1, maxBackupSlots: 0 };
+const blank = { id: '', name: '', priceCents: 0, cpuMilli: 250, ramMb: 256, storageGb: 1, maxServers: 1, maxBackupSlots: 0 };
 
-const NUMS = ['priceCents', 'cpuMilli', 'ramMb', 'storageGb', 'poolCpuMilli', 'poolRamMb', 'poolStorageGb', 'maxServers', 'maxBackupSlots'];
+const NUMS = ['priceCents', 'cpuMilli', 'ramMb', 'storageGb', 'maxServers', 'maxBackupSlots'];
 const FIELDS = [
     ['priceCents', 'Price (cents/mo)', 'Charged amount, integer cents.'],
-    ['cpuMilli', 'CPU per server (milli)', '1000 = 1 vCPU. The ceiling for ONE server.'],
-    ['ramMb', 'RAM per server (MB)', 'Per-server memory cap.'],
-    ['storageGb', 'Storage per server (GB)', 'Per-server disk quota.'],
-    ['poolCpuMilli', 'CPU pool (milli)', 'Ceiling for ALL the account’s servers together.'],
-    ['poolRamMb', 'Memory pool (MB)', 'Ceiling for ALL the account’s servers together.'],
-    ['poolStorageGb', 'Storage pool (GB)', 'Ceiling for ALL the account’s servers together.'],
-    ['maxServers', 'Max servers', 'Servers this plan may own.'],
+    ['cpuMilli', 'CPU (milli)', '1000 = 1 vCPU. The WHOLE account’s CPU, shared by its servers — not per server.'],
+    ['ramMb', 'RAM (MB)', 'The whole account’s memory, shared by its servers.'],
+    ['storageGb', 'Storage (GB)', 'The whole account’s disk, shared by its servers.'],
+    ['maxServers', 'Max servers', 'How many servers this plan may own at once.'],
     ['maxBackupSlots', 'Backup slots', 'Snapshots per server (0 = locked).'],
 ];
+
+// A plan that cannot host even the smallest server is a plan nobody could use.
+const FLOORS = { cpuMilli: 100, ramMb: 128, storageGb: 1 };
 
 export default function AdminPlans() {
     const toast = useToast();
@@ -43,9 +43,9 @@ export default function AdminPlans() {
         for (const k of NUMS) {
             if (!/^\d+$/.test(String(form[k] ?? '')) || Number(form[k]) < 0) errs[k] = 'Must be a number ≥ 0.';
         }
-        // a pool below the per-server cap makes the plan impossible to use
-        for (const [pool, per] of [['poolCpuMilli', 'cpuMilli'], ['poolRamMb', 'ramMb'], ['poolStorageGb', 'storageGb']]) {
-            if (Number(form[pool]) < Number(form[per])) errs[pool] = `Cannot be smaller than the per-server limit (${form[per]}).`;
+        // a budget below the smallest bootable server would strand every account
+        for (const [key, floor] of Object.entries(FLOORS)) {
+            if (Number(form[key]) > 0 && Number(form[key]) < floor) errs[key] = `Must be at least ${floor} so one server can run.`;
         }
         setErrors(errs);
         return Object.keys(errs).length === 0;
@@ -85,7 +85,7 @@ export default function AdminPlans() {
         <div className="flex flex-col gap-5">
             <PageHeader
                 title="Plans"
-                description="Quotas are resolved server-side from these records — editing applies to enforcement immediately."
+                description="Quotas are resolved server-side from these records — editing applies to enforcement immediately. CPU, RAM and disk are the account's total budget, shared by its servers."
                 actions={
                     <button type="button" onClick={openNew} className="rounded-full bg-white px-5 py-2.5 text-sm font-bold text-black transition hover:bg-gray-200">
                         New plan
@@ -119,11 +119,11 @@ export default function AdminPlans() {
                                     <div className="flex justify-between gap-2"><dt>cpu</dt><dd className="text-ink-secondary tabular-nums">{p.cpuMilli / 1000} vCPU</dd></div>
                                     <div className="flex justify-between gap-2"><dt>ram</dt><dd className="text-ink-secondary tabular-nums">{p.ramMb} MB</dd></div>
                                     <div className="flex justify-between gap-2"><dt>disk</dt><dd className="text-ink-secondary tabular-nums">{p.storageGb} GB</dd></div>
-                                    <div className="flex justify-between gap-2"><dt>cpu pool</dt><dd className="text-ink-secondary tabular-nums">{(p.poolCpuMilli ?? p.cpuMilli * p.maxServers) / 1000} vCPU</dd></div>
-                                    <div className="flex justify-between gap-2"><dt>ram pool</dt><dd className="text-ink-secondary tabular-nums">{p.poolRamMb ?? p.ramMb * p.maxServers} MB</dd></div>
-                                    <div className="flex justify-between gap-2"><dt>disk pool</dt><dd className="text-ink-secondary tabular-nums">{p.poolStorageGb ?? p.storageGb * p.maxServers} GB</dd></div>
                                     <div className="flex justify-between gap-2"><dt>backups</dt><dd className="text-ink-secondary tabular-nums">{p.maxBackupSlots}</dd></div>
                                 </dl>
+                                <p className="mt-2 text-[0.7rem] leading-snug text-ink-muted">
+                                    CPU, RAM and disk are the whole account, shared across its servers — not per server.
+                                </p>
                             </button>
                         ))}
                     </div>

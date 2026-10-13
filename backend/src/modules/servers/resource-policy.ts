@@ -1,19 +1,19 @@
 /**
  * Resource allocation policy (pure — no Nest/Drizzle imports, unit-testable).
  *
- * Two independent ceilings govern every server:
+ * ONE budget per resource, shared by the whole account.
  *
- *   per-server  plans.cpu_milli / ram_mb / storage_gb — what ONE sandbox may
- *               get (the numbers the pricing pages advertise).
- *   account-wide plans.pool_* — what ALL of an owner's servers may add up to.
+ * A plan advertises "1.5 vCPU, 3 GB RAM, 12 GB disk" and that is the entire
+ * account: the owner divides it across their servers. A Platinum account with
+ * twelve servers does NOT get 12 × 1.5 vCPU — it gets 1.5 vCPU to share, and
+ * when the budget runs out the only ways forward are a bigger plan or deleting
+ * a server. (An earlier revision of this file modelled the plan numbers as a
+ * per-server allowance plus a separate, larger pool; migration 0027 drops that
+ * pool because it let an account provision N times what it paid for.)
  *
- * Both matter: with only the per-server ceiling a Gold owner (8 servers × 1
- * vCPU) could provision 8 vCPU of Docker limits on a single host. The pool is
- * the promise the plan actually sold.
- *
- * A NULL pool is the legacy shape (rows written before migration 0026): it is
- * read as `perServer × maxServers`, which is exactly what those servers were
- * created with, so nobody is retroactively over quota.
+ * So for each resource: `total = plan value`, `used = sum over the owner's
+ * servers`, `available = total − used`, and a new server (or a resize) may
+ * take at most what is left. `maxServers` still caps the COUNT independently.
  *
  * Everything here is deterministic and side-effect free; the service adds the
  * database work (locking, aggregation) and turns a refusal into an AppError.
@@ -65,12 +65,6 @@ const QUOTA_CODE: Record<ResourceKey, string> = {
   storageGb: 'QUOTA_STORAGE',
 };
 
-const POOL_COLUMN: Record<ResourceKey, 'poolCpuMilli' | 'poolRamMb' | 'poolStorageGb'> = {
-  cpuMilli: 'poolCpuMilli',
-  ramMb: 'poolRamMb',
-  storageGb: 'poolStorageGb',
-};
-
 /** Platform maxima as configured (env → config), clamped to the constants. */
 export function platformHardMax(overrides?: HardMax): Record<ResourceKey, number> {
   const out = {} as Record<ResourceKey, number>;
@@ -81,16 +75,13 @@ export function platformHardMax(overrides?: HardMax): Record<ResourceKey, number
   return out;
 }
 
-/** The `plans` columns the policy reads. */
+/** The `plans` columns the policy reads — the values ARE the account budget. */
 export interface PlanResourceRow {
   id?: string;
   name?: string;
   cpuMilli: number;
   ramMb: number;
   storageGb: number;
-  poolCpuMilli: number | null;
-  poolRamMb: number | null;
-  poolStorageGb: number | null;
   maxServers: number;
 }
 
@@ -107,17 +98,18 @@ export interface ResourceLimit {
   key: ResourceKey;
   min: number;
   step: number;
-  /** ceiling for a single server */
-  perServerMax: number;
-  /** ceiling for the whole account */
-  poolMax: number;
-  /** already committed by the owner's other servers */
+  /** the account's whole budget for this resource (the plan value) */
+  total: number;
+  /** already committed by the owner's servers */
   used: number;
-  /** what a NEW server may still take (pool − used) */
+  /** what a new server (or a resize) may still take: total − used */
   available: number;
-  /** the slider/input upper bound: min(perServerMax, available) */
+  /** the slider/input upper bound — simply what is left */
   max: number;
-  /** the account has nothing left of this resource */
+  /**
+   * Not enough left for even the smallest possible server. The account has to
+   * delete or shrink a server, or upgrade, before it can create another one.
+   */
   exhausted: boolean;
 }
 
@@ -136,15 +128,11 @@ export function formatResource(key: ResourceKey, value: number): string {
 }
 
 /**
- * The account-wide ceiling of a plan. Falls back to `perServer × maxServers`
- * when the column is NULL, and never returns less than a single server (a pool
- * below the per-server ceiling would make the plan self-contradictory).
+ * The account's whole budget for one resource — the plan value, floored at the
+ * smallest server we can boot and capped at the platform maximum.
  */
-export function poolCeiling(plan: PlanResourceRow, key: ResourceKey): number {
-  const perServer = Math.max(RESOURCE_MIN[key], Number(plan[key]) || 0);
-  const raw = plan[POOL_COLUMN[key]];
-  const pool = typeof raw === 'number' && raw > 0 ? raw : perServer * Math.max(1, plan.maxServers || 1);
-  return Math.min(RESOURCE_HARD_MAX[key], Math.max(pool, perServer));
+export function budgetCeiling(plan: PlanResourceRow, key: ResourceKey): number {
+  return Math.max(RESOURCE_MIN[key], Math.min(Number(plan[key]) || 0, RESOURCE_HARD_MAX[key]));
 }
 
 /** Snap to the step grid, never below the floor, never above the hard max. */
@@ -160,24 +148,28 @@ export function clampToLimit(limit: ResourceLimit, value: number): number {
   return Math.max(limit.min, Math.min(snapToStep(value, limit.key), limit.max));
 }
 
-/** Build the full limit set for one owner. */
+/**
+ * Build the full limit set for one owner: what the plan buys, what the
+ * owner's servers already hold, and what is therefore left to allocate.
+ */
 export function resolveLimits(plan: PlanResourceRow, usage: ResourceUsage = EMPTY_USAGE): ResourceLimits {
   const out = {} as ResourceLimits;
   for (const key of RESOURCE_KEYS) {
     const min = RESOURCE_MIN[key];
-    const perServerMax = Math.max(min, Math.min(Number(plan[key]) || min, RESOURCE_HARD_MAX[key]));
-    const poolMax = poolCeiling(plan, key);
-    const used = Math.max(0, Math.min(Number(usage[key]) || 0, poolMax));
-    const available = Math.max(0, poolMax - used);
+    const total = budgetCeiling(plan, key);
+    // `used` is clamped to `total` so a plan DOWNGRADE (admin lowers the
+    // numbers under an account that already holds more) reads as "nothing
+    // left" rather than as a negative allocation.
+    const used = Math.max(0, Math.min(Number(usage[key]) || 0, total));
+    const available = Math.max(0, total - used);
     out[key] = {
       key,
       min,
       step: RESOURCE_STEP[key],
-      perServerMax,
-      poolMax,
+      total,
       used,
       available,
-      max: Math.max(min, Math.min(perServerMax, available)),
+      max: Math.max(min, available),
       exhausted: available < min,
     };
   }
@@ -219,13 +211,17 @@ export interface ResolveResult {
   refusal?: ResourceRefusal;
 }
 
-/** A sensible starting point: the smaller of the plan's per-server ceiling
- *  and what is still free in the account pool. */
+/**
+ * What the create form starts from: whatever is left of the account budget.
+ * A brand-new account gets the whole plan on its first server — which is
+ * exactly the old behaviour, and the honest reading of "your plan has 1.5
+ * vCPU": one server may hold it all, further servers share what's left.
+ */
 export function pickDefaults(limits: ResourceLimits): ResourceGrant {
   return {
-    cpuMilli: clampToLimit(limits.cpuMilli, Math.min(limits.cpuMilli.perServerMax, limits.cpuMilli.available)),
-    ramMb: clampToLimit(limits.ramMb, Math.min(limits.ramMb.perServerMax, limits.ramMb.available)),
-    storageGb: clampToLimit(limits.storageGb, Math.min(limits.storageGb.perServerMax, limits.storageGb.available)),
+    cpuMilli: clampToLimit(limits.cpuMilli, limits.cpuMilli.available),
+    ramMb: clampToLimit(limits.ramMb, limits.ramMb.available),
+    storageGb: clampToLimit(limits.storageGb, limits.storageGb.available),
   };
 }
 
@@ -273,8 +269,9 @@ export function resolveRequest(input: {
       continue;
     }
 
-    // An account with nothing left of a resource cannot add a server at all:
-    // even the floor would overshoot the pool.
+    // Not enough budget left for even the smallest server. The only ways out
+    // are a bigger plan or freeing resources by deleting/shrinking a server —
+    // say exactly that instead of a bare "quota exceeded".
     if (limit.exhausted) {
       return {
         ok: false,
@@ -282,18 +279,26 @@ export function resolveRequest(input: {
         refusal: {
           key,
           code: QUOTA_CODE[key],
-          message: `Your "${planName}" plan has no ${LABEL[key]} left to allocate — all ${formatResource(key, limit.poolMax)} are already in use. Delete or downsize a server to free some.`,
+          message:
+            `Your "${planName}" plan has no ${LABEL[key]} left — all ${formatResource(key, limit.total)} ` +
+            `are already used by your servers. Delete a server, make one smaller, or upgrade to add more.`,
         },
       };
     }
 
-    const ceiling = limit.max;
-    if (asked !== undefined && asked > ceiling) {
-      const message =
-        limit.available < limit.perServerMax && asked <= limit.perServerMax
-          ? `Your "${planName}" account has ${formatResource(key, limit.available)} of ${LABEL[key]} left (requested ${formatResource(key, asked)}).`
-          : `Your "${planName}" plan allows at most ${formatResource(key, limit.perServerMax)} of ${LABEL[key]} per server (requested ${formatResource(key, asked)}).`;
-      return { ok: false, grant: defaults, refusal: { key, code: QUOTA_CODE[key], message } };
+    if (asked !== undefined && asked > limit.max) {
+      return {
+        ok: false,
+        grant: defaults,
+        refusal: {
+          key,
+          code: QUOTA_CODE[key],
+          message:
+            `Your "${planName}" plan has ${formatResource(key, limit.available)} of ${LABEL[key]} left ` +
+            `across all your servers (requested ${formatResource(key, asked)}). ` +
+            `Delete a server, make one smaller, or upgrade to add more.`,
+        },
+      };
     }
     grant[key] = clampToLimit(limit, wanted);
   }
