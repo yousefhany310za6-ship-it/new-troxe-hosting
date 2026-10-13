@@ -76,23 +76,23 @@ export async function run({ window }) {
   results.push(await record('renewal: the key is shown to the user', async () =>
     (body.includes(KEY) ? '' : 'key not rendered')));
 
-  results.push(await record('renewal: a copy control is offered', async () => {
-    const b = btn((x) => (x.getAttribute('aria-label') || '').includes('key'));
-    return b ? '' : 'no copy button found';
-  }));
+  // The label is checked BEFORE the click: once copied, the accessible label
+  // becomes "Key copied", so a post-click probe for /key/ matches nothing and
+  // would report a failure that is purely an artifact of the check's own order.
+  const copyBtn = btn((x) => (x.getAttribute('aria-label') || '').toLowerCase().includes('key'));
+  results.push(await record('renewal: a copy control is offered', async () =>
+    (copyBtn ? '' : 'no copy button found')));
 
-  await click(btn((x) => (x.getAttribute('aria-label') || '').includes('key')));
+  results.push(await record('renewal: the button is labelled for screen readers', async () =>
+    (copyBtn?.getAttribute('aria-label') && copyBtn?.getAttribute('title') ? '' : 'missing accessible label/title')));
+
+  await click(copyBtn);
   results.push(await record('renewal: clicking copies the exact key', async () =>
     (clipboard.text === KEY ? '' : `clipboard got ${JSON.stringify(clipboard.text)}`)));
 
   results.push(await record('renewal: the button confirms the copy', async () => {
     const b = btn((x) => (x.getAttribute('aria-label') || '') === 'Key copied');
     return b ? '' : 'no confirmation state after copy';
-  }));
-
-  results.push(await record('renewal: the button is labelled for screen readers', async () => {
-    const b = btn((x) => (x.getAttribute('aria-label') || '').includes('key'));
-    return b?.getAttribute('title') ? '' : 'missing accessible label/title';
   }));
 
   host.remove();

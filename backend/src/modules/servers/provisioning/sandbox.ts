@@ -293,17 +293,36 @@ export function buildSandboxConfig(spec: SandboxSpec): ContainerCreateOptions {
     ? `${compileInstallPrelude(spec.template.install)}; ${compileBuildPrelude(spec.template.build)}`
     : depsPrelude(spec.image.runtime);
 
+/**
+ * Strip trailing shell operators from a prelude so exactly one `; ` can be
+ * added when it is joined to the startup command.
+ *
+ * TWO ways this glue has broken, both producing a container that dies before
+ * the client's code ever runs:
+ *
+ *  1. NO separator at all. A compiled build step ends in the `fi` that closes
+ *     its conditional, so `prelude + startup` produced `finode index.js`.
+ *
+ *  2. A DANGLING `&&`. The legacy per-runtime `depsPrelude` appends `&& ` (it
+ *     was designed to be concatenated directly), so joining it with a leading
+ *     `; ` produced `fi &&; node index.js`. The Debian `/bin/sh` is dash, and
+ *     dash reports exactly `Syntax error: ";" unexpected` — the error a user
+ *     saw on a live server. Every pre-template server took this path, so this
+ *     was not a corner case for new templates but the whole legacy fleet.
+ *
+ * So trailing whitespace, `;` and `&&` are all removed first, and the caller
+ * re-adds a single `; `. `fi; cmd` and `:; cmd` are valid POSIX sh.
+ */
+function normalizePrelude(prelude: string): string {
+  return prelude.replace(/[ \t]*&&[ \t]*$|[ \t]*;[ \t]*$|[ \t]+$/, '');
+}
+
   // The prelude and the startup command are two separate shell fragments glued
-  // into one script, so they MUST be separated. A compiled build step ends in
-  // the `fi` that closes its conditional, and a template with no build steps
-  // compiles to the `:` no-op — so naively concatenating produced `finode
-  // index.js`, a syntax error that killed the container before the app ever
-  // ran. Half the catalog (every Node/Go/Rust/Java/.NET template) did this.
-  //
-  // Trailing separators are normalised away first so `; ` is always added
-  // exactly once. `fi; cmd` and `:; cmd` are both valid POSIX sh, and the
-  // legacy `depsPrelude` path keeps behaving exactly as it did before.
-  const script = `${prelude.replace(/[\s;]+$/, '')}; ${spec.startup}`;
+  // into one script, so they MUST be separated. See `normalizePrelude` for the
+  // two ways that glue has broken: a missing separator (`finode index.js`) and
+  // a dangling `&&` from the legacy prelude (`fi &&; node index.js`, which
+  // dash rejects with `Syntax error: ";" unexpected`).
+  const script = `${normalizePrelude(prelude)}; ${spec.startup}`;
 
   // Wrap the startup command so the container STAYS RUNNING after the process
   // exits (crashes or clean). This keeps the exec shell connected so the user
