@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { AlertTriangle, Check, Hourglass, Loader2, ShieldCheck } from 'lucide-react';
+import { AlertTriangle, Check, Copy, Hourglass, Loader2, ShieldCheck } from 'lucide-react';
 
 import { apiGet } from '@/lib/api.js';
 import { cn } from '@/lib/utils';
@@ -78,7 +78,10 @@ export default function RenewalReturn() {
 
           {key ? (
             <div className="flex flex-col gap-2">
-              <span className="text-tiny font-semibold text-ink-secondary">Your key</span>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-tiny font-semibold text-ink-secondary">Your key</span>
+                <CopyKeyButton text={key} />
+              </div>
               <code className="block break-all rounded-xl border border-hairline bg-veil px-3 py-2 font-mono text-tiny">
                 {key}
               </code>
@@ -107,6 +110,47 @@ export default function RenewalReturn() {
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Copy the key to the clipboard.
+ *
+ * Same treatment as ServerOverview's `CopyButton` — a tick that reverts after
+ * 1.5s, plus the `document.execCommand` fallback, because this page is reached
+ * from a redirect on a phone far more often than the rest of the dashboard, and
+ * mobile browsers without `navigator.clipboard` would otherwise silently do
+ * nothing on tap.
+ */
+function CopyKeyButton({ text }) {
+  const [done, setDone] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const t = document.createElement('textarea');
+      t.value = text;
+      t.setAttribute('readonly', '');
+      t.style.position = 'fixed';
+      t.style.opacity = '0';
+      document.body.appendChild(t);
+      t.select();
+      try { document.execCommand('copy'); } catch { /* clipboard unavailable */ }
+      t.remove();
+    }
+    setDone(true);
+    setTimeout(() => setDone(false), 1500);
+  };
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      aria-label={done ? 'Key copied' : 'Copy key'}
+      title={done ? 'Copied' : 'Copy key'}
+      className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-ink-muted transition hover:bg-white/10 hover:text-foreground"
+    >
+      {done ? <Check className="size-3.5 text-emerald-400" aria-hidden="true" /> : <Copy className="size-3.5" aria-hidden="true" />}
+    </button>
   );
 }
 

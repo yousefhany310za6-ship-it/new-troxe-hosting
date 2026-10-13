@@ -8,6 +8,7 @@ import { PortsService } from './ports.service';
 import { ServersService } from './servers.service';
 import { ServerAccessService } from './server-access.service';
 import { DockerService } from './provisioning/docker.service';
+import { TEMPLATE_BY_ID } from './templates/catalog';
 
 const UUID = new ParseUUIDPipe({ version: '4' });
 
@@ -55,7 +56,7 @@ export class PortsController {
       this.ports.listForServer(id),
       this.ports.addressFor(id),
       this.servers.getNodeId(id).then((nodeId) => this.ports.poolStatus(nodeId).catch(() => null)),
-      this.observe(id, row.nodeId, row.containerId ?? null, row.networkName ?? null),
+      this.observe(id, row.nodeId, row.containerId ?? null, row.networkName ?? null, row.templateId ?? null),
     ]);
     return {
       ports,
@@ -80,7 +81,23 @@ export class PortsController {
    * rather than pretending. Results are cached on the allocation row with the
    * time they were taken, and every call refreshes them.
    */
-  private async observe(serverId: string, nodeId: string, containerId: string | null, networkName: string | null) {
+  private async observe(
+    serverId: string,
+    nodeId: string,
+    containerId: string | null,
+    networkName: string | null,
+    templateId: string | null,
+  ) {
+    // A template may publish an OPTIONAL port: a bot that only dials out, or a
+    // worker, never binds it and that is not a fault. The template is the source
+    // of truth for that intent, so it is read here rather than copied into the
+    // allocation row — changing a template's mind must change what the panel
+    // says about servers already built from it.
+    //
+    // A legacy row with no template keeps the strict reading: nothing listening
+    // on a published port is reported as a problem, exactly as before.
+    const template = templateId ? TEMPLATE_BY_ID.get(templateId) : undefined;
+    const optionalPort = template?.ports.some((p) => p.optional) ?? false;
     const allocations = await this.ports.listForServer(serverId);
     if (!allocations.length) {
       return {
@@ -176,7 +193,9 @@ export class PortsController {
     if (listening === false)
       return {
         ...base,
-        note: `Docker published the port, but nothing is listening on container port ${allocation.containerPort}. Your app has to bind it (e.g. process.env.PORT) before anything can connect.`,
+        note: optionalPort
+          ? `Nothing is listening on container port ${allocation.containerPort}, which is fine — this template publishes it as optional. Bind PORT if you add a dashboard or need to receive webhooks.`
+          : `Docker published the port, but nothing is listening on container port ${allocation.containerPort}. Your app has to bind it (e.g. process.env.PORT) before anything can connect.`,
       };
     if (hostReachable === false)
       return { ...base, note: 'The app is listening, but a connect to the published host port failed on the node itself.' };
@@ -215,7 +234,7 @@ export class PortsController {
         return {
           ports: await this.ports.listForServer(id),
           address: await this.ports.addressFor(id),
-          health: await this.observe(id, row.nodeId, row.containerId ?? null, row.networkName ?? null),
+          health: await this.observe(id, row.nodeId, row.containerId ?? null, row.networkName ?? null, row.templateId ?? null),
           reprovisioned: true as const,
           status: result.status,
         };
@@ -223,7 +242,7 @@ export class PortsController {
       return {
         ports: existing,
         address: await this.ports.addressFor(id),
-        health: await this.observe(id, row.nodeId, row.containerId ?? null, row.networkName ?? null),
+        health: await this.observe(id, row.nodeId, row.containerId ?? null, row.networkName ?? null, row.templateId ?? null),
         alreadyAllocated: true as const,
       };
     }
@@ -240,7 +259,7 @@ export class PortsController {
     return {
       ports: await this.ports.listForServer(id),
       address: await this.ports.addressFor(id),
-      health: await this.observe(id, row.nodeId, row.containerId ?? null, row.networkName ?? null),
+      health: await this.observe(id, row.nodeId, row.containerId ?? null, row.networkName ?? null, row.templateId ?? null),
       allocated: true as const,
     };
   }
@@ -267,7 +286,7 @@ export class PortsController {
       status: result.status,
       ports: await this.ports.listForServer(id),
       address: await this.ports.addressFor(id),
-      health: await this.observe(id, row.nodeId, row.containerId ?? null, row.networkName ?? null),
+      health: await this.observe(id, row.nodeId, row.containerId ?? null, row.networkName ?? null, row.templateId ?? null),
     };
   }
 }

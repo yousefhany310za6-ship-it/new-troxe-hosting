@@ -150,7 +150,18 @@ export const TEMPLATES: TemplateDefinition[] = [
     runtime: 'Node.js',
     versions: ['22', '24', '26'],
     language: 'JavaScript',
-    ports: [],
+    ports: [
+      {
+        protocol: 'tcp',
+        containerPort: 3000,
+        // Optional: the app may never bind this. A bot or a worker
+        // only dials out, so silence here is normal — but a dashboard
+        // or an inbound webhook still needs a real port to be reached on.
+        optional: true,
+        description:
+          'Optional HTTP port (3000) — bind PORT if your app serves a dashboard or receives webhooks. Not binding it is fine for a bot that only dials out.',
+      },
+    ],
     install: [{ kind: 'npm', detect: ['package.json'], mode: 'install' }],
     build: [{ kind: 'tsc' }],
     startup: 'node {{MAIN_FILE}} {{NODE_ARGS}}',
@@ -172,7 +183,18 @@ export const TEMPLATES: TemplateDefinition[] = [
     runtime: 'Node.js',
     versions: ['22', '24', '26'],
     language: 'JavaScript',
-    ports: [],
+    ports: [
+      {
+        protocol: 'tcp',
+        containerPort: 3000,
+        // Optional: the app may never bind this. A bot or a worker
+        // only dials out, so silence here is normal — but a dashboard
+        // or an inbound webhook still needs a real port to be reached on.
+        optional: true,
+        description:
+          'Optional HTTP port (3000) — bind PORT if your app serves a dashboard or receives webhooks. Not binding it is fine for a bot that only dials out.',
+      },
+    ],
     install: [{ kind: 'npm', detect: ['package.json'], mode: 'install' }],
     build: [{ kind: 'tsc' }],
     startup: 'node {{MAIN_FILE}} {{NODE_ARGS}}',
@@ -271,7 +293,18 @@ export const TEMPLATES: TemplateDefinition[] = [
     runtime: 'Node.js',
     versions: ['20', '22', '24', '26'],
     language: 'JavaScript',
-    ports: [],
+    ports: [
+      {
+        protocol: 'tcp',
+        containerPort: 3000,
+        // Optional: the app may never bind this. A bot or a worker
+        // only dials out, so silence here is normal — but a dashboard
+        // or an inbound webhook still needs a real port to be reached on.
+        optional: true,
+        description:
+          'Optional HTTP port (3000) — bind PORT if your app serves a dashboard or receives webhooks. Not binding it is fine for a bot that only dials out.',
+      },
+    ],
     install: [{ kind: 'npm', detect: ['package.json'], mode: 'install' }],
     build: [{ kind: 'tsc' }],
     startup: 'node {{MAIN_FILE}} {{NODE_ARGS}}',
@@ -408,7 +441,18 @@ export const TEMPLATES: TemplateDefinition[] = [
     runtime: 'Python',
     versions: ['3.11', '3.12', '3.13'],
     language: 'Python',
-    ports: [],
+    ports: [
+      {
+        protocol: 'tcp',
+        containerPort: 8000,
+        // Optional: the app may never bind this. A bot or a worker
+        // only dials out, so silence here is normal — but a dashboard
+        // or an inbound webhook still needs a real port to be reached on.
+        optional: true,
+        description:
+          'Optional HTTP port (8000) — bind PORT if your app serves a dashboard or receives webhooks. Not binding it is fine for a bot that only dials out.',
+      },
+    ],
     install: [{ kind: 'pip', detect: ['requirements.txt'], from: 'requirements.txt' }],
     build: [],
     startup: 'python {{MAIN_FILE}} {{PY_ARGS}}',
@@ -430,7 +474,18 @@ export const TEMPLATES: TemplateDefinition[] = [
     runtime: 'Python',
     versions: ['3.11', '3.12', '3.13'],
     language: 'Python',
-    ports: [],
+    ports: [
+      {
+        protocol: 'tcp',
+        containerPort: 8000,
+        // Optional: the app may never bind this. A bot or a worker
+        // only dials out, so silence here is normal — but a dashboard
+        // or an inbound webhook still needs a real port to be reached on.
+        optional: true,
+        description:
+          'Optional HTTP port (8000) — bind PORT if your app serves a dashboard or receives webhooks. Not binding it is fine for a bot that only dials out.',
+      },
+    ],
     install: [{ kind: 'pip', detect: ['requirements.txt'], from: 'requirements.txt' }],
     build: [],
     startup: 'python {{MAIN_FILE}} {{PY_ARGS}}',
@@ -564,7 +619,18 @@ export const TEMPLATES: TemplateDefinition[] = [
     runtime: 'Python',
     versions: ['3.11', '3.12', '3.13'],
     language: 'Python',
-    ports: [],
+    ports: [
+      {
+        protocol: 'tcp',
+        containerPort: 8000,
+        // Optional: the app may never bind this. A bot or a worker
+        // only dials out, so silence here is normal — but a dashboard
+        // or an inbound webhook still needs a real port to be reached on.
+        optional: true,
+        description:
+          'Optional HTTP port (8000) — bind PORT if your app serves a dashboard or receives webhooks. Not binding it is fine for a bot that only dials out.',
+      },
+    ],
     install: [{ kind: 'pip', detect: ['requirements.txt'], from: 'requirements.txt' }],
     build: [],
     startup: 'python {{MAIN_FILE}} {{PY_ARGS}}',
@@ -761,7 +827,18 @@ export const TEMPLATES: TemplateDefinition[] = [
     runtime: 'Java',
     versions: ['17', '21'],
     language: 'Java',
-    ports: [],
+    ports: [
+      {
+        protocol: 'tcp',
+        containerPort: 8080,
+        // Optional: the app may never bind this. A bot or a worker
+        // only dials out, so silence here is normal — but a dashboard
+        // or an inbound webhook still needs a real port to be reached on.
+        optional: true,
+        description:
+          'Optional HTTP port (8080) — bind PORT if your app serves a dashboard or receives webhooks. Not binding it is fine for a bot that only dials out.',
+      },
+    ],
     install: [{ kind: 'none' }],
     build: [],
     startup: 'java -jar {{MAIN_FILE}} {{JAVA_ARGS}}',
@@ -788,7 +865,18 @@ export const TEMPLATES: TemplateDefinition[] = [
     runtime: 'PHP',
     versions: ['8.3', '8.4', '8.5'],
     language: 'PHP',
-    ports: [],
+    ports: [
+      {
+        protocol: 'tcp',
+        containerPort: 8080,
+        // Optional: the app may never bind this. A bot or a worker
+        // only dials out, so silence here is normal — but a dashboard
+        // or an inbound webhook still needs a real port to be reached on.
+        optional: true,
+        description:
+          'Optional HTTP port (8080) — bind PORT if your app serves a dashboard or receives webhooks. Not binding it is fine for a bot that only dials out.',
+      },
+    ],
     install: [{ kind: 'composer', detect: ['composer.json'] }],
     build: [],
     startup: 'php {{MAIN_FILE}} {{PHP_ARGS}}',
@@ -860,7 +948,18 @@ export const TEMPLATES: TemplateDefinition[] = [
     runtime: 'PHP',
     versions: ['8.3', '8.4', '8.5'],
     language: 'PHP',
-    ports: [],
+    ports: [
+      {
+        protocol: 'tcp',
+        containerPort: 8080,
+        // Optional: the app may never bind this. A bot or a worker
+        // only dials out, so silence here is normal — but a dashboard
+        // or an inbound webhook still needs a real port to be reached on.
+        optional: true,
+        description:
+          'Optional HTTP port (8080) — bind PORT if your app serves a dashboard or receives webhooks. Not binding it is fine for a bot that only dials out.',
+      },
+    ],
     install: [{ kind: 'composer', detect: ['composer.json'] }],
     build: [],
     startup: 'php {{MAIN_FILE}} {{PHP_ARGS}}',

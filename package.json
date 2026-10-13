@@ -9,7 +9,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "test:smoke": "node test-frontend/smoke.mjs",
-    "test:interactive": "node test-frontend/interactive.mjs"
+    "test:interactive": "node test-frontend/interactive.mjs",
+    "test:interactive:renewal": "node test-frontend/interactive.mjs renewal-entry.jsx"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.3",

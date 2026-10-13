@@ -120,8 +120,12 @@ function checkTemplate(t: TemplateDefinition, issues: SchemaIssue[]): void {
     if (p.containerPort < 1024) add('error', `containerPort ${p.containerPort} is privileged; sandboxes never bind ports below 1024`);
   }
   // The app is told PORT/HOST for the container port; the startup should use it.
-  if (t.ports.length && !t.startup.includes('${PORT}') && !t.startup.includes('{{MAIN_FILE}}')) {
-    add('warning', 'publishes a port but never binds PORT — the client will not know where to listen');
+  // An OPTIONAL port is exempt: a bot's startup command legitimately never binds
+  // PORT, because there is nothing to bind until the user adds a dashboard.
+  // Warning there would train people to ignore the one warning that matters.
+  const requiredPorts = t.ports.filter((p) => !p.optional);
+  if (requiredPorts.length && !t.startup.includes('${PORT}') && !t.startup.includes('{{MAIN_FILE}}')) {
+    add('warning', 'publishes a required port but never binds PORT — the client will not know where to listen');
   }
 
   // --- steps ---------------------------------------------------------------

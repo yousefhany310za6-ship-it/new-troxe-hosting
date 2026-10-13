@@ -89,6 +89,19 @@ export interface TemplatePort {
   containerPort: number;
   /** shown to the client; also decides whether a port is allocated at all */
   description: string;
+  /**
+   * The app may never bind this, and that is NOT a fault.
+   *
+   * A bot is the motivating case: it dials out and nothing comes in, so a
+   * dashboard is optional — but plenty of bots DO ship one, and without a
+   * published port there would be no way to ever reach it.
+   *
+   * So the port is still allocated and published (a dashboard must be
+   * reachable), but silence on it is reported as information rather than as
+   * "your app has to bind this before anything can connect". Only a REQUIRED
+   * port that nothing binds is treated as a real problem.
+   */
+  optional?: boolean;
 }
 
 export interface TemplateResources {

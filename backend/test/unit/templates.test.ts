@@ -145,9 +145,14 @@ describe('catalog behaviour', () => {
     }
   });
 
-  it('gives every web template a port and every bot template none', () => {
+  // A bot used to publish NOTHING, which meant a bot with a dashboard had no
+  // way to be reached at all. It now publishes one port marked optional: still
+  // real and still published, so a dashboard works, but silence on it is not
+  // reported as a fault. See the "optional ports" suite below.
+  it('gives every bot template an OPTIONAL port, never a required one', () => {
     for (const t of TEMPLATES.filter((x) => x.category === 'bot')) {
-      assert.deepEqual(t.ports, [], `${t.id} is a bot and must not publish a port`);
+      assert.equal(t.ports.length, 1, `${t.id} should publish exactly one port`);
+      assert.equal(t.ports[0].optional, true, `${t.id}'s port must be optional`);
     }
   });
 
@@ -237,5 +242,56 @@ describe('compiled sandbox script is valid shell', () => {
     const script = scriptFor(t);
     assert.ok(!/finode/.test(script), script);
     assert.match(script, /;\s*node\b/, `prelude must end with a separator: ${script}`);
+  });
+});
+
+/**
+ * A bot dials out and nothing comes in, so it has no reason to bind a port —
+ * but a dashboard (or an inbound webhook) still needs one to be reached on.
+ *
+ * So a bot template publishes a port marked `optional`: still allocated and
+ * still published, so a dashboard can be attached later, but silence on it is
+ * reported as information rather than as "your app has to bind this". Without
+ * the `optional` flag the panel would scold every healthy bot forever, and a
+ * warning that is always wrong is a warning nobody reads.
+ */
+describe('optional ports (bots, workers, CLI)', () => {
+  it('no template is left without a published port', () => {
+    // Every template has some way for a dashboard to be reached.
+    const portless = TEMPLATES.filter((t) => !t.ports.length);
+    assert.deepEqual(portless.map((t) => t.id), [], 'a template with no port can never host a dashboard');
+  });
+
+  it('every bot template publishes an optional port at its runtime default', () => {
+    const bots = TEMPLATES.filter((t) => t.category === 'bot');
+    assert.ok(bots.length >= 5, `expected the bot templates to be in the catalog, got ${bots.length}`);
+    for (const t of bots) {
+      assert.equal(t.ports.length, 1, `${t.id} should publish exactly one port`);
+      assert.equal(t.ports[0].optional, true, `${t.id}'s port must be optional — a bot need not bind it`);
+      assert.equal(t.ports[0].protocol, 'tcp');
+      assert.equal(
+        t.ports[0].containerPort,
+        RUNTIME_IMAGES[t.runtime].port,
+        `${t.id} should use its runtime's default port so $PORT is what the runtime expects`,
+      );
+    }
+  });
+
+  it('a web template still requires its port', () => {
+    // The escape hatch must not spread: a Flask app's silence IS a fault.
+    for (const id of ['framework-flask', 'nodejs-npm', 'go-app']) {
+      const t = TEMPLATE_BY_ID.get(id)!;
+      assert.ok(t.ports.length, `${id} should publish a port`);
+      assert.notEqual(t.ports[0].optional, true, `${id}'s port is required, not optional`);
+    }
+  });
+
+  it('the catalog does not warn that an optional port never binds PORT', () => {
+    const warnings = catalogErrors().filter((e) => e.severity === 'warning');
+    assert.deepEqual(
+      warnings.map((w) => w.message),
+      [],
+      'a bot startup legitimately never binds PORT — that must not be a catalog warning',
+    );
   });
 });

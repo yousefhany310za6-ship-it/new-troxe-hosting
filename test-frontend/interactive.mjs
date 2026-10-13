@@ -22,7 +22,10 @@ import fs from 'node:fs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
-const outFile = path.join(here, '.build', 'interactive-bundle.cjs');
+// Which page to drive. Both harnesses share this jsdom + esbuild setup rather
+// than duplicating ~150 lines of DOM stubs, so adding a third page is one arg.
+const entry = process.argv[2] || 'interactive-entry.jsx';
+const outFile = path.join(here, '.build', entry.replace(/\.jsx$/, '') + '-bundle.cjs');
 const require_ = createRequire(import.meta.url);
 
 // ------------------------------------------------------------ DOM stubs
@@ -103,7 +106,7 @@ const globPlugin = {
 const esbuild = require_('esbuild');
 fs.mkdirSync(path.dirname(outFile), { recursive: true });
 await esbuild.build({
-  entryPoints: [path.join(here, 'interactive-entry.jsx')],
+  entryPoints: [path.join(here, entry)],
   outfile: outFile,
   bundle: true,
   format: 'cjs',
@@ -130,5 +133,5 @@ if (consoleErrors?.length) {
   console.log('\nescaped console errors:');
   for (const e of [...new Set(consoleErrors)].slice(0, 10)) console.log('  *', String(e).slice(0, 300));
 }
-console.log(`\ninteractive: ${results.length - failed}/${results.length} checks passed`);
+console.log(`\n${entry.replace(/\.jsx$/, '')}: ${results.length - failed}/${results.length} checks passed`);
 if (failed || consoleErrors?.length) process.exitCode = 1;

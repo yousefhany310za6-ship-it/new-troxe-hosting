@@ -662,9 +662,14 @@ export class ServersService {
       // server already held a live allocation (re-entrant create path), which
       // keeps its address stable instead of burning a second port.
       // The template's PORT PLAN decides how many host ports this server gets, and
-      // whether it gets any at all. A bot template declares none, so it consumes
-      // no port from the pool — which is both correct (it only dials out) and
-      // the reason a fleet of bots does not exhaust the pool.
+      // whether it gets any at all. Every template now declares one — a bot's is
+      // marked OPTIONAL, which still allocates and publishes (a dashboard has to
+      // be reachable) but tells the panel that silence on it is not a fault.
+      //
+      // The fallback below only exists for a template that declares nothing at
+      // all: it gets its runtime's default port so $PORT is defined. Note this
+      // still allocates, which is why the previous comment here claimed bots
+      // "consume no port from the pool" — the code never did that.
       const portPlan = template.ports.length ? template.ports : [{ protocol: 'tcp' as const, containerPort: runtimeImage(runtime).port }];
       for (const p of portPlan) {
         const { allocation, created } = await this.ports.allocate({

@@ -14,6 +14,7 @@ import {
   usablePortCount,
   validateRange,
 } from '../../src/modules/servers/ports-policy.ts';
+import { TEMPLATE_BY_ID } from '../../src/modules/servers/templates/catalog.ts';
 
 describe('port range discipline', () => {
   it('stays inside unprivileged, valid TCP ports', () => {
@@ -189,5 +190,49 @@ describe('address formatting', () => {
   it('is host:port without a scheme', () => {
     assert.equal(formatAddress('node.hosting.troxe.dev', 20125), 'node.hosting.troxe.dev:20125');
     assert.equal(formatAddress('203.0.113.10', 20001), '203.0.113.10:20001');
+  });
+});
+/**
+ * The health note is what the user actually reads, and it must tell the truth
+ * about THEIR template.
+ *
+ * A bot publishes an optional port: nothing listening is the expected state, so
+ * saying "your app has to bind it before anything can connect" is not a
+ * warning, it is a false alarm — repeated forever on a perfectly healthy bot.
+ * A web template's port is required, so the same silence IS a real problem and
+ * must keep saying so.
+ *
+ * Reading the template from the row (rather than copying a flag onto the
+ * allocation) is deliberate: changing a template's mind has to change what the
+ * panel says about servers already built from it.
+ */
+describe('port health notes respect whether the port is optional', () => {
+  const isOptionalFor = (templateId: string | null, containerPort: number) => {
+    const t = templateId ? TEMPLATE_BY_ID.get(templateId) : undefined;
+    return t?.ports.some((p) => p.containerPort === containerPort && p.optional) ?? false;
+  };
+
+  it('treats a bot\'s published port as optional', () => {
+    assert.equal(isOptionalFor('bot-discord-nodejs', 3000), true);
+    assert.equal(isOptionalFor('bot-discord-python', 8000), true);
+    assert.equal(isOptionalFor('bot-discord-java', 8080), true);
+  });
+
+  it('treats a web app\'s port as required', () => {
+    assert.equal(isOptionalFor('nodejs-npm', 3000), false);
+    assert.equal(isOptionalFor('framework-flask', 8000), false);
+    assert.equal(isOptionalFor('go-app', 8080), false);
+  });
+
+  it('keeps legacy rows strict — they have no template to read intent from', () => {
+    // The four pre-template servers on production fall here: nothing listening
+    // on a published port stays a reported problem, exactly as it always was.
+    assert.equal(isOptionalFor(null, 3000), false);
+  });
+
+  it('is per-port, not per-template', () => {
+    // Guard against a template that later grows a second, required port: the
+    // lookup matches the container port, so the required one is still strict.
+    assert.equal(isOptionalFor('bot-discord-nodejs', 9999), false);
   });
 });
