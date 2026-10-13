@@ -5,6 +5,8 @@ import { validateCatalog, catalogErrors } from '../../src/modules/servers/templa
 import { RUNTIME_IMAGES, RUNTIMES } from '../../src/modules/servers/provisioning/images.ts';
 import { detectProject, templateAccepts } from '../../src/modules/servers/templates/discovery.ts';
 import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { compileBuildPrelude, compileInstallPrelude } from '../../src/modules/servers/templates/steps.ts';
 
 describe('catalog schema validation (level 1)', () => {
   it('has no blocking schema errors', () => {
@@ -189,5 +191,51 @@ describe('project detection', () => {
     assert.equal(templateAccepts('go-app', 'go'), true);
     assert.equal(templateAccepts('unknown-template-id', 'go'), true, 'templates without a contract accept anything');
     assert.equal(templateAccepts('java-jar', 'go'), false, 'a jar template must not accept a Go project');
+  });
+});
+/**
+ * The compiled install/build/start script is handed straight to `/bin/sh -c`
+ * as the container command. If it does not parse, the container dies on boot
+ * before the app ever runs — and the user gets a server that cannot start, for
+ * a reason that has nothing to do with anything they did.
+ *
+ * This shipped broken: `sandbox.ts` concatenated the prelude and the startup
+ * command with no separator, so a build step ending in `fi` produced
+ * `finode index.js`. That is a syntax error, and it hit 19 of the 38 templates
+ * — every Node, Go, Rust, Java and .NET one.
+ *
+ * So: compile the real command for every template and ask a real shell to
+ * parse it. Cheap, and it fails loudly the next time a step is added.
+ */
+describe('compiled sandbox script is valid shell', () => {
+  const scriptFor = (t: (typeof TEMPLATES)[number]) =>
+    [
+      compileInstallPrelude(t.install),
+      compileBuildPrelude(t.build),
+      t.startup,
+    ]
+      .map((s) => s.replace(/[\s;]+$/, ''))
+      .filter(Boolean)
+      .join('; ');
+
+  for (const t of TEMPLATES) {
+    it(`${t.id} parses under /bin/sh -n`, () => {
+      const script = scriptFor(t);
+      const r = spawnSync('/bin/sh', ['-n', '-c', script], { encoding: 'utf8' });
+      assert.equal(
+        r.status,
+        0,
+        `${t.id} produces a script /bin/sh cannot parse:\n${script}\n→ ${r.stderr.trim()}`,
+      );
+    });
+  }
+
+  it('separates the prelude from the startup command', () => {
+    // The exact regression: with no separator the build step's closing `fi`
+    // fused onto `node`, yielding `finode index.js` — unparseable.
+    const t = TEMPLATE_BY_ID.get('nodejs-npm')!;
+    const script = scriptFor(t);
+    assert.ok(!/finode/.test(script), script);
+    assert.match(script, /;\s*node\b/, `prelude must end with a separator: ${script}`);
   });
 });

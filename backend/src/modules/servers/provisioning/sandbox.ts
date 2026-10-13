@@ -293,11 +293,23 @@ export function buildSandboxConfig(spec: SandboxSpec): ContainerCreateOptions {
     ? `${compileInstallPrelude(spec.template.install)}; ${compileBuildPrelude(spec.template.build)}`
     : depsPrelude(spec.image.runtime);
 
+  // The prelude and the startup command are two separate shell fragments glued
+  // into one script, so they MUST be separated. A compiled build step ends in
+  // the `fi` that closes its conditional, and a template with no build steps
+  // compiles to the `:` no-op — so naively concatenating produced `finode
+  // index.js`, a syntax error that killed the container before the app ever
+  // ran. Half the catalog (every Node/Go/Rust/Java/.NET template) did this.
+  //
+  // Trailing separators are normalised away first so `; ` is always added
+  // exactly once. `fi; cmd` and `:; cmd` are both valid POSIX sh, and the
+  // legacy `depsPrelude` path keeps behaving exactly as it did before.
+  const script = `${prelude.replace(/[\s;]+$/, '')}; ${spec.startup}`;
+
   // Wrap the startup command so the container STAYS RUNNING after the process
   // exits (crashes or clean). This keeps the exec shell connected so the user
   // can see the crash output, type commands, inspect files, etc.
   const wrappedStartup = `
-${prelude}${spec.startup}
+${script}
 EXIT_CODE=$?
 echo
 echo "[troxe] Process exited with code $EXIT_CODE"
