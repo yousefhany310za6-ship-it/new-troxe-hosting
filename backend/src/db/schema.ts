@@ -430,6 +430,12 @@ export const serverRenewalSessions = pgTable('server_renewal_sessions', {
   tokenIp: varchar('token_ip', { length: 45 }),
   /** machine-readable failure reason for `failed`/`expired` */
   failureReason: varchar('failure_reason', { length: 64 }),
+  /**
+   * Verification attempts made on this session. Bounded by
+   * COMPLETION_ATTEMPTS_PER_SESSION so a wrong key cannot be ground against
+   * the provider indefinitely on one open attempt.
+   */
+  attempts: integer('attempts').default(0).notNull(),
   ip: varchar('ip', { length: 45 }),
   userAgent: varchar('user_agent', { length: 255 }),
   createdAt: timestamp('created_at').defaultNow().notNull(),

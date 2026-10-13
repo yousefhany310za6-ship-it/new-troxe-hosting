@@ -260,9 +260,13 @@ export class RenewalService {
     const session = await this.requireOwnSession(userId, sessionId);
     const now = new Date();
 
-    // shape-check locally: a malformed key never costs a network call
+    // Shape-check locally: a malformed key never costs a network call, and it
+    // does NOT close the attempt — the user most likely pasted the wrong thing
+    // and still has a perfectly good key waiting.
     const shaped = validateTokenShape(rawToken);
-    if (!shaped.ok) return this.failSession(session, shaped.reason, ctx, false);
+    if (!shaped.ok) {
+      throw new AppError('RENEWAL_VERIFICATION_FAILED', 400, messageFor(shaped.reason));
+    }
 
     if ((TERMINAL_SESSION_STATES as readonly string[]).includes(session.status)) {
       // Idempotent-by-refusal: a completed session returns the SAME answer it
@@ -277,13 +281,19 @@ export class RenewalService {
 
     // Claim the attempt. `status = 'pending'` in the WHERE is the concurrency
     // fence: a concurrent duplicate updates 0 rows and is rejected below.
+    // `attempts` is bumped on every claim so a client cannot grind the
+    // provider with an unbounded number of wrong keys on one session.
     const claimed = await this.db
       .update(serverRenewalSessions)
-      .set({ status: 'verifying', updatedAt: now })
+      .set({ status: 'verifying', attempts: sql`${serverRenewalSessions.attempts} + 1`, updatedAt: now })
       .where(and(eq(serverRenewalSessions.id, session.id), eq(serverRenewalSessions.status, 'pending')))
       .returning();
     if (!claimed.length) {
       throw Err.conflict('RENEWAL_IN_PROGRESS', 'This renewal attempt is already being verified.');
+    }
+    const attempts = claimed[0].attempts;
+    if (attempts > COMPLETION_ATTEMPTS_PER_SESSION) {
+      await this.failSession(session, 'RATE_LIMITED', ctx);
     }
 
     const cfg = this.workink.cfg();
@@ -294,28 +304,40 @@ export class RenewalService {
     const evaluated = evaluateVerdict({ verdict, expectedLinkId: cfg.linkId, now });
 
     if (!evaluated.ok) {
-      if (evaluated.retryable) {
-        // provider trouble: put the attempt back so the user can try again
+      // A rejected KEY is not a rejected ATTEMPT. The user may simply have
+      // pasted the wrong string, or the key may have expired in transit — and
+      // forcing them back through the whole Work.ink round trip for that is
+      // punishing behaviour with no security benefit: nothing was granted, and
+      // `token_hash` is still NULL, so their unused key remains redeemable here
+      // and still cannot back a second server (unique index).
+      //
+      // So the attempt is returned to `pending` — bounded by
+      // COMPLETION_ATTEMPTS_PER_SESSION, which is enforced on the claim below.
+      if (evaluated.retryable || session.attempts < COMPLETION_ATTEMPTS_PER_SESSION) {
         await this.db
           .update(serverRenewalSessions)
-          .set({ status: 'pending', failureReason: null, updatedAt: new Date() })
+          .set({ status: 'pending', failureReason: evaluated.reason, updatedAt: new Date() })
           .where(eq(serverRenewalSessions.id, session.id));
         await this.audit.record({
           actorId: userId,
-          action: 'server.renewal.verify.unavailable',
+          action: evaluated.retryable ? 'server.renewal.verify.unavailable' : 'server.renewal.verify.reject',
           targetType: 'server',
           targetId: session.serverId,
           ip: ctx.ip,
           userAgent: ctx.device,
-          meta: { sessionId: session.id, reason: evaluated.reason },
+          meta: { sessionId: session.id, reason: evaluated.reason, attempt: session.attempts },
         });
-        throw new AppError(
-          'RENEWAL_PROVIDER_UNAVAILABLE',
-          503,
-          'We could not reach the verification service. Your server was NOT extended — please try again.',
-        );
+        if (evaluated.retryable) {
+          throw new AppError(
+            'RENEWAL_PROVIDER_UNAVAILABLE',
+            503,
+            'We could not reach the verification service. Your server was NOT extended — please try again.',
+          );
+        }
+        throw new AppError('RENEWAL_VERIFICATION_FAILED', 400, messageFor(evaluated.reason));
       }
-      return this.failSession(session, evaluated.reason, ctx, false);
+      // attempts exhausted — close it so the endpoint cannot be used to grind
+      return this.failSession(session, evaluated.reason, ctx);
     }
 
     // ---- the grant: one transaction, exactly once -------------------------
@@ -455,7 +477,6 @@ export class RenewalService {
     session: typeof serverRenewalSessions.$inferSelect,
     reason: FailureReason,
     ctx: ReqCtx,
-    _retryable: boolean,
   ): Promise<never> {
     await this.db
       .update(serverRenewalSessions)

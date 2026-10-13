@@ -37,7 +37,7 @@ const schema = require_('../../dist/db/schema.js');
 const { RenewalService } = require_('../../dist/modules/servers/renewal.service.js');
 const { ServersService } = require_('../../dist/modules/servers/servers.service.js');
 const { parseTokenVerdict } = require_('../../dist/modules/servers/workink-client.js');
-const { RENEWAL_HOURS } = require_('../../dist/modules/servers/renewal-policy.js');
+const { RENEWAL_HOURS, COMPLETION_ATTEMPTS_PER_SESSION } = require_('../../dist/modules/servers/renewal-policy.js');
 const { Err, pgCodeOf } = require_('../../dist/common/errors.js');
 
 const { servers, users, plans, serverRenewals, serverRenewalSessions } = schema;
@@ -376,6 +376,69 @@ describe('step 2 — completing with a key', () => {
     const ok = await svc.complete(user.id, session.id, 'key', ctx);
     assert.ok(ok.expiresAt);
     assert.equal((await grantsFor(server.id)).length, 1);
+  });
+
+  it('a REJECTED key does not burn the attempt — the user can retry on the same session', async () => {
+    // Found by the live end-to-end run: pasting a wrong key first used to close
+    // the session as `failed`, so the user's still-valid key was then refused
+    // with RENEWAL_SESSION_CLOSED and they had to redo the whole Work.ink round
+    // trip. Nothing was granted, so there is no security reason to close it.
+    const w = new FakeWorkink();
+    const svc = makeService(w);
+    const { server, user } = await seedServer();
+
+    const { session } = await svc.open(user.id, server.id, ctx);
+
+    // 1) the user pastes something wrong
+    w.verdict = { valid: false };
+    await assert.rejects(
+      () => svc.complete(user.id, session.id, 'WRONG-KEY', ctx),
+      (e) => e.getResponse().code === 'RENEWAL_VERIFICATION_FAILED',
+    );
+    let [row] = await sessionRow(session.id);
+    assert.equal(row.status, 'pending', 'the attempt must stay open after a wrong key');
+    assert.equal(row.tokenHash, null, 'a rejected key must not be claimed');
+
+    // 2) …then pastes the right one, on the SAME session
+    w.verdict = { valid: true, info: { linkId: 10345 } };
+    const out = await svc.complete(user.id, session.id, 'RIGHT-KEY', ctx);
+    assert.ok(out.expiresAt, 'the correct key must still work');
+    assert.equal((await grantsFor(server.id)).length, 1, 'exactly one grant');
+    [row] = await sessionRow(session.id);
+    assert.equal(row.status, 'completed');
+    assert.equal(row.attempts, 2, 'both attempts are counted');
+  });
+
+  it('bounds retries so an open attempt cannot grind the provider', async () => {
+    const w = new FakeWorkink();
+    const svc = makeService(w);
+    const { server, user } = await seedServer();
+    const { session } = await svc.open(user.id, server.id, ctx);
+
+    w.verdict = { valid: false };
+    let last;
+    for (let i = 0; i < COMPLETION_ATTEMPTS_PER_SESSION + 2; i++) {
+      last = await svc.complete(user.id, session.id, `GUESS-${i}`, ctx).catch((e) => e);
+    }
+    const [row] = await sessionRow(session.id);
+    assert.ok(
+      ['failed', 'expired'].includes(row.status) || row.attempts <= COMPLETION_ATTEMPTS_PER_SESSION,
+      `attempts must be capped, got ${row.attempts} / status ${row.status}`,
+    );
+    assert.equal((await grantsFor(server.id)).length, 0, 'no guessing ever grants');
+    void last;
+  });
+
+  it('a malformed key never reaches the provider and never closes the attempt', async () => {
+    const w = new FakeWorkink();
+    const svc = makeService(w);
+    const { server, user } = await seedServer();
+    const { session } = await svc.open(user.id, server.id, ctx);
+
+    await assert.rejects(() => svc.complete(user.id, session.id, 'not a key!', ctx));
+    assert.equal(w.calls, 0, 'shape is checked locally');
+    const [row] = await sessionRow(session.id);
+    assert.equal(row.status, 'pending', 'a paste mistake must not cost the user their attempt');
   });
 
   it('refuses a session belonging to another user', async () => {

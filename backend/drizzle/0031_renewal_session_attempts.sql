@@ -1,0 +1,13 @@
+-- Track verification attempts per renewal session.
+--
+-- Why: a rejected KEY must not burn the whole attempt. A user who pastes the
+-- wrong string — or whose key expired in transit — should be able to try again
+-- on the SAME session instead of being sent back through the entire Work.ink
+-- round trip for a five-minute key.
+--
+-- `attempts` bounds that leniency: it is incremented on every claim, and once
+-- it exceeds COMPLETION_ATTEMPTS_PER_SESSION the session is closed, so an open
+-- attempt cannot be used to grind the provider with guesses.
+--
+-- Additive only; existing rows default to 0.
+ALTER TABLE "server_renewal_sessions" ADD COLUMN IF NOT EXISTS "attempts" integer DEFAULT 0 NOT NULL;
