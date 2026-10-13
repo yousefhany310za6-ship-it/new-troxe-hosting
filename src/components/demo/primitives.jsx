@@ -116,7 +116,15 @@ export function Sparkline({ values, color, max }) {
 /* ---- Panel — titled card (ServerOverview.jsx) ----------------- */
 export function Panel({ title, icon: Icon, right, className, children }) {
     return (
-        <section className={cn('flex flex-col rounded-2xl border border-hairline bg-card', className)}>
+        // `min-w-0`: as a grid item the default `min-width: auto` refuses to
+        // shrink below its content, which pushes narrow phones into a
+        // horizontal scroll.
+        <section
+            className={cn(
+                'flex min-w-0 flex-col rounded-2xl border border-hairline bg-card',
+                className
+            )}
+        >
             <header className="flex items-center gap-2.5 border-b border-hairline px-5 py-3.5">
                 {Icon && <Icon className="size-4 shrink-0 text-ink-muted" aria-hidden="true" />}
                 <h3 className="flex-1 text-[0.92rem] font-semibold">{title}</h3>
@@ -130,7 +138,7 @@ export function Panel({ title, icon: Icon, right, className, children }) {
 /* ---- Tile — one metric card ---------------------------------- */
 export function Tile({ icon: Icon, label, color, value, sub, children }) {
     return (
-        <div className="flex flex-col gap-3 rounded-2xl border border-hairline bg-card p-4 sm:p-5">
+        <div className="flex min-w-0 flex-col gap-3 rounded-2xl border border-hairline bg-card p-4 sm:p-5">
             <div className="flex items-center gap-2.5">
                 <span
                     className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-hairline bg-veil"

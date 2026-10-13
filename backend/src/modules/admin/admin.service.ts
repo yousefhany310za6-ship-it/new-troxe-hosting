@@ -17,8 +17,36 @@ import { AuditService } from '../audit/audit.module';
 import { GeoIpService } from '../../common/geoip/geoip.service';
 import { config } from '../../config/env';
 import { Err } from '../../common/errors';
-import type { CreateServerDto, UpdateServerDto } from '../servers/dto';
+import type { CreateServerDto, RescaleServerDto, UpdateServerDto } from '../servers/dto';
 import * as crypto from 'crypto';
+
+/** Columns an admin may write on a plan row. */
+type PlanWrite = {
+  name?: string;
+  priceCents?: number;
+  cpuMilli?: number;
+  ramMb?: number;
+  storageGb?: number;
+  poolCpuMilli?: number;
+  poolRamMb?: number;
+  poolStorageGb?: number;
+  maxServers?: number;
+  maxBackupSlots?: number;
+};
+
+/**
+ * A pool below the plan's own per-server ceiling is self-contradictory (the
+ * account could never host a server at the size it just paid for), so it is
+ * rejected here rather than silently normalised.
+ */
+function assertPoolsCoverServers(data: PlanWrite): void {
+  if (data.poolCpuMilli !== undefined && data.cpuMilli !== undefined && data.poolCpuMilli < data.cpuMilli)
+    throw Err.invalid('PLAN_POOL_TOO_SMALL', 'The CPU pool cannot be smaller than the per-server CPU limit');
+  if (data.poolRamMb !== undefined && data.ramMb !== undefined && data.poolRamMb < data.ramMb)
+    throw Err.invalid('PLAN_POOL_TOO_SMALL', 'The memory pool cannot be smaller than the per-server memory limit');
+  if (data.poolStorageGb !== undefined && data.storageGb !== undefined && data.poolStorageGb < data.storageGb)
+    throw Err.invalid('PLAN_POOL_TOO_SMALL', 'The storage pool cannot be smaller than the per-server storage limit');
+}
 
 export interface AdminUserListParams {
   page?: number;
@@ -639,22 +667,78 @@ export class AdminService {
   /**
    * Create a server ON BEHALF of a user. Quotas apply to the OWNER's plan
    * (ServersService.create resolves the plan server-side from the account),
-   * never to the admin's — the admin cannot launder quota this way.
+   * never to the admin's — the admin cannot launder quota this way. Only an
+   * explicit `resourcesOverride` may exceed the owner's plan, and the platform
+   * maxima still apply; the flag is recorded in the audit log.
    */
-  async adminCreateServer(ownerId: string, dto: CreateServerDto & { nodeId?: string }, actorId: string, actorEmail?: string) {
+  async adminCreateServer(
+    ownerId: string,
+    dto: CreateServerDto,
+    actorId: string,
+    actorEmail?: string,
+    opts?: { nodeId?: string; resourcesOverride?: boolean },
+  ) {
     const [owner] = await this.db.select({ id: users.id }).from(users).where(eq(users.id, ownerId)).limit(1);
     if (!owner) throw new NotFoundException('OWNER_NOT_FOUND');
-    const { nodeId: _node, ...serverDto } = dto;
-    const created = await this.serversSvc.create(ownerId, serverDto, { ip: 'admin', device: 'admin-panel' }, { nodeId: dto.nodeId });
+    const created = await this.serversSvc.create(
+      ownerId,
+      dto,
+      { ip: 'admin', device: 'admin-panel' },
+      { nodeId: opts?.nodeId, resourcesOverride: opts?.resourcesOverride },
+    );
     await this.audit.record({
       actorId,
       actorEmail: actorEmail ?? null,
       action: 'admin.server.create',
       targetType: 'server',
       targetId: created.id,
-      meta: { ownerId, runtime: dto.runtime, nodeId: created.nodeId },
+      meta: {
+        ownerId,
+        runtime: dto.runtime,
+        nodeId: created.nodeId,
+        cpuMilli: created.cpuMilli,
+        ramMb: created.ramMb,
+        storageGb: created.storageGb,
+        quotaOverride: !!opts?.resourcesOverride,
+      },
     });
     return created;
+  }
+
+  /** Ceilings that apply to a user — the admin create form renders from this. */
+  async userCreateLimits(ownerId: string) {
+    const [owner] = await this.db.select({ id: users.id }).from(users).where(eq(users.id, ownerId)).limit(1);
+    if (!owner) throw new NotFoundException('OWNER_NOT_FOUND');
+    return this.serversSvc.quotaFor(ownerId);
+  }
+
+  /** Same numbers for one server's rescale form (its own allocation excluded). */
+  async serverResourceLimits(serverId: string) {
+    const server = await this.getServer(serverId);
+    if (!server?.ownerId) throw new NotFoundException('SERVER_NOT_FOUND');
+    return this.serversSvc.quotaFor(server.ownerId, { excludeServerId: serverId });
+  }
+
+  /** Resize a server on behalf of its owner; `override` may exceed the plan. */
+  async adminRescaleServer(serverId: string, dto: RescaleServerDto, actorId: string, actorEmail?: string, ip?: string) {
+    const server = await this.getServer(serverId);
+    if (!server?.ownerId) throw new NotFoundException('SERVER_NOT_FOUND');
+    const updated = await this.serversSvc.rescale(
+      server.ownerId,
+      serverId,
+      dto,
+      { ip: ip ?? 'admin', device: 'admin-panel' },
+      { actorId, actorEmail: actorEmail ?? null, isAdmin: true, override: dto.override },
+    );
+    await this.audit.record({
+      actorId,
+      actorEmail: actorEmail ?? null,
+      action: 'admin.server.rescale',
+      targetType: 'server',
+      targetId: serverId,
+      meta: { ownerId: server.ownerId, quotaOverride: !!dto.override },
+    });
+    return updated;
   }
 
   async adminUpdateServer(serverId: string, dto: UpdateServerDto, actorId: string, actorEmail?: string) {
@@ -823,7 +907,11 @@ export class AdminService {
     return this.db.select().from(plans).orderBy(plans.id);
   }
 
-  async createPlan(data: { id: string; name: string; priceCents?: number; cpuMilli?: number; ramMb?: number; storageGb?: number; maxServers?: number; maxBackupSlots?: number }, actorId: string, actorEmail?: string) {
+  async createPlan(data: PlanWrite & { id: string; name: string }, actorId: string, actorEmail?: string) {
+    assertPoolsCoverServers(data);
+    const maxServers = data.maxServers ?? 1;
+    // A plan created without explicit pools gets the legacy pool (per-server ×
+    // maxServers), which is what its servers would have consumed anyway.
     const [plan] = await this.db.insert(plans).values({
       id: data.id,
       name: data.name,
@@ -831,14 +919,18 @@ export class AdminService {
       cpuMilli: data.cpuMilli ?? 250,
       ramMb: data.ramMb ?? 256,
       storageGb: data.storageGb ?? 1,
-      maxServers: data.maxServers ?? 1,
+      poolCpuMilli: data.poolCpuMilli ?? (data.cpuMilli ?? 250) * maxServers,
+      poolRamMb: data.poolRamMb ?? (data.ramMb ?? 256) * maxServers,
+      poolStorageGb: data.poolStorageGb ?? (data.storageGb ?? 1) * maxServers,
+      maxServers,
       maxBackupSlots: data.maxBackupSlots ?? 0,
     }).returning();
     await this.audit.record({ actorId, actorEmail: actorEmail ?? null, action: 'admin.plan.create', targetType: 'plan', targetId: plan.id });
     return plan;
   }
 
-  async updatePlan(planId: string, data: Partial<{ name: string; priceCents: number; cpuMilli: number; ramMb: number; storageGb: number; maxServers: number; maxBackupSlots: number }>, actorId: string, actorEmail?: string) {
+  async updatePlan(planId: string, data: PlanWrite, actorId: string, actorEmail?: string) {
+    assertPoolsCoverServers(data);
     const clean = Object.fromEntries(Object.entries(data).filter(([, v]) => v !== undefined));
     if (!Object.keys(clean).length) throw Err.invalid('PLAN_NO_CHANGES', 'Nothing to update');
     const [plan] = await this.db.update(plans).set(clean).where(eq(plans.id, planId)).returning();

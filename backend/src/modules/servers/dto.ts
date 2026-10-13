@@ -35,6 +35,17 @@ export class CreateServerDto {
   // NOTE: no planId here on purpose — the plan is taken from the user's
   // server-side assignment, never from the request body (quota escalation).
 
+  /**
+   * Optional resource request. Omitted fields fall back to the plan's
+   * per-server ceiling (or whatever the account pool still has free). These
+   * coarse bounds are only the first line of defence — the exact ceilings are
+   * resolved server-side from the owner's plan (resource-policy.ts), the one
+   * place a client cannot influence.
+   */
+  @IsOptional() @Type(() => Number) @IsInt() @Min(100) @Max(8000) cpuMilli?: number;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(128) @Max(24576) ramMb?: number;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) storageGb?: number;
+
   @IsOptional()
   @MinLength(1)
   @MaxLength(500)
@@ -56,6 +67,20 @@ export class CreateServerDto {
   @Min(1)
   @Max(30)
   autoBackupRetain?: number;
+}
+
+/**
+ * Change the allocation of an EXISTING server. CPU/RAM are applied by
+ * rebuilding the container (the volume and every file survive); storage is a
+ * quota row only and needs no rebuild.
+ */
+export class RescaleServerDto {
+  @IsOptional() @Type(() => Number) @IsInt() @Min(100) @Max(8000) cpuMilli?: number;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(128) @Max(24576) ramMb?: number;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) storageGb?: number;
+
+  /** admin only: accept a request above the owner's plan (platform maxima still apply) */
+  @IsOptional() @IsBoolean() override?: boolean;
 }
 
 export class ChangeRuntimeDto {

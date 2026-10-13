@@ -10,6 +10,8 @@ export const keys = {
   serverUsage: (id) => ['servers', id, 'usage'],
   serverLogs: (id) => ['servers', id, 'logs'],
   serverBackups: (id) => ['servers', id, 'backups'],
+  createLimits: () => ['servers', 'create-limits'],
+  resourceLimits: (id) => ['servers', id, 'resource-limits'],
   authSessions: () => ['auth', 'sessions'],
   activeSessions: () => ['auth', 'active-sessions'],
   announcements: () => ['announcements'],
@@ -162,11 +164,51 @@ export function useServerBackups(id) {
   });
 }
 
+/**
+ * Ceilings for the create form: the plan, how many servers are left and — per
+ * resource — the per-server cap, the account pool and what is still free.
+ */
+export function useCreateLimits(enabled = true) {
+  return useQuery({
+    queryKey: keys.createLimits(),
+    queryFn: () => apiGet('/servers/create-limits'),
+    enabled,
+    staleTime: 15_000,
+  });
+}
+
+/** Same numbers for a rescale, with the server's own allocation excluded. */
+export function useServerResourceLimits(id) {
+  return useQuery({
+    queryKey: keys.resourceLimits(id),
+    queryFn: () => apiGet(`/servers/${id}/resource-limits`),
+    enabled: !!id,
+    staleTime: 15_000,
+  });
+}
+
 export function useCreateServer() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (data) => apiPost('/servers', data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: keys.servers() }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: keys.servers() });
+      qc.invalidateQueries({ queryKey: keys.createLimits() });
+    },
+  });
+}
+
+/** CPU/RAM changes rebuild the container, so the server row changes too. */
+export function useRescaleServer(id) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data) => apiPatch(`/servers/${id}/resources`, data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: keys.server(id) });
+      qc.invalidateQueries({ queryKey: keys.servers() });
+      qc.invalidateQueries({ queryKey: keys.resourceLimits(id) });
+      qc.invalidateQueries({ queryKey: keys.createLimits() });
+    },
   });
 }
 

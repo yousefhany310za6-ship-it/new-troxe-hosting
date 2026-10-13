@@ -8,7 +8,7 @@ import { JwtAuthGuard, type ReqUser } from '../auth/jwt.guard';
 import { BackupsService } from './backups.service';
 import { FilesService } from './files.service';
 import { ParseUuidPipe } from '../../common/pipes/uuid.pipe';
-import { ChangeRuntimeDto, CreateServerDto, UpdateServerDto } from './dto';
+import { ChangeRuntimeDto, CreateServerDto, RescaleServerDto, UpdateServerDto } from './dto';
 import { MkdirDto, RenameDto, WriteFileDto, FilesQuery, ArchiveDto, ExtractDto } from './files.dto';
 import { ServerOwnerGuard } from './server-owner.guard';
 import { ServerAccessGuard } from './server-access.guard';
@@ -47,6 +47,17 @@ export class ServersController {
     return this.svc.create(u.sub, dto, ctxOf(req));
   }
 
+  /**
+   * Ceilings for the create form: plan, server headroom and — per resource —
+   * the per-server cap, the account pool and what is still free in it.
+   * Static route, registered before `:id`.
+   */
+  @Get('create-limits')
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  createLimits(@CurrentUser() u: ReqUser) {
+    return this.svc.quotaFor(u.sub);
+  }
+
   @Get(':id')
   @UseGuards(ServerAccessGuard)
   getOne(@Param('id', ParseUuidPipe) id: string, @CurrentUser() u: ReqUser) {
@@ -64,6 +75,35 @@ export class ServersController {
   @UseGuards(ServerOwnerGuard)
   remove(@Param('id', ParseUuidPipe) id: string, @CurrentUser() u: ReqUser, @Req() req: Request) {
     return this.svc.remove(u.sub, id, ctxOf(req));
+  }
+
+  /**
+   * Quota headroom for resizing THIS server — its own current allocation is
+   * excluded, so the numbers are exactly what the rescale may take.
+   */
+  @Get(':id/resource-limits')
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  @UseGuards(ServerAccessGuard)
+  async resourceLimits(@Param('id', ParseUuidPipe) id: string, @CurrentUser() u: ReqUser) {
+    await this.svc.accessible(u.sub, id, 'settings.update');
+    return this.svc.quotaFor(u.sub, { excludeServerId: id });
+  }
+
+  /**
+   * Resize CPU / RAM / storage. CPU/RAM rebuild the container (files intact);
+   * storage is a quota row. Blocked by the plan's per-server ceiling AND the
+   * account pool, both resolved server-side.
+   */
+  @Patch(':id/resources')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @UseGuards(ServerAccessGuard)
+  rescale(
+    @Param('id', ParseUuidPipe) id: string,
+    @Body() dto: RescaleServerDto,
+    @CurrentUser() u: ReqUser,
+    @Req() req: Request,
+  ) {
+    return this.svc.rescale(u.sub, id, dto, ctxOf(req));
   }
 
   @Post(':id/start')

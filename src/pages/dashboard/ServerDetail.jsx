@@ -53,11 +53,7 @@ const TABS = [
     { id: 'startup', label: 'Startup', Icon: TerminalSquare },
 ];
 
-const inputClass =
-    'w-full rounded-xl border border-hairline bg-white/10 px-4 py-2.5 text-[0.88rem] text-foreground placeholder-ink-muted transition focus:border-primary focus:ring-2 focus:ring-ring/40 focus:outline-none';
-
-const actionBtn =
-    'inline-flex items-center gap-1.5 rounded-md border border-hairline bg-veil px-3 py-1.5 text-[0.8rem] font-semibold text-ink-secondary transition hover:border-hairline-hover hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40';
+const actionBtn = 'btn btn-secondary btn-sm';
 
 /**
  * Renders children only for callers the server recognises. Owners always pass;
@@ -84,7 +80,7 @@ function GrantTabs({ id, tab, setTab, setMsg }) {
                     type="button"
                     onClick={() => { setTab(tabId); setMsg({ text: '', ok: true }); }}
                     className={cn(
-                        'flex shrink-0 items-center gap-2 border-b-2 px-4 py-3 text-[0.88rem] font-semibold transition',
+                        'flex shrink-0 items-center gap-2 border-b-2 px-4 py-3 text-small font-semibold transition',
                         tab === tabId
                             ? 'border-white text-foreground'
                             : 'border-transparent text-ink-secondary hover:text-foreground'
@@ -101,12 +97,12 @@ function GrantTabs({ id, tab, setTab, setMsg }) {
 function GrantGate({ id, ownerOnly = false, fallback = null, children }) {
     const { data: grant, isLoading, error } = useServerGrant(id);
     if (isLoading) {
-        return <div className="h-24 animate-pulse rounded-2xl bg-white/[0.04]" aria-busy="true" />;
+        return <div className="h-24 animate-pulse rounded-2xl bg-console" aria-busy="true" />;
     }
     if (error || !grant) {
         return (
             fallback ?? (
-                <p className="rounded-xl border border-hairline bg-card p-6 text-[0.86rem] text-ink-secondary">
+                <p className="console-card p-6 text-small text-ink-secondary">
                     You no longer have access to this server.
                 </p>
             )
@@ -223,7 +219,7 @@ export default function ServerDetail() {
     if (!server) {
         return (
             <div className="flex flex-col items-center gap-4 py-20 text-center">
-                <p className="text-[1.1rem] font-bold">Loading…</p>
+                <p className="text-lead font-bold">Loading…</p>
             </div>
         );
     }
@@ -381,12 +377,12 @@ export default function ServerDetail() {
         <div className="flex flex-col gap-6">
             <Link
                 to="/dashboard/servers"
-                className="inline-flex w-fit items-center gap-1.5 text-[0.85rem] font-semibold text-ink-secondary transition hover:text-foreground"
+                className="inline-flex w-fit items-center gap-1.5 text-small font-semibold text-ink-secondary transition hover:text-foreground"
             >
                 <ArrowLeft className="size-4" /> All servers
             </Link>
 
-            <div className="relative overflow-hidden rounded-xl border border-hairline bg-card p-6">
+            <div className="console-card relative overflow-hidden p-6">
                 {RuntimeIcon && (
                     <div aria-hidden="true" className="pointer-events-none absolute top-1/2 -right-10 size-52 -translate-y-1/2 opacity-[0.07]">
                         <RuntimeIcon className="size-full" />
@@ -394,11 +390,11 @@ export default function ServerDetail() {
                 )}
                 <div className="relative flex flex-wrap items-center gap-3">
                     <span className={cn('size-3 rounded-full', STATUS_STYLE[status])} />
-                    <h1 className="font-mono text-[1.4rem] font-extrabold">{server.name}</h1>
-                    <span className="rounded-full border border-hairline bg-veil px-2.5 py-0.5 text-[0.75rem] font-semibold text-ink-secondary">
+                    <h1 className="font-mono text-display font-extrabold">{server.name}</h1>
+                    <span className="chip">
                         {server.runtimeLabel ?? server.runtime}
                     </span>
-                    <span className="font-mono text-[0.75rem] text-ink-muted capitalize">{status}</span>
+                    <span className="font-mono text-tiny text-ink-muted capitalize">{status}</span>
                     {status !== 'suspended' && (
                     <div className="ml-auto flex items-center gap-2">
                         <button type="button" disabled={status !== 'offline'} onClick={start} className={actionBtn}>
@@ -416,7 +412,7 @@ export default function ServerDetail() {
             </div>
 
             {status === 'suspended' ? (
-                <section className="relative overflow-hidden rounded-2xl border border-red-500/30 bg-card p-8 text-center sm:p-12">
+                <section className="console-card relative overflow-hidden border-red-500/30! p-8 text-center sm:p-12">
                     <div
                         aria-hidden="true"
                         className="pointer-events-none absolute inset-0"
@@ -426,17 +422,14 @@ export default function ServerDetail() {
                         <span className="flex size-16 items-center justify-center rounded-2xl border border-red-500/30 bg-red-500/10 text-red-300">
                             <Ban className="size-8" />
                         </span>
-                        <h2 className="mt-4 text-[1.4rem] font-extrabold">Server Suspended</h2>
-                        <p className="mt-2 max-w-md text-[0.9rem] leading-relaxed text-ink-secondary">
+                        <h2 className="mt-4 text-display font-extrabold">Server Suspended</h2>
+                        <p className="mt-2 max-w-md text-body leading-relaxed text-ink-secondary">
                             This server has been suspended by the administration and is currently unavailable.
                         </p>
-                        <p className="mt-1 max-w-md text-[0.85rem] text-ink-secondary">
+                        <p className="mt-1 max-w-md text-small text-ink-secondary">
                             Please contact support if you believe this was a mistake.
                         </p>
-                        <Link
-                            to="/contact"
-                            className="mt-6 inline-flex items-center gap-2 rounded-full bg-white px-5 py-2.5 text-[0.85rem] font-bold text-black transition hover:bg-gray-200"
-                        >
+                        <Link to="/contact" className="btn btn-primary btn-lg mt-6">
                             Contact Support
                         </Link>
                     </div>
@@ -448,7 +441,7 @@ export default function ServerDetail() {
             </div>
 
             {msg.text && (
-                <p className={cn('text-sm', msg.ok ? 'text-emerald-400' : 'text-red-400')}>{msg.text}</p>
+                <p className={cn('text-small', msg.ok ? 'text-emerald-400' : 'text-red-400')}>{msg.text}</p>
             )}
 
             {tab === 'overview' && (
@@ -500,7 +493,7 @@ export default function ServerDetail() {
             {tab === 'schedules' && (
                 <GrantGate
                     id={id}
-                    fallback={<p className="rounded-xl border border-hairline bg-card p-6 text-[0.86rem] text-ink-secondary">Schedules are available to people with access to this server.</p>}
+                    fallback={<p className="console-card p-6 text-small text-ink-secondary">Schedules are available to people with access to this server.</p>}
                 >
                     {({ permissions }) => (
                         <ServerSchedules
@@ -521,20 +514,20 @@ export default function ServerDetail() {
                 <div className="flex flex-col gap-4">
                     <ServerSettings server={server} onSaved={fetchServer} onTab={(t) => setTab(t)} />
 
-                    <div className="rounded-xl border border-red-500/30 bg-card p-6">
+                    <div className="console-card border-red-500/30! p-6">
                         <h3 className="font-bold text-red-400">Danger zone</h3>
                         <div className="mt-4 flex flex-wrap gap-2">
                             <button
                                 type="button"
                                 onClick={() => setReinstallOpen(true)}
-                                className="rounded-full border border-hairline px-5 py-2 text-[0.83rem] font-bold text-ink-secondary transition hover:border-hairline-hover hover:text-foreground"
+                                className="btn btn-secondary"
                             >
                                 Reinstall server
                             </button>
                             <button
                                 type="button"
                                 onClick={() => setDeleteOpen(true)}
-                                className="rounded-full border border-red-500/40 px-5 py-2 text-[0.83rem] font-bold text-red-400 transition hover:bg-red-500 hover:text-white"
+                                className="btn btn-danger"
                             >
                                 Delete server
                             </button>
@@ -558,7 +551,7 @@ export default function ServerDetail() {
                 phraseHint={server ? <>Type the server name <span className="font-mono font-bold text-ink">{server.name}</span> to confirm</> : null}
                 onConfirm={reinstall}
             >
-                <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-[0.82rem] text-amber-300">
+                <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-small text-amber-300">
                     Server: <span className="font-mono font-bold">{server?.name}</span> — all current files will be permanently erased.
                 </p>
             </ConfirmModal>
@@ -572,7 +565,7 @@ export default function ServerDetail() {
                 confirmPhrase="DELETE"
                 onConfirm={deleteServer}
             >
-                <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2.5 text-[0.82rem] text-red-300">
+                <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2.5 text-small text-red-300">
                     Server: <span className="font-mono font-bold">{server?.name}</span> — files, data and backups will all be destroyed.
                 </p>
             </ConfirmModal>
@@ -585,7 +578,7 @@ export default function ServerDetail() {
                 confirmLabel="Restore"
                 onConfirm={() => restoreBackup(restoreTarget.id)}
             >
-                <p className="text-[0.85rem] text-ink-secondary">
+                <p className="text-small text-ink-secondary">
                     Snapshot: <span className="font-mono font-bold text-ink">{restoreTarget?.name}</span>
                     {' '}({restoreTarget && new Date(restoreTarget.createdAt).toLocaleString()})
                 </p>
@@ -599,7 +592,7 @@ export default function ServerDetail() {
                 confirmLabel="Delete backup"
                 onConfirm={() => deleteBackup(deleteBackupTarget.id)}
             >
-                <p className="text-[0.85rem] text-ink-secondary">
+                <p className="text-small text-ink-secondary">
                     Snapshot: <span className="font-mono font-bold text-ink">{deleteBackupTarget?.name}</span>
                 </p>
             </ConfirmModal>

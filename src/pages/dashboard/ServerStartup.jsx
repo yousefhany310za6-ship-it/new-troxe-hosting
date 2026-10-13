@@ -4,13 +4,8 @@ import { Plus, Save, Terminal, Trash2 } from 'lucide-react';
 import { apiPatch } from '@/lib/api.js';
 import { cn } from '@/lib/utils';
 
-const inputClass =
-    'w-full rounded-xl border border-hairline bg-white/10 px-4 py-2.5 text-[0.88rem] text-foreground placeholder-ink-muted transition focus:border-primary focus:ring-2 focus:ring-ring/40 focus:outline-none';
-
-const labelClass = 'mb-1.5 block text-[0.85rem] font-semibold text-foreground';
-const hintClass = 'mt-1.5 text-[0.75rem] text-ink-muted';
-const actionBtn =
-    'inline-flex items-center gap-1.5 rounded-md border border-hairline bg-veil px-3 py-1.5 text-[0.8rem] font-semibold text-ink-secondary transition hover:border-hairline-hover hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40';
+const labelClass = 'mb-1.5 block text-small font-semibold text-foreground';
+const hintClass = 'mt-1.5 block text-tiny text-ink-muted';
 
 /**
  * Startup settings only: the command the platform runs and the variables it is
@@ -58,10 +53,10 @@ export default function ServerStartup({ server, onSaved, onTab }) {
     if (!server) return null;
 
     return (
-        <form onSubmit={save} className="flex flex-col gap-5 rounded-2xl border border-hairline bg-card p-5 sm:p-6">
+        <form onSubmit={save} className="console-card flex flex-col gap-5 p-5 sm:p-6">
             <header className="flex items-center gap-2.5">
                 <Terminal className="size-4 text-ink-muted" aria-hidden="true" />
-                <h2 className="text-[0.95rem] font-semibold">Startup</h2>
+                <h2 className="text-lead font-semibold">Startup</h2>
             </header>
 
             <label className="block">
@@ -69,7 +64,7 @@ export default function ServerStartup({ server, onSaved, onTab }) {
                 <input
                     value={startup}
                     onChange={(e) => setStartup(e.target.value)}
-                    className={cn(inputClass, 'font-mono')}
+                    className="input-field font-mono"
                     dir="ltr"
                     maxLength={500}
                 />
@@ -80,8 +75,8 @@ export default function ServerStartup({ server, onSaved, onTab }) {
             </label>
 
             <div className="flex items-center justify-between">
-                <p className="text-[0.85rem] font-semibold">Environment variables</p>
-                <button type="button" onClick={() => setEnv((rows) => [...rows, { k: '', v: '' }])} className={actionBtn}>
+                <p className="text-small font-semibold">Environment variables</p>
+                <button type="button" onClick={() => setEnv((rows) => [...rows, { k: '', v: '' }])} className="btn btn-secondary btn-sm">
                     <Plus className="size-3.5" /> Add variable
                 </button>
             </div>
@@ -94,32 +89,32 @@ export default function ServerStartup({ server, onSaved, onTab }) {
                             placeholder="KEY"
                             value={row.k}
                             onChange={(e) => setEnv((rows) => rows.map((r, j) => (j === i ? { ...r, k: e.target.value } : r)))}
-                            className={cn(inputClass, 'font-mono')}
+                            className="input-field font-mono"
                         />
                         <input
                             placeholder="value"
                             value={row.v}
                             onChange={(e) => setEnv((rows) => rows.map((r, j) => (j === i ? { ...r, v: e.target.value } : r)))}
-                            className={cn(inputClass, 'font-mono')}
+                            className="input-field font-mono"
                         />
                         <button
                             type="button"
                             aria-label="Remove variable"
                             onClick={() => setEnv((rows) => rows.filter((_, j) => j !== i))}
-                            className={cn(actionBtn, 'max-md:w-fit')}
+                            className="btn btn-secondary btn-sm max-md:w-fit"
                         >
                             <Trash2 className="size-3.5" />
                         </button>
                     </div>
                 ))}
-                {env.length === 0 && <p className="text-[0.85rem] text-ink-muted">No variables yet.</p>}
+                {env.length === 0 && <p className="text-small text-ink-muted">No variables yet.</p>}
             </div>
 
             <div className="flex flex-wrap items-center gap-3 border-t border-hairline pt-4">
                 <button
                     type="submit"
                     disabled={busy || !dirty}
-                    className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-[0.84rem] font-bold text-black transition hover:bg-white/90 disabled:opacity-40"
+                    className="btn btn-primary"
                 >
                     <Save className="size-4" aria-hidden="true" />
                     {busy ? 'Saving…' : 'Save startup'}
@@ -127,12 +122,12 @@ export default function ServerStartup({ server, onSaved, onTab }) {
                 <button
                     type="button"
                     onClick={() => onTab?.('settings')}
-                    className="text-[0.82rem] font-bold text-ink-secondary underline decoration-dotted transition hover:text-foreground"
+                    className="text-small font-bold text-ink-secondary underline decoration-dotted transition hover:text-foreground"
                 >
                     Go to server settings
                 </button>
                 {msg && (
-                    <span className={cn('text-[0.8rem]', msg.ok ? 'text-emerald-300' : 'text-red-300')} role="status">
+                    <span className={cn('text-tiny', msg.ok ? 'text-emerald-300' : 'text-red-300')} role="status">
                         {msg.text}
                     </span>
                 )}

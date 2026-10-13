@@ -45,6 +45,16 @@ import AdminAudit from '../src/pages/admin/Audit.jsx';
 import AdminAnnouncements from '../src/pages/admin/Announcements.jsx';
 import AdminSupport from '../src/pages/admin/AdminSupport.jsx';
 
+// The landing-page demo is `lazy()` inside Hero, so the Home case above only
+// ever renders its Suspense skeleton. These cases mount the panels directly so
+// a broken demo panel fails the smoke run instead of shipping silently.
+import DemoDashboard from '../src/components/demo/DemoDashboard.jsx';
+import DemoConsole from '../src/components/demo/DemoConsole.jsx';
+import DemoFiles from '../src/components/demo/DemoFiles.jsx';
+import DemoBackups from '../src/components/demo/DemoBackups.jsx';
+import DemoSettings from '../src/components/demo/DemoSettings.jsx';
+import { DEMO_SERVER, metricsAt } from '../src/data/demoData.js';
+
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
@@ -151,6 +161,21 @@ export const cases = [
   { name: 'Admin/Audit', path: '/admin/audit', el: admin('audit', <AdminAudit />) },
   { name: 'Admin/Announcements', path: '/admin/announcements', el: admin('announcements', <AdminAnnouncements />) },
   { name: 'Admin/Support', path: '/admin/support', el: admin('support', <AdminSupport />) },
+
+  // --- landing-page interactive demo (see note above) ---
+  { name: 'Demo/Dashboard (Overview)', path: '/', el: page('/', <DemoDashboard />) },
+  {
+    name: 'Demo/Console',
+    path: '/',
+    el: page('/', <DemoConsole server={DEMO_SERVER} metrics={metricsAt(0)} onStatusAction={() => {}} reduced />),
+  },
+  { name: 'Demo/Files', path: '/', el: page('/', <DemoFiles now={new Date('2026-10-12T12:00:00Z')} />) },
+  { name: 'Demo/Backups', path: '/', el: page('/', <DemoBackups now={new Date('2026-10-12T12:00:00Z')} reduced />) },
+  {
+    name: 'Demo/Settings',
+    path: '/',
+    el: page('/', <DemoSettings settings={{ ...DEMO_SERVER, runtimeVersion: 'v22.11.0' }} onSave={() => {}} />),
+  },
 ];
 
 /** Render every case server-side; returns [{ok,name,html|error}] and never throws. */

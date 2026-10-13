@@ -57,7 +57,7 @@ const fmtPct = (p) => `${(Number(p) || 0).toFixed(Number(p) > 0 && Number(p) < 1
 
 function Card({ icon: Icon, title, accent, right, children, className }) {
   return (
-    <section className={cn('flex flex-col gap-4 rounded-2xl border border-hairline bg-card p-5', className)}>
+    <section className={cn('console-card stat-tile flex flex-col gap-4 p-5', className)} style={{ '--tile-accent': accent }}>
       <header className="flex items-center gap-3">
         <span
           className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-hairline bg-veil"
@@ -65,7 +65,7 @@ function Card({ icon: Icon, title, accent, right, children, className }) {
         >
           <Icon className="size-[18px]" />
         </span>
-        <h3 className="min-w-0 flex-1 truncate text-[1rem] font-semibold">{title}</h3>
+        <h3 className="min-w-0 flex-1 truncate text-lead font-semibold">{title}</h3>
         {right}
       </header>
       {children}
@@ -94,7 +94,7 @@ function Ring({ pct, color, text }) {
           style={{ transition: 'stroke-dasharray .6s ease' }}
         />
       </svg>
-      <span className="absolute inset-0 flex items-center justify-center text-[0.72rem] font-bold tabular-nums">{text}</span>
+      <span className="absolute inset-0 flex items-center justify-center text-tiny font-bold tabular-nums">{text}</span>
     </div>
   );
 }
@@ -104,11 +104,11 @@ function Trio({ items }) {
     <dl className="grid grid-cols-3 gap-2 text-center">
       {items.map(([label, value, color]) => (
         <div key={label} className="min-w-0">
-          <dt className="flex items-center justify-center gap-1.5 text-[0.68rem] font-semibold tracking-[0.12em] text-ink-muted uppercase">
+          <dt className="flex items-center justify-center gap-1.5 text-micro font-semibold tracking-[0.12em] text-ink-muted uppercase">
             {color && <span className="size-1.5 rounded-full" style={{ backgroundColor: color }} />}
             {label}
           </dt>
-          <dd className="mt-1 truncate text-[0.88rem] font-semibold tabular-nums">{value}</dd>
+          <dd className="mt-1 truncate text-small font-semibold tabular-nums">{value}</dd>
         </div>
       ))}
     </dl>
@@ -158,7 +158,7 @@ function LineChart({ series, max, empty }) {
         {!hasData && <line x1="0" x2={W} y1={H - 2} y2={H - 2} stroke="rgba(255,255,255,0.12)" vectorEffect="non-scaling-stroke" />}
       </svg>
       {!hasData && (
-        <span className="absolute inset-0 flex items-center justify-center text-[0.75rem] text-ink-muted">{empty}</span>
+        <span className="absolute inset-0 flex items-center justify-center text-tiny text-ink-muted">{empty}</span>
       )}
     </div>
   );
@@ -168,10 +168,10 @@ function LineChart({ series, max, empty }) {
 function SegmentedBar({ pct, color }) {
   const p = Math.max(0, Math.min(100, Number(pct) || 0));
   return (
-    <div className="relative h-3 w-full overflow-hidden rounded-full bg-white/[0.07]">
+    <div className="meter" style={{ height: '0.75rem' }}>
       <div
-        className="h-full rounded-full"
-        style={{ width: `${p}%`, background: `linear-gradient(90deg, ${color}99, ${color})`, transition: 'width .6s ease' }}
+        className="meter-fill"
+        style={{ width: `${p}%`, background: `linear-gradient(90deg, ${color}99, ${color})` }}
       />
       {[25, 50, 75].map((t) => (
         <span key={t} className="absolute top-0 h-full w-px bg-black/70" style={{ left: `${t}%` }} />
@@ -206,8 +206,8 @@ function Gauge({ pct, color, value, caption }) {
         <circle cx={dx} cy={dy} r="12" fill={color} opacity="0.18" />
       </svg>
       <div className="absolute inset-x-0 bottom-1 flex flex-col items-center">
-        <span className="text-[1.6rem] leading-none font-bold tabular-nums">{value}</span>
-        <span className="mt-1 text-[0.7rem] font-semibold tracking-[0.12em] text-ink-muted uppercase">{caption}</span>
+        <span className="text-display-lg leading-none font-bold tabular-nums">{value}</span>
+        <span className="mt-1 text-tiny font-semibold tracking-[0.12em] text-ink-muted uppercase">{caption}</span>
       </div>
     </div>
   );
@@ -216,9 +216,9 @@ function Gauge({ pct, color, value, caption }) {
 function InfoRow({ label, value, mono, children }) {
   return (
     <div className="flex items-center justify-between gap-4 rounded-xl border border-hairline bg-white/[0.02] px-4 py-3">
-      <span className="text-[0.82rem] text-ink-muted">{label}</span>
+      <span className="text-small text-ink-muted">{label}</span>
       {children ?? (
-        <span className={cn('min-w-0 truncate text-[0.86rem] font-semibold', mono && 'font-mono')} title={typeof value === 'string' ? value : undefined}>
+        <span className={cn('min-w-0 truncate text-small font-semibold', mono && 'font-mono')} title={typeof value === 'string' ? value : undefined}>
           {value}
         </span>
       )}
@@ -276,8 +276,8 @@ export default function ResourceMonitor({ server, status, usage, liveOpts }) {
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
       <div className="flex items-center justify-between gap-3 md:col-span-2">
-        <h2 className="text-[0.95rem] font-semibold">Resources</h2>
-        <span className={cn('inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[0.72rem] font-semibold', m.ring, m.text)}>
+        <h2 className="text-lead font-semibold">Resources</h2>
+        <span className={cn('inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-tiny font-semibold', m.ring, m.text)}>
           <span className={cn('size-1.5 rounded-full', m.dot)} />
           {m.label}
         </span>
@@ -300,7 +300,7 @@ export default function ResourceMonitor({ server, status, usage, liveOpts }) {
       >
         <div className="flex flex-1 flex-col justify-center gap-3 py-6">
           <SegmentedBar pct={memPct} color={COLORS.mem} />
-          <div className="flex justify-between text-[0.68rem] text-ink-muted tabular-nums">
+          <div className="flex justify-between text-micro text-ink-muted tabular-nums">
             <span>0</span>
             <span>{fmtBytes(memLimit / 2)}</span>
             <span>{fmtBytes(memLimit)}</span>
@@ -313,7 +313,7 @@ export default function ResourceMonitor({ server, status, usage, liveOpts }) {
         icon={Network}
         title="Network I/O"
         accent={COLORS.rx}
-        right={<span className="text-[1.15rem] font-bold tabular-nums">{fmtRate(rxNow + txNow)}</span>}
+        right={<span className="text-lead font-bold tabular-nums">{fmtRate(rxNow + txNow)}</span>}
       >
         <LineChart
           series={[
@@ -324,10 +324,10 @@ export default function ResourceMonitor({ server, status, usage, liveOpts }) {
           empty={emptyHint}
         />
         <div className="flex items-center justify-center gap-3">
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-hairline bg-veil px-3.5 py-1.5 text-[0.8rem] font-semibold tabular-nums">
+          <span className="chip tabular-nums">
             <ArrowDown className="size-3.5" style={{ color: COLORS.rx }} /> {fmtBytes(last?.rx ?? 0)}
           </span>
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-hairline bg-veil px-3.5 py-1.5 text-[0.8rem] font-semibold tabular-nums">
+          <span className="chip tabular-nums">
             <ArrowUp className="size-3.5" style={{ color: COLORS.tx }} /> {fmtBytes(last?.tx ?? 0)}
           </span>
         </div>
@@ -363,14 +363,14 @@ export default function ResourceMonitor({ server, status, usage, liveOpts }) {
         </div>
         <Link
           to="/pricing"
-          className="group flex items-center gap-3 rounded-xl border border-hairline bg-white/[0.02] px-4 py-3 transition hover:border-hairline-hover hover:bg-white/[0.05]"
+          className="group console-lift flex items-center gap-3 rounded-xl border border-hairline bg-white/[0.02] px-4 py-3 hover:border-hairline-hover hover:bg-white/[0.05]"
         >
           <span className="flex size-9 items-center justify-center rounded-lg border border-hairline bg-veil text-amber-300">
             <Crown className="size-4" />
           </span>
           <span className="min-w-0 flex-1">
-            <span className="block text-[0.9rem] font-semibold">Upgrade your plan</span>
-            <span className="block truncate text-[0.76rem] text-ink-muted">
+            <span className="block text-body font-semibold">Upgrade your plan</span>
+            <span className="block truncate text-tiny text-ink-muted">
               Current plan: <span className="capitalize">{server.planId ?? 'free'}</span> — more CPU, RAM and storage
             </span>
           </span>

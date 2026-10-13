@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { hkdfSync, randomBytes } from 'crypto';
 import type { StringValue } from 'ms';
+import { RESOURCE_HARD_MAX, RESOURCE_MIN } from '../modules/servers/resource-policy';
 
 /**
  * Central, validated configuration.
@@ -236,6 +237,14 @@ export interface AppConfig {
   readonly TRUST_PROXY: boolean;
   readonly REGIONS: readonly string[];
   readonly MAX_SERVERS_PER_USER: number;
+  /**
+   * Absolute per-server ceilings. No plan may exceed them and an admin who
+   * overrides a plan quota still cannot go past these (defence in depth for
+   * a fat-fingered plan row).
+   */
+  readonly MAX_SERVER_CPU_MILLI: number;
+  readonly MAX_SERVER_RAM_MB: number;
+  readonly MAX_SERVER_STORAGE_GB: number;
   readonly MAX_ENV_VARS: number;
   readonly AUTO_START_ON_CREATE: boolean;
   readonly DOCKER_ENABLED: boolean;
@@ -313,6 +322,9 @@ export const config: AppConfig = Object.freeze({
   REGIONS: Object.freeze(REGIONS),
 
   MAX_SERVERS_PER_USER: num('MAX_SERVERS_PER_USER', 10, 1, 500),
+  MAX_SERVER_CPU_MILLI: num('MAX_SERVER_CPU_MILLI', RESOURCE_HARD_MAX.cpuMilli, RESOURCE_MIN.cpuMilli, 64000),
+  MAX_SERVER_RAM_MB: num('MAX_SERVER_RAM_MB', RESOURCE_HARD_MAX.ramMb, RESOURCE_MIN.ramMb, 524288),
+  MAX_SERVER_STORAGE_GB: num('MAX_SERVER_STORAGE_GB', RESOURCE_HARD_MAX.storageGb, RESOURCE_MIN.storageGb, 10240),
   MAX_ENV_VARS: num('MAX_ENV_VARS', 40, 1, 200),
   AUTO_START_ON_CREATE: bool('AUTO_START_ON_CREATE', true),
 

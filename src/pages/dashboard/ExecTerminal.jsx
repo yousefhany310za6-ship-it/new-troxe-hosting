@@ -325,7 +325,7 @@ const TONES = {
 function StatusPill({ tone, label }) {
   const t = TONES[tone] ?? TONES.idle;
   return (
-    <span className={cn('inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[0.72rem] font-semibold', t.ring, t.text)}>
+    <span className={cn('inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-tiny font-semibold', t.ring, t.text)}>
       <span className={cn('size-1.5 rounded-full', t.dot)} />
       {label}
     </span>
@@ -350,10 +350,10 @@ function ConsoleFrame({ fullscreen, pill, actions, banner, footer, children }) {
       )}
       style={{ backgroundColor: TERM_BG }}
     >
-      <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-hairline bg-card px-4 py-2.5">
+      <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-hairline bg-console px-4 py-2.5">
         <div className="flex items-center gap-2">
           <TerminalIcon className="size-4 text-ink-muted" />
-          <h2 className="text-[0.85rem] font-semibold">Console</h2>
+          <h2 className="text-small font-semibold">Console</h2>
         </div>
         {pill}
         <div className="ml-auto flex items-center gap-0.5">{actions}</div>
@@ -361,7 +361,7 @@ function ConsoleFrame({ fullscreen, pill, actions, banner, footer, children }) {
       {banner}
       <div className={cn('relative min-h-0', fullscreen ? 'flex-1' : 'h-[min(62vh,620px)] min-h-[320px]')}>{children}</div>
       {footer && (
-        <footer className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-hairline bg-card px-4 py-2 font-mono text-[0.7rem] text-ink-muted">
+        <footer className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-hairline bg-console px-4 py-2 font-mono text-micro text-ink-muted">
           {footer}
         </footer>
       )}
@@ -485,7 +485,7 @@ export function ConsoleOffline({ server, status, logs, onStart }) {
       }
     >
       {lines.length ? (
-        <div ref={ref} className="troxe-log absolute inset-0 overflow-y-auto px-4 py-3 text-[0.78rem] leading-[1.5] sm:text-[0.8rem]" style={{ fontFamily: FONT_STACK }}>
+        <div ref={ref} className="troxe-log absolute inset-0 overflow-y-auto px-4 py-3 text-small leading-[1.5]" style={{ fontFamily: FONT_STACK }}>
           {lines.map((line, i) => {
             const lvl = levelOf(line);
             return (
@@ -501,10 +501,10 @@ export function ConsoleOffline({ server, status, logs, onStart }) {
             <TerminalIcon className="size-5 text-ink-muted" />
           </div>
           <div>
-            <p className="text-[0.95rem] font-semibold">
+            <p className="text-lead font-semibold">
               {status === 'offline' ? 'Server is offline' : 'Waiting for the server…'}
             </p>
-            <p className="mt-1 text-[0.8rem] text-ink-muted">
+            <p className="mt-1 text-small text-ink-muted">
               {status === 'offline' ? 'Start it to stream live console output.' : 'Console output will appear here once it is ready.'}
             </p>
           </div>
@@ -512,7 +512,7 @@ export function ConsoleOffline({ server, status, logs, onStart }) {
             <button
               type="button"
               onClick={onStart}
-              className="inline-flex items-center gap-1.5 rounded-full bg-white px-4 py-2 text-[0.8rem] font-bold text-black transition hover:bg-gray-200"
+              className="btn btn-primary"
             >
               <Play className="size-3.5" /> Start server
             </button>
@@ -770,12 +770,12 @@ export default function ExecTerminal({ server, apiBase = '/servers', grant }) {
       }
       banner={
         phase === 'dead' ? (
-          <div className="flex flex-wrap items-center gap-3 border-b border-red-500/20 bg-red-500/[0.07] px-4 py-2 text-[0.78rem] text-red-300">
+          <div className="flex flex-wrap items-center gap-3 border-b border-red-500/20 bg-red-500/[0.07] px-4 py-2 text-small text-red-300">
             <span className="min-w-0 flex-1 basis-48">{deadReason || 'The console connection closed.'}</span>
             <button
               type="button"
               onClick={retryNow}
-              className="inline-flex items-center gap-1.5 rounded-full border border-red-400/30 px-3 py-1 text-[0.74rem] font-bold text-red-200 transition hover:bg-red-500/15"
+              className="btn btn-sm border-red-400/30! text-red-200 hover:bg-red-500/15"
             >
               <RefreshCw className="size-3" /> Retry
             </button>
@@ -791,11 +791,11 @@ export default function ExecTerminal({ server, apiBase = '/servers', grant }) {
     >
       <div
         ref={wrapRef}
-        className="troxe-log absolute inset-0 overflow-y-auto px-4 py-3 text-[0.78rem] leading-[1.5] sm:text-[0.8rem]"
+        className="troxe-log absolute inset-0 overflow-y-auto px-4 py-3 text-small leading-[1.5]"
         style={{ fontFamily: FONT_STACK }}
       />
       {lineCount === 0 && phase === 'live' && (
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-6 text-center text-[0.8rem] text-ink-muted">
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-6 text-center text-small text-ink-muted">
           No output yet — new lines will appear here.
         </div>
       )}
@@ -803,7 +803,7 @@ export default function ExecTerminal({ server, apiBase = '/servers', grant }) {
         <button
           type="button"
           onClick={jump}
-          className="absolute right-5 bottom-4 inline-flex items-center gap-1.5 rounded-full border border-hairline-hover bg-card/90 px-3 py-1.5 text-[0.74rem] font-semibold text-foreground shadow-lg backdrop-blur transition hover:bg-white/10"
+          className="absolute right-5 bottom-4 inline-flex items-center gap-1.5 rounded-full border border-hairline-hover bg-console/90 px-3 py-1.5 text-tiny font-semibold text-foreground shadow-lg backdrop-blur transition hover:bg-white/10"
         >
           <ArrowDown className="size-3.5" /> Latest
         </button>

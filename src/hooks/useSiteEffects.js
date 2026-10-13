@@ -78,12 +78,17 @@ export function useReveal() {
 
 /**
  * Same easing curve as the original: 2000ms, ease-out cubic,
- * 1 decimal when the target has one, plain integer otherwise.
+ * 1 decimal when the target has one, grouped thousands otherwise.
+ *
+ * Integers are grouped because "15000" is genuinely hard to scan at a glance,
+ * while "15,000" is read in one pass — and this stat sits right under the
+ * primary CTA, where it is read in about a second.
  */
 export function runCounter(target, suffix, setDisplay) {
     const duration = 2000;
     const startTime = performance.now();
     const isDecimal = target % 1 !== 0;
+    const grouped = new Intl.NumberFormat('en-US');
     let frame;
 
     const update = (currentTime) => {
@@ -92,12 +97,16 @@ export function runCounter(target, suffix, setDisplay) {
         const eased = 1 - Math.pow(1 - progress, 3);
         const current = eased * target;
 
-        setDisplay(isDecimal ? `${current.toFixed(1)}${suffix}` : `${Math.floor(current)}${suffix}`);
+        setDisplay(
+            isDecimal
+                ? `${current.toFixed(1)}${suffix}`
+                : `${grouped.format(Math.floor(current))}${suffix}`
+        );
 
         if (progress < 1) {
             frame = requestAnimationFrame(update);
         } else {
-            setDisplay(`${target}${suffix}`);
+            setDisplay(`${isDecimal ? target : grouped.format(target)}${suffix}`);
         }
     };
 

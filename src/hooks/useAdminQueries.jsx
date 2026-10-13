@@ -9,6 +9,8 @@ export const adminKeys = {
   server: (id) => ['admin', 'servers', id],
   plans: () => ['admin', 'plans'],
   audit: (params) => ['admin', 'audit', params],
+  userCreateLimits: (id) => ['admin', 'users', id, 'create-limits'],
+  serverResourceLimits: (id) => ['admin', 'servers', id, 'resource-limits'],
 };
 
 const qs = (params = {}) => {
@@ -124,7 +126,43 @@ export function useAdminCreateServer() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (data) => apiPost('/admin/servers', data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'servers'] }),
+    onSuccess: (_d, v) => {
+      qc.invalidateQueries({ queryKey: ['admin', 'servers'] });
+      if (v?.ownerId) qc.invalidateQueries({ queryKey: adminKeys.userCreateLimits(v.ownerId) });
+    },
+  });
+}
+
+/** Ceilings that apply to a USER — powers the admin create form. */
+export function useAdminUserCreateLimits(ownerId) {
+  return useQuery({
+    queryKey: adminKeys.userCreateLimits(ownerId),
+    queryFn: () => apiGet(`/admin/users/${ownerId}/create-limits`),
+    enabled: !!ownerId,
+    staleTime: 15_000,
+  });
+}
+
+/** Ceilings for resizing one server (its own allocation excluded). */
+export function useAdminServerResourceLimits(id) {
+  return useQuery({
+    queryKey: adminKeys.serverResourceLimits(id),
+    queryFn: () => apiGet(`/admin/servers/${id}/resource-limits`),
+    enabled: !!id,
+    staleTime: 15_000,
+  });
+}
+
+/** `override: true` lets an admin exceed the owner's plan (audited). */
+export function useAdminRescaleServer(id) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data) => apiPatch(`/admin/servers/${id}/resources`, data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: adminKeys.server(id) });
+      qc.invalidateQueries({ queryKey: ['admin', 'servers'] });
+      qc.invalidateQueries({ queryKey: adminKeys.serverResourceLimits(id) });
+    },
   });
 }
 

@@ -26,6 +26,7 @@ import { CreateNodeDto, UpdateNodeDto } from '../nodes/dto';
 import {
   AdminAuditQuery,
   AdminCreateServerDto,
+  AdminRescaleServerDto,
   AdminServerListQuery,
   AdminSetPasswordDto,
   AdminSuspendDto,
@@ -139,8 +140,21 @@ export class AdminController {
   @Post('servers')
   @HttpCode(201)
   createServer(@Body() dto: AdminCreateServerDto, @CurrentUser() u: ReqUser) {
-    const { ownerId, ...serverDto } = dto;
-    return this.admin.adminCreateServer(ownerId, serverDto, u.sub, u.email);
+    const { ownerId, nodeId, resourcesOverride, ...serverDto } = dto;
+    return this.admin.adminCreateServer(ownerId, serverDto, u.sub, u.email, { nodeId, resourcesOverride });
+  }
+
+  /** Ceilings that apply to a USER (their plan, their pool) — powers the
+   *  admin create form; the owner is never silently the admin. */
+  @Get('users/:id/create-limits')
+  userCreateLimits(@Param('id', UUID) ownerId: string) {
+    return this.admin.userCreateLimits(ownerId);
+  }
+
+  /** Same, minus one server's own allocation (resizing path). */
+  @Get('servers/:id/resource-limits')
+  serverResourceLimits(@Param('id', UUID) id: string) {
+    return this.admin.serverResourceLimits(id);
   }
 
   @Get('servers/:id')
@@ -156,6 +170,22 @@ export class AdminController {
     @CurrentUser() u: ReqUser,
   ) {
     return this.admin.adminUpdateServer(id, dto, u.sub, u.email);
+  }
+
+  /**
+   * Resize a server on behalf of its owner. `override: true` in the body lets
+   * the admin exceed the owner's plan (still capped by the platform maxima);
+   * it is written to the audit log either way.
+   */
+  @Patch('servers/:id/resources')
+  @HttpCode(200)
+  rescaleServer(
+    @Param('id', UUID) id: string,
+    @Body() dto: AdminRescaleServerDto,
+    @CurrentUser() u: ReqUser,
+    @Req() req: Request,
+  ) {
+    return this.admin.adminRescaleServer(id, dto, u.sub, u.email, ctxOf(req).ip);
   }
 
   @Post('servers/:id/access')

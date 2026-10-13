@@ -3,13 +3,11 @@ import { Save, Server as ServerIcon } from 'lucide-react';
 
 import { apiPatch } from '@/lib/api.js';
 import RuntimeSwitcher from '@/components/dashboard/RuntimeSwitcher.jsx';
+import ResourceEditor from '@/components/dashboard/ResourceEditor.jsx';
 import { cn } from '@/lib/utils';
 
-const inputClass =
-    'w-full rounded-xl border border-hairline bg-white/10 px-4 py-2.5 text-[0.88rem] text-foreground placeholder-ink-muted transition focus:border-primary focus:ring-2 focus:ring-ring/40 focus:outline-none';
-
-const labelClass = 'mb-1.5 block text-[0.85rem] font-semibold text-foreground';
-const hintClass = 'mt-1.5 text-[0.75rem] text-ink-muted';
+const labelClass = 'mb-1.5 block text-small font-semibold text-foreground';
+const hintClass = 'mt-1.5 block text-tiny text-ink-muted';
 
 /**
  * General server settings: identity + entry point. Startup command and
@@ -60,16 +58,16 @@ export default function ServerSettings({ server, onSaved, onTab }) {
     if (!server) return null;
 
     return (
-        <form onSubmit={save} className="flex flex-col gap-5 rounded-2xl border border-hairline bg-card p-5 sm:p-6">
+        <form onSubmit={save} className="console-card flex flex-col gap-5 p-5 sm:p-6">
             <header className="flex items-center gap-2.5">
                 <ServerIcon className="size-4 text-ink-muted" aria-hidden="true" />
-                <h2 className="text-[0.95rem] font-semibold">Server settings</h2>
+                <h2 className="text-lead font-semibold">Server settings</h2>
             </header>
 
             <div className="grid gap-5 sm:grid-cols-2">
                 <label className="block">
                     <span className={labelClass}>Server name</span>
-                    <input value={name} onChange={(e) => setName(e.target.value)} className={inputClass} maxLength={32} />
+                    <input value={name} onChange={(e) => setName(e.target.value)} className="input-field" maxLength={32} />
                     <span className={hintClass}>3–32 characters: lowercase letters, digits and dashes.</span>
                 </label>
 
@@ -78,7 +76,7 @@ export default function ServerSettings({ server, onSaved, onTab }) {
                     <input
                         value={mainFile}
                         onChange={(e) => setMainFile(e.target.value)}
-                        className={cn(inputClass, 'font-mono')}
+                        className="input-field font-mono"
                         placeholder="index.js"
                         maxLength={160}
                         dir="ltr"
@@ -91,7 +89,7 @@ export default function ServerSettings({ server, onSaved, onTab }) {
                 </label>
             </div>
 
-            <label className="flex cursor-pointer items-center gap-2.5 text-[0.88rem] font-semibold">
+            <label className="flex cursor-pointer items-center gap-2.5 text-small font-semibold">
                 <input
                     type="checkbox"
                     checked={autoRestart}
@@ -103,11 +101,13 @@ export default function ServerSettings({ server, onSaved, onTab }) {
 
             <RuntimeSwitcher server={server} onChanged={onSaved} />
 
+            <ResourceEditor server={server} onSaved={onSaved} />
+
             <div className="flex flex-wrap items-center gap-3 border-t border-hairline pt-4">
                 <button
                     type="submit"
                     disabled={busy || !dirty}
-                    className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-[0.84rem] font-bold text-black transition hover:bg-white/90 disabled:opacity-40"
+                    className="btn btn-primary"
                 >
                     <Save className="size-4" aria-hidden="true" />
                     {busy ? 'Saving…' : 'Save settings'}
@@ -115,12 +115,12 @@ export default function ServerSettings({ server, onSaved, onTab }) {
                 <button
                     type="button"
                     onClick={() => onTab?.('startup')}
-                    className="text-[0.82rem] font-bold text-ink-secondary underline decoration-dotted transition hover:text-foreground"
+                    className="text-small font-bold text-ink-secondary underline decoration-dotted transition hover:text-foreground"
                 >
                     Go to Startup settings
                 </button>
                 {msg && (
-                    <span className={cn('text-[0.8rem]', msg.ok ? 'text-emerald-300' : 'text-red-300')} role="status">
+                    <span className={cn('text-tiny', msg.ok ? 'text-emerald-300' : 'text-red-300')} role="status">
                         {msg.text}
                     </span>
                 )}

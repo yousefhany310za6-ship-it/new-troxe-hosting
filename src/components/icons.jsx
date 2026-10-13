@@ -1,5 +1,6 @@
 ﻿// SVG icon components for the site (attributes converted to JSX camelCase).
 // Markup is byte-identical to the original site (attributes converted to JSX camelCase).
+import { useId } from 'react';
 
 export const IconArrowRight = (props) => (
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M5 12h14M12 5l7 7-7 7"/></svg>
@@ -175,20 +176,47 @@ export const IconSupport = (props) => (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>
 );
 
+/* Was a Windows `.ico` loaded through an <img>. Kept as a grass block, but redrawn
+   as vector: the `.ico`'s internal frames are 16/32px, so scaling one into a 36px
+   tile produced a blurry pixel blob, and `solo: 'size-9 [&>svg]:size-full'` only
+   matches SVG, so the <img> was never sized by the variant system at all. */
 export const IconMinecraft = (props) => (
-    <img
-        src="./minecraft-png-icon-16707-Windows.ico"
-        alt="Minecraft"
-        width={32}
-        height={32}
-        {...props}
-        className={`size-full object-contain ${props.className ?? ''}`}
-    />
+    <svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" {...props}>
+        <path fill="#8B6A43" d="M16 2.5 29 9.8 16 17.1 3 9.8Z" />
+        <path fill="#6B4F2F" d="M3 9.8 16 17.1v12.4L3 22.2Z" />
+        <path fill="#7A5C39" d="M29 9.8v12.4L16 29.5V17.1Z" />
+        {/* Grass lip: turf overhangs the dirt by a few pixels on each side. */}
+        <path fill="#5EA427" d="M16 2.5 29 9.8 16 17.1 3 9.8Z" />
+        <path fill="#4E8A1F" d="M3 9.8 16 17.1v3.4L3 13.2Z" />
+        <path fill="#5EA427" d="M29 9.8 16 17.1v3.4l13-7.3Z" />
+    </svg>
 );
 
-export const IconFivem = (props) => (
-    <svg viewBox="0 0 100 100" {...props}><mask id="fivemCut"><rect width="100" height="100" fill="white" /><g stroke="black" strokeWidth="5"><line x1="16" y1="74" x2="68" y2="6" /><line x1="24" y1="84" x2="76" y2="16" /><line x1="34" y1="90" x2="84" y2="26" /><line x1="48" y1="46" x2="84" y2="22" /></g></mask><g mask="url(#fivemCut)"><path fill="#FF6B00" d="M41 2 56 2 38 100 10 100Z" /><path fill="#FF6B00" d="M79 27 52 42 62 100 95 100Z" /></g></svg>
-);
+/* The mask id is generated, not hardcoded. The services marquee renders a
+   second copy of every card to make its loop seamless, so a fixed
+   `id="fivemCut"` ships two elements with the same id and every `url(#...)`
+   in the document silently binds to whichever one the parser saw first. */
+export const IconFivem = (props) => {
+    const maskId = useId();
+
+    return (
+        <svg viewBox="0 0 100 100" {...props}>
+            <mask id={maskId}>
+                <rect width="100" height="100" fill="#fff" />
+                <g stroke="#000" strokeWidth="5">
+                    <line x1="16" y1="74" x2="68" y2="6" />
+                    <line x1="24" y1="84" x2="76" y2="16" />
+                    <line x1="34" y1="90" x2="84" y2="26" />
+                    <line x1="48" y1="46" x2="84" y2="22" />
+                </g>
+            </mask>
+            <g mask={`url(#${maskId})`}>
+                <path fill="#FF6B00" d="M41 2 56 2 38 100 10 100Z" />
+                <path fill="#FF6B00" d="M79 27 52 42 62 100 95 100Z" />
+            </g>
+        </svg>
+    );
+};
 
 export const IconRustGame = (props) => (
     <svg viewBox="0 0 100 100" {...props}><rect x="2" y="2" width="96" height="96" rx="18" fill="#CE422B" /><g fill="#17181C"><path d="M38 8 68 8 60 40 46 40Z" /><path d="M46 44H62V54H46Z" /><path d="M53 56 60 63 53 70 46 63Z" /><path d="M8 45 36 49 36 73 8 80Z" /><path d="M39 51H49V71H39Z" /><path d="M56 68 64 59 74 69 66 77Z" /><path d="M68 72 80 62 97 75 72 98Z" /></g></svg>
@@ -212,5 +240,14 @@ export const IconCs2 = (props) => (
 
 export const IconPalworld = (props) => (
     <svg viewBox="0 0 100 100" {...props}><circle cx="50" cy="50" r="48" fill="#35247A" /><ellipse cx="52" cy="45" rx="36" ry="38" fill="#7ACFE0" /><ellipse cx="30" cy="52" rx="11" ry="28" fill="#4E6FB0" opacity="0.85" /><ellipse cx="65" cy="27" rx="12" ry="8" fill="#D6F2F8" opacity="0.9" /><path d="M40 55Q45 72 42 92H66Q63 72 58 55Q49 61 40 55Z" fill="#FFF6DC" /><ellipse cx="58" cy="58" rx="11" ry="7.5" fill="#4A3A2A" /><ellipse cx="59" cy="59" rx="8" ry="5" fill="#FF8A7A" /><path d="M54 58q5 4 11 0l-1 4q-4 3-9 0Z" fill="#FFB27A" /><circle cx="30" cy="48" r="3.5" fill="#111" /></svg>
+);
+
+/* Diagonal expand / shrink arrows — used by the demo stage's full-size toggle. */
+export const IconExpand = (props) => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" {...props}><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+);
+
+export const IconShrink = (props) => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" {...props}><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="14" x2="21" y2="7"/><line x1="10" y1="10" x2="3" y2="3"/></svg>
 );
 

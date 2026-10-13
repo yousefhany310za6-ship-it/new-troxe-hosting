@@ -158,30 +158,27 @@ function Sparkline({ values, color, max }) {
   );
 }
 
-function Bar({ pct, color }) {
+function Bar({ pct, color, live = false }) {
   const p = Math.max(0, Math.min(100, Number(pct) || 0));
   return (
-    <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/[0.07]">
-      <div
-        className="h-full rounded-full"
-        style={{ width: `${p}%`, background: `linear-gradient(90deg, ${color}99, ${color})`, transition: 'width .6s ease' }}
-      />
+    <div className={cn('meter', live && 'meter-live')}>
+      <div className="meter-fill" style={{ width: `${p}%`, background: `linear-gradient(90deg, ${color}99, ${color})` }} />
     </div>
   );
 }
 
 function Tile({ icon: Icon, label, value, sub, color, children }) {
   return (
-    <div className="flex flex-col gap-3 rounded-2xl border border-hairline bg-card p-4 sm:p-5">
+    <div className="console-card stat-tile flex flex-col gap-3 p-4 sm:p-5" style={{ '--tile-accent': color }}>
       <div className="flex items-center gap-2.5">
         <span className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-hairline bg-veil" style={{ color }}>
           <Icon className="size-4" />
         </span>
-        <span className="text-[0.8rem] font-semibold text-ink-secondary">{label}</span>
+        <span className="text-small font-semibold text-ink-secondary">{label}</span>
       </div>
       <div>
-        <p className="truncate text-[1.45rem] leading-none font-bold tabular-nums">{value}</p>
-        <p className="mt-1.5 truncate text-[0.74rem] text-ink-muted">{sub}</p>
+        <p className="truncate text-display leading-none font-bold tabular-nums">{value}</p>
+        <p className="mt-1.5 truncate text-tiny text-ink-muted">{sub}</p>
       </div>
       {children}
     </div>
@@ -190,10 +187,10 @@ function Tile({ icon: Icon, label, value, sub, color, children }) {
 
 function Panel({ title, icon: Icon, right, children, className }) {
   return (
-    <section className={cn('flex flex-col rounded-2xl border border-hairline bg-card', className)}>
+    <section className={cn('console-card flex flex-col', className)}>
       <header className="flex items-center gap-2.5 border-b border-hairline px-5 py-3.5">
         {Icon && <Icon className="size-4 text-ink-muted" />}
-        <h3 className="flex-1 text-[0.92rem] font-semibold">{title}</h3>
+        <h3 className="flex-1 text-md font-semibold">{title}</h3>
         {right}
       </header>
       <div className="flex-1 p-5">{children}</div>
@@ -205,7 +202,7 @@ function Pill({ on, children }) {
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[0.72rem] font-semibold',
+        'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-tiny font-semibold',
         on ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-300' : 'border-hairline bg-veil text-ink-secondary',
       )}
     >
@@ -247,16 +244,16 @@ function CopyButton({ text, label }) {
 function Row({ label, children }) {
   return (
     <div className="flex items-center justify-between gap-4 py-2.5">
-      <span className="shrink-0 text-[0.82rem] text-ink-muted">{label}</span>
-      <div className="flex min-w-0 items-center gap-1.5 text-[0.85rem] font-semibold">{children}</div>
+      <span className="shrink-0 text-small text-ink-muted">{label}</span>
+      <div className="flex min-w-0 items-center gap-1.5 text-small font-semibold">{children}</div>
     </div>
   );
 }
 
-function LimitRow({ label, used, limit, pct, color, icon: Icon }) {
+function LimitRow({ label, used, limit, pct, color, icon: Icon, live = false }) {
   return (
     <div>
-      <div className="mb-1.5 flex items-center justify-between gap-3 text-[0.82rem]">
+      <div className="mb-1.5 flex items-center justify-between gap-3 text-small">
         <span className="inline-flex items-center gap-2 text-ink-secondary">
           <Icon className="size-3.5" style={{ color }} /> {label}
         </span>
@@ -264,7 +261,7 @@ function LimitRow({ label, used, limit, pct, color, icon: Icon }) {
           {used} <span className="font-normal text-ink-muted">/ {limit}</span>
         </span>
       </div>
-      <Bar pct={pct} color={color} />
+      <Bar pct={pct} color={color} live={live} />
     </div>
   );
 }
@@ -347,18 +344,18 @@ export default function ServerOverview({ server, status, stats, usage, backups, 
     <div className="flex flex-col gap-5">
       {/* ---- hero ---- */}
       <section
-        className="relative overflow-hidden rounded-2xl border border-hairline bg-card p-5 sm:p-6"
+        className="console-card relative overflow-hidden p-5 sm:p-6"
         style={{ backgroundImage: `radial-gradient(700px circle at 0% 0%, rgba(${st.glow},0.14), transparent 60%)` }}
       >
         <div className="relative flex flex-wrap items-center gap-x-6 gap-y-4">
           <div className="flex min-w-0 items-center gap-4">
             <span className={cn('relative flex size-14 shrink-0 items-center justify-center rounded-2xl border', st.ring, st.text)}>
               <Power className="size-6" />
-              {online && <span className="absolute -top-1 -right-1 size-3 animate-beat rounded-full border-2 border-black bg-emerald-500" />}
+              {online && <span className="absolute -top-1 -right-1 size-3 animate-beat rounded-full border-2 border-console bg-emerald-500" />}
             </span>
             <div className="min-w-0">
-              <p className={cn('text-[1.5rem] leading-none font-extrabold', st.text)}>{st.label}</p>
-              <p className="mt-1.5 text-[0.85rem] text-ink-secondary tabular-nums">{heroSub}</p>
+              <p className={cn('text-display-lg leading-none font-extrabold', st.text)}>{st.label}</p>
+              <p className="mt-1.5 text-small text-ink-secondary tabular-nums">{heroSub}</p>
             </div>
           </div>
           <div className="ml-auto flex flex-wrap items-center gap-2">
@@ -370,7 +367,7 @@ export default function ServerOverview({ server, status, stats, usage, backups, 
             ]
               .filter(Boolean)
               .map((c) => (
-                <span key={c} className="rounded-full border border-hairline bg-black/30 px-3 py-1 text-[0.76rem] font-semibold text-ink-secondary capitalize backdrop-blur">
+                <span key={c} className="chip capitalize">
                   {c}
                 </span>
               ))}
@@ -382,16 +379,16 @@ export default function ServerOverview({ server, status, stats, usage, backups, 
       <ServerPorts server={server} adminMode={adminMode} />
 
       {/* ---- support contact id ---- */}
-      <section className="flex flex-wrap items-center gap-x-6 gap-y-3 rounded-2xl border border-hairline bg-card p-5">
+      <section className="console-card flex flex-wrap items-center gap-x-6 gap-y-3 p-5">
         <div className="min-w-0">
-          <p className="flex items-center gap-2 text-[0.82rem] font-semibold text-ink-secondary">
+          <p className="flex items-center gap-2 text-small font-semibold text-ink-secondary">
             <LifeBuoy className="size-4 text-ink-muted" aria-hidden="true" />
             Server contact ID
           </p>
-          <p className="mt-1.5 font-mono text-[1.6rem] leading-none font-extrabold tracking-[0.22em] text-foreground tabular-nums">
+          <p className="mt-1.5 font-mono text-display-lg leading-none font-extrabold tracking-[0.22em] text-foreground tabular-nums">
             {server.contactCode ?? '—'}
           </p>
-          <p className="mt-2 max-w-md text-[0.78rem] text-ink-secondary">
+          <p className="mt-2 max-w-md text-tiny text-ink-secondary">
             Quote this number when you contact support. It stays the same for the life of the server and lets the
             team open the right server without sharing internals.
           </p>
@@ -400,7 +397,7 @@ export default function ServerOverview({ server, status, stats, usage, backups, 
           <CopyButton text={server.contactCode ?? ''} label="Copy" />
           <Link
             to="/dashboard/support"
-            className="inline-flex items-center gap-1.5 rounded-full border border-hairline px-3.5 py-1.5 text-[0.78rem] font-bold text-ink-secondary transition hover:border-hairline-hover hover:text-foreground"
+            className="btn btn-secondary btn-sm"
           >
             <LifeBuoy className="size-3.5" aria-hidden="true" />
             Open a ticket
@@ -415,13 +412,13 @@ export default function ServerOverview({ server, status, stats, usage, backups, 
             <AlertTriangle className="size-5" />
           </span>
           <div className="min-w-0 flex-1">
-            <p className="text-[0.9rem] font-semibold text-red-200">Last error</p>
-            <p className="mt-1 font-mono text-[0.82rem] break-words text-red-300">{server.lastError}</p>
+            <p className="text-body font-semibold text-red-200">Last error</p>
+            <p className="mt-1 font-mono text-small break-words text-red-300">{server.lastError}</p>
           </div>
           <button
             type="button"
             onClick={() => onTab('console')}
-            className="inline-flex items-center gap-1.5 rounded-full border border-red-400/30 px-3.5 py-1.5 text-[0.78rem] font-bold text-red-200 transition hover:bg-red-500/15"
+            className="btn btn-sm border-red-400/30! text-red-200 hover:bg-red-500/15"
           >
             <Terminal className="size-3.5" /> View console
           </button>
@@ -431,10 +428,10 @@ export default function ServerOverview({ server, status, stats, usage, backups, 
       {/* ---- live metric tiles ---- */}
       <div>
         <div className="mb-3 flex items-center justify-between gap-3">
-          <h2 className="text-[0.95rem] font-semibold">Live metrics</h2>
+          <h2 className="text-lead font-semibold">Live metrics</h2>
           <span
             className={cn(
-              'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[0.72rem] font-semibold',
+              'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-tiny font-semibold',
               mode === 'live' ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-300' : mode === 'poll' ? 'border-amber-500/25 bg-amber-500/10 text-amber-300' : 'border-hairline bg-veil text-ink-secondary',
             )}
           >
@@ -447,7 +444,7 @@ export default function ServerOverview({ server, status, stats, usage, backups, 
             <Sparkline values={online ? cpuSeries : []} color={COLORS.cpu} max={100} />
           </Tile>
           <Tile icon={MemoryStick} label="Memory" color={COLORS.mem} value={online ? fmtBytes(memUsed) : dash} sub={`${online ? fmtPct(memPct) : '0%'} of ${fmtBytes(memLimit)}`}>
-            <Bar pct={online ? memPct : 0} color={COLORS.mem} />
+            <Bar pct={online ? memPct : 0} color={COLORS.mem} live={online} />
           </Tile>
           <Tile icon={HardDrive} label="Disk" color={COLORS.disk} value={fmtBytes(diskUsed)} sub={`${fmtPct(diskPct)} of ${fmtBytes(diskLimit)}`}>
             <Bar pct={diskPct} color={COLORS.disk} />
@@ -479,7 +476,7 @@ export default function ServerOverview({ server, status, stats, usage, backups, 
           title="Recent activity"
           icon={Activity}
           className="lg:col-span-2"
-          right={events?.length ? <span className="text-[0.72rem] text-ink-muted">{events.length} latest</span> : null}
+          right={events?.length ? <span className="text-tiny text-ink-muted">{events.length} latest</span> : null}
         >
           {events === null ? (
             <div className="flex flex-col gap-3">
@@ -498,8 +495,8 @@ export default function ServerOverview({ server, status, stats, usage, backups, 
               <span className="flex size-11 items-center justify-center rounded-full border border-hairline bg-veil">
                 <Activity className="size-5 text-ink-muted" />
               </span>
-              <p className="text-[0.9rem] font-semibold">No activity yet</p>
-              <p className="text-[0.8rem] text-ink-muted">Starts, restarts and setting changes will show up here.</p>
+              <p className="text-lead font-semibold">No activity yet</p>
+              <p className="text-small text-ink-muted">Starts, restarts and setting changes will show up here.</p>
             </div>
           ) : (
             <ol className="relative flex flex-col">
@@ -514,12 +511,12 @@ export default function ServerOverview({ server, status, stats, usage, backups, 
                       <meta.Icon className="size-4" />
                     </span>
                     <div className="min-w-0 flex-1 pt-0.5">
-                      <p className="text-[0.88rem] font-semibold">{meta.title}</p>
+                      <p className="text-small font-semibold">{meta.title}</p>
                       {detail && (
-                        <p className={cn('mt-0.5 text-[0.76rem] break-words', isErr ? 'font-mono text-red-300/90' : 'text-ink-muted capitalize')}>{detail}</p>
+                        <p className={cn('mt-0.5 text-tiny break-words', isErr ? 'font-mono text-red-300/90' : 'text-ink-muted capitalize')}>{detail}</p>
                       )}
                     </div>
-                    <time dateTime={e.createdAt} title={fmtDate(e.createdAt)} className="shrink-0 pt-1 text-[0.74rem] text-ink-muted tabular-nums">
+                    <time dateTime={e.createdAt} title={fmtDate(e.createdAt)} className="shrink-0 pt-1 text-tiny text-ink-muted tabular-nums">
                       {timeAgo(e.createdAt)}
                     </time>
                   </li>
@@ -542,10 +539,10 @@ export default function ServerOverview({ server, status, stats, usage, backups, 
                   key={id}
                   type="button"
                   onClick={() => onTab(id)}
-                  className="group flex items-center gap-2.5 rounded-xl border border-hairline bg-white/[0.02] px-3 py-3 text-left transition hover:border-hairline-hover hover:bg-white/[0.06]"
+                  className="group console-lift flex items-center gap-2.5 rounded-xl border border-hairline bg-white/[0.02] px-3 py-3 text-left hover:border-hairline-hover hover:bg-white/[0.06]"
                 >
                   <Icon className="size-4 shrink-0" style={{ color }} />
-                  <span className="flex-1 text-[0.85rem] font-semibold">{label}</span>
+                  <span className="flex-1 text-small font-semibold">{label}</span>
                   <ChevronRight className="size-3.5 text-ink-muted transition group-hover:translate-x-0.5" />
                 </button>
               ))}
@@ -556,7 +553,7 @@ export default function ServerOverview({ server, status, stats, usage, backups, 
             title="Backups"
             icon={Database}
             right={
-              <button type="button" onClick={() => onTab('backups')} className="text-[0.74rem] font-semibold text-ink-secondary transition hover:text-foreground">
+              <button type="button" onClick={() => onTab('backups')} className="text-tiny font-semibold text-ink-secondary transition hover:text-foreground">
                 View all
               </button>
             }
@@ -564,12 +561,12 @@ export default function ServerOverview({ server, status, stats, usage, backups, 
             <div className="flex flex-col gap-3">
               <div className="flex items-end justify-between gap-3">
                 <div>
-                  <p className="text-[1.6rem] leading-none font-bold tabular-nums">{backupCount}</p>
-                  <p className="mt-1 text-[0.76rem] text-ink-muted">{backupCount === 1 ? 'snapshot' : 'snapshots'}</p>
+                  <p className="text-display-lg leading-none font-bold tabular-nums">{backupCount}</p>
+                  <p className="mt-1 text-tiny text-ink-muted">{backupCount === 1 ? 'snapshot' : 'snapshots'}</p>
                 </div>
                 <Pill on={!!server.autoBackup}>{server.autoBackup ? 'Auto-backup on' : 'Auto-backup off'}</Pill>
               </div>
-              <p className="rounded-lg border border-hairline bg-white/[0.02] px-3 py-2 text-[0.78rem] text-ink-secondary">
+              <p className="rounded-lg border border-hairline bg-white/[0.02] px-3 py-2 text-tiny text-ink-secondary">
                 {latestBackup
                   ? `Latest: ${timeAgo(latestBackup.createdAt)} · ${fmtBytes(latestBackup.sizeBytes)} · ${latestBackup.type === 'auto' ? 'automatic' : 'manual'}`
                   : 'No backups yet'}
@@ -577,14 +574,14 @@ export default function ServerOverview({ server, status, stats, usage, backups, 
               {quota != null && (quota.slots ?? 0) <= 0 ? (
                 <Link
                   to="/pricing"
-                  className="group flex items-center gap-3 rounded-xl border border-amber-500/25 bg-amber-500/[0.06] px-4 py-3 transition hover:border-amber-500/50"
+                  className="group console-lift flex items-center gap-3 rounded-xl border border-amber-500/25 bg-amber-500/[0.06] px-4 py-3 hover:border-amber-500/50!"
                 >
                   <span className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-300">
                     <Lock className="size-4" />
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block text-[0.85rem] font-semibold">Backups locked</span>
-                    <span className="block truncate text-[0.74rem] text-ink-muted">
+                    <span className="block text-small font-semibold">Backups locked</span>
+                    <span className="block truncate text-tiny text-ink-muted">
                       <span className="capitalize">{quota.planName ?? 'Current'} plan</span> has no backup slots — upgrade to unlock
                     </span>
                   </span>
@@ -594,7 +591,7 @@ export default function ServerOverview({ server, status, stats, usage, backups, 
                 <button
                   type="button"
                   onClick={onCreateBackup}
-                  className="inline-flex items-center justify-center gap-1.5 rounded-full bg-white px-4 py-2 text-[0.8rem] font-bold text-black transition hover:bg-gray-200"
+                  className="btn btn-primary"
                 >
                   <Plus className="size-3.5" /> Create backup now
                 </button>
@@ -605,24 +602,24 @@ export default function ServerOverview({ server, status, stats, usage, backups, 
       </div>
 
       {/* ---- limits + configuration ---- */}
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+      <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-2">
         <Panel title="Resource limits" icon={Cpu}>
           <div className="flex flex-col gap-5">
-            <LimitRow icon={Cpu} color={COLORS.cpu} label="CPU" used={online ? fmtPct(cpuNow) : '0%'} limit={`${vcpu} vCPU`} pct={online ? cpuNow : 0} />
-            <LimitRow icon={MemoryStick} color={COLORS.mem} label="Memory" used={online ? fmtBytes(memUsed) : '0 B'} limit={fmtBytes(memLimit)} pct={online ? memPct : 0} />
+            <LimitRow icon={Cpu} color={COLORS.cpu} label="CPU" live={online} used={online ? fmtPct(cpuNow) : '0%'} limit={`${vcpu} vCPU`} pct={online ? cpuNow : 0} />
+            <LimitRow icon={MemoryStick} color={COLORS.mem} label="Memory" live={online} used={online ? fmtBytes(memUsed) : '0 B'} limit={fmtBytes(memLimit)} pct={online ? memPct : 0} />
             <LimitRow icon={HardDrive} color={COLORS.disk} label="Storage" used={fmtBytes(diskUsed)} limit={fmtBytes(diskLimit)} pct={diskPct} />
           </div>
           {!adminMode && (
           <Link
             to="/pricing"
-            className="group mt-5 flex items-center gap-3 rounded-xl border border-hairline bg-white/[0.02] px-4 py-3 transition hover:border-hairline-hover hover:bg-white/[0.05]"
+            className="group console-lift mt-5 flex items-center gap-3 rounded-xl border border-hairline bg-white/[0.02] px-4 py-3 hover:border-hairline-hover hover:bg-white/[0.05]"
           >
             <span className="flex size-9 items-center justify-center rounded-lg border border-hairline bg-veil text-amber-300">
               <Crown className="size-4" />
             </span>
             <span className="min-w-0 flex-1">
-              <span className="block text-[0.88rem] font-semibold">Need more resources?</span>
-              <span className="block truncate text-[0.76rem] text-ink-muted">
+              <span className="block text-small font-semibold">Need more resources?</span>
+              <span className="block truncate text-tiny text-ink-muted">
                 Current plan: <span className="capitalize">{server.planId ?? 'free'}</span> — compare plans
               </span>
             </span>
@@ -634,7 +631,7 @@ export default function ServerOverview({ server, status, stats, usage, backups, 
         <Panel title="Configuration" icon={SettingsIcon}>
           <div className="divide-y divide-hairline">
             <Row label="Startup command">
-              <code className="min-w-0 truncate rounded-md bg-white/[0.05] px-2 py-1 font-mono text-[0.78rem]" title={server.startup}>
+              <code className="min-w-0 truncate rounded-md bg-white/[0.05] px-2 py-1 font-mono text-tiny" title={server.startup}>
                 {server.startup || '—'}
               </code>
               {server.startup && <CopyButton text={server.startup} label="Copy startup command" />}
@@ -649,7 +646,7 @@ export default function ServerOverview({ server, status, stats, usage, backups, 
             </Row>
             <Row label="Created">{fmtDate(server.createdAt)}</Row>
             <Row label="Server ID">
-              <code className="min-w-0 truncate font-mono text-[0.76rem] text-ink-secondary" title={server.id}>
+              <code className="min-w-0 truncate font-mono text-tiny text-ink-secondary" title={server.id}>
                 {server.id}
               </code>
               <CopyButton text={server.id} label="Copy server ID" />

@@ -11,6 +11,7 @@ import {
   Plus,
   RotateCcw,
   Settings as SettingsIcon,
+  SlidersHorizontal,
   Square,
   Terminal,
   Trash2,
@@ -48,6 +49,8 @@ const ACTION_META = {
   'server.stop': { Icon: Square, tone: 'text-zinc-300', title: 'Server stopped' },
   'server.restart': { Icon: RotateCcw, tone: 'text-sky-300', title: 'Server restarted' },
   'server.reinstall': { Icon: Wrench, tone: 'text-amber-300', title: 'Server reinstalled' },
+  'server.rescale': { Icon: SlidersHorizontal, tone: 'text-violet-300', title: 'Resources changed' },
+  'admin.server.rescale': { Icon: SlidersHorizontal, tone: 'text-violet-300', title: 'Resources changed by admin' },
   'server.backup.create': { Icon: Database, tone: 'text-emerald-300', title: 'Backup created' },
   'server.backup.delete': { Icon: Trash2, tone: 'text-red-300', title: 'Backup deleted' },
   'server.backup.restore': { Icon: History, tone: 'text-amber-300', title: 'Backup restored' },
@@ -99,11 +102,11 @@ export default function ServerActivity({ server, apiBase = '/servers' }) {
   }, [server.id]);
 
   return (
-    <section className="flex flex-col rounded-2xl border border-hairline bg-card">
+    <section className="console-card flex flex-col">
       <header className="flex items-center gap-2.5 border-b border-hairline px-5 py-3.5">
         <Activity className="size-4 text-ink-muted" />
-        <h3 className="flex-1 text-[0.92rem] font-semibold">Activity</h3>
-        {items?.length ? <span className="text-[0.72rem] text-ink-muted">{items.length} latest</span> : null}
+        <h3 className="flex-1 text-md font-semibold">Activity</h3>
+        {items?.length ? <span className="text-tiny text-ink-muted">{items.length} latest</span> : null}
       </header>
       <div className="flex-1 p-3 sm:p-4">
         {items === null ? (
@@ -123,8 +126,8 @@ export default function ServerActivity({ server, apiBase = '/servers' }) {
             <span className="flex size-11 items-center justify-center rounded-full border border-hairline bg-veil">
               <Activity className="size-5 text-ink-muted" />
             </span>
-            <p className="text-[0.9rem] font-semibold">No activity yet</p>
-            <p className="max-w-xs text-[0.8rem] text-ink-muted">
+            <p className="text-body font-semibold">No activity yet</p>
+            <p className="max-w-xs text-small text-ink-muted">
               Starts, backups, console sessions and setting changes will show up here with who did them.
             </p>
           </div>
@@ -153,20 +156,20 @@ export default function ServerActivity({ server, apiBase = '/servers' }) {
                       url={ev.actor?.avatarUrl}
                       name={actorName}
                       size="size-9"
-                      text="text-sm"
-                      className="relative z-10 ring-2 ring-card"
+                      text="text-small"
+                      className="relative z-10 ring-2 ring-console"
                     />
                   )}
                   <div className="min-w-0 flex-1 pt-0.5">
-                    <p className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[0.86rem]">
+                    <p className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-small">
                       <span className="truncate font-semibold">{actorName}</span>
                       <span className={cn('inline-flex items-center gap-1 text-ink-secondary', meta.tone)}>
                         <meta.Icon size={13} />
                         {meta.title}
                       </span>
                     </p>
-                    {extra && <p className="mt-0.5 truncate font-mono text-[0.72rem] text-ink-muted">{extra}</p>}
-                    <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.74rem] text-ink-muted">
+                    {extra && <p className="mt-0.5 truncate font-mono text-tiny text-ink-muted">{extra}</p>}
+                    <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-tiny text-ink-muted">
                       {isSystem ? (
                         <span className="inline-flex items-center gap-1.5">
                           <Cog size={12} className="shrink-0" />
@@ -197,7 +200,7 @@ export default function ServerActivity({ server, apiBase = '/servers' }) {
           </ol>
         )}
       </div>
-      <footer className="flex items-center gap-2 border-t border-hairline px-5 py-2.5 text-[0.72rem] text-ink-muted">
+      <footer className="flex items-center gap-2 border-t border-hairline px-5 py-2.5 text-tiny text-ink-muted">
         <AlertTriangle size={12} className="shrink-0" />
         Console sessions record open and close only — keystrokes are never logged.
       </footer>

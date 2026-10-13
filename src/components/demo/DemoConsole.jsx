@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, Eraser, Loader2, Terminal as TerminalIcon } from 'lucide-react';
+import { ChevronDown, Eraser, Loader2, ShieldCheck, Terminal as TerminalIcon } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { DEMO_COMMANDS, DEMO_COMMAND_LIST, DEMO_LOG_SEED } from '@/data/demoData.js';
@@ -175,18 +175,23 @@ export default function DemoConsole({ server, metrics, onStatusAction, reduced }
             </div>
 
             {/* ---- simulated-output notice ---- */}
-            <p className="flex items-center gap-2 border-b border-hairline bg-veil/25 px-4 py-2 text-[0.74rem] text-ink-secondary">
-                <Loader2 className="size-3.5 shrink-0" aria-hidden="true" />
+            <p className="flex items-start gap-2 border-b border-hairline bg-veil/25 px-4 py-2 text-[0.72rem] leading-relaxed text-ink-secondary sm:text-[0.74rem]">
+                <ShieldCheck size={13} className="mt-0.5 shrink-0 text-ink-muted" aria-hidden="true" />
                 <span>
-                    Scripted demo output. No shell, Docker socket or remote server is involved — commands are
-                    matched against a fixed list.
+                    <span className="sm:hidden">Simulated output — it runs in your browser.</span>
+                    <span className="hidden sm:inline">
+                        Scripted demo output. No shell, Docker socket or remote server is involved — commands are
+                        matched against a fixed list.
+                    </span>
                 </span>
             </p>
 
-            {/* ---- log body ---- */}
+            {/* ---- log body ----
+                 Grows with the output but stays capped: a terminal scrolling
+                 its own log is expected, unlike scrolling the whole panel. */}
             <div
                 ref={scrollRef}
-                className="troxe-log relative h-[min(46vh,420px)] min-h-[240px] overflow-y-auto px-4 py-3 text-[0.78rem] leading-[1.5] sm:text-[0.8rem]"
+                className="troxe-log relative max-h-[min(46vh,440px)] min-h-[200px] overflow-y-auto px-4 py-3 text-[0.78rem] leading-[1.5] sm:text-[0.8rem]"
                 style={{ fontFamily: FONT_STACK }}
                 role="log"
                 aria-live="polite"
@@ -209,9 +214,11 @@ export default function DemoConsole({ server, metrics, onStatusAction, reduced }
                 )}
             </div>
 
-            {/* ---- input row ---- */}
-            <div className="flex flex-wrap items-center gap-2 border-t border-hairline bg-card px-3 py-2.5">
-                <div ref={pickerRef} className="relative">
+            {/* ---- input row ----
+                 Stacks on phones: side by side, the prompt and the Run button
+                 squeeze the input to zero width on a 390px screen. ---- */}
+            <div className="flex flex-col gap-2 border-t border-hairline bg-card px-3 py-2.5 sm:flex-row sm:items-center">
+                <div ref={pickerRef} className="relative self-start sm:self-auto">
                     <button
                         type="button"
                         aria-expanded={pickerOpen}
@@ -252,7 +259,7 @@ export default function DemoConsole({ server, metrics, onStatusAction, reduced }
                     )}
                 </div>
 
-                <label className="flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-hairline bg-veil/40 px-3 py-1.5 focus-within:border-hairline-hover">
+                <div className="flex w-full min-w-0 items-center gap-2 rounded-xl border border-hairline bg-veil/40 px-3 py-1.5 focus-within:border-hairline-hover sm:flex-1">
                     <span className="shrink-0 font-mono text-[0.76rem] text-ink-muted" style={{ fontFamily: FONT_STACK }}>
                         {DEMO_PROMPT}
                     </span>
@@ -277,7 +284,7 @@ export default function DemoConsole({ server, metrics, onStatusAction, reduced }
                     >
                         Run
                     </button>
-                </label>
+                </div>
             </div>
 
             {/* ---- footer bar ---- */}

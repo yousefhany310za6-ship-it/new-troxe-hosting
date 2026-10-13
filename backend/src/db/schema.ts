@@ -216,10 +216,19 @@ export const plans = pgTable('plans', {
   id: varchar('id', { length: 32 }).primaryKey(), // free | starter | pro | ...
   name: varchar('name', { length: 64 }).notNull(),
   priceCents: integer('price_cents').default(0).notNull(),
-  /** hard container limits */
+  /** hard container limits — the ceiling for ONE server */
   cpuMilli: integer('cpu_milli').default(250).notNull(), // 1000 = 1 vCPU
   ramMb: integer('ram_mb').default(256).notNull(),
   storageGb: integer('storage_gb').default(1).notNull(),
+  /**
+   * Account-wide ceiling — the sum of every server the owner holds must stay
+   * within it. NULL = legacy fallback (perServer × maxServers). Keeping both
+   * levels means a Pro user with 3 servers can put 3× the CPU on ONE of them
+   * without the account as a whole overcommitting the plan.
+   */
+  poolCpuMilli: integer('pool_cpu_milli'),
+  poolRamMb: integer('pool_ram_mb'),
+  poolStorageGb: integer('pool_storage_gb'),
   maxServers: integer('max_servers').default(1).notNull(),
   maxBackupSlots: integer('max_backup_slots').default(0).notNull(),
   custom: boolean('custom').default(false).notNull(),

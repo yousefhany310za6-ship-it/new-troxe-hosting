@@ -1,6 +1,6 @@
-import { IsIn, IsInt, IsOptional, IsString, IsUUID, Matches, Max, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
+import { IsBoolean, IsIn, IsInt, IsOptional, IsString, IsUUID, Matches, Max, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
-import { CreateServerDto, UpdateServerDto, EnvVarDto } from '../servers/dto';
+import { CreateServerDto, RescaleServerDto, UpdateServerDto, EnvVarDto } from '../servers/dto';
 
 export { EnvVarDto };
 
@@ -72,6 +72,10 @@ export class CreatePlanDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(64000) cpuMilli?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(16) @Max(524288) ramMb?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(10240) storageGb?: number;
+  // account-wide pools (sum of every server the account holds)
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(64000) poolCpuMilli?: number;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(16) @Max(524288) poolRamMb?: number;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(10240) poolStorageGb?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(500) maxServers?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(100) maxBackupSlots?: number;
 }
@@ -82,6 +86,9 @@ export class UpdatePlanDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(64000) cpuMilli?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(16) @Max(524288) ramMb?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(10240) storageGb?: number;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(64000) poolCpuMilli?: number;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(16) @Max(524288) poolRamMb?: number;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(10240) poolStorageGb?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(500) maxServers?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(100) maxBackupSlots?: number;
 }
@@ -96,8 +103,19 @@ export class AdminCreateServerDto extends CreateServerDto {
   @IsString()
   @MaxLength(32)
   nodeId?: string;
+
+  /**
+   * Allow an allocation above the owner's plan (the platform maxima still
+   * apply). Explicit and audited — the default path applies the owner's own
+   * ceilings so an admin cannot launder quota by accident.
+   */
+  @IsOptional()
+  @IsBoolean()
+  resourcesOverride?: boolean;
 }
 
 export class AdminUpdateServerDto extends UpdateServerDto {}
+
+export class AdminRescaleServerDto extends RescaleServerDto {}
 
 export type { CreateServerDto, UpdateServerDto };

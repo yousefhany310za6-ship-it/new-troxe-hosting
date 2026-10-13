@@ -4,9 +4,6 @@ import { AlertTriangle, HelpCircle, Loader2, Package, RefreshCw, Search, Trash2 
 import { apiGet, apiPost } from '@/lib/api.js';
 import { cn } from '@/lib/utils';
 
-const inputClass =
-    'w-full rounded-xl border border-hairline bg-white/10 px-4 py-2.5 text-[0.88rem] text-foreground placeholder-ink-muted transition focus:border-primary focus:ring-2 focus:ring-ring/40 focus:outline-none';
-
 /**
  * Package manager for a server.
  *
@@ -67,19 +64,19 @@ export default function ServerPackages({ server }) {
     const managerLabel = manager === 'npm' ? 'npm' : manager === 'bun' ? 'bun' : manager === 'pip' ? 'pip' : manager === 'go' ? 'Go modules' : null;
 
     return (
-        <section className="flex flex-col gap-4 rounded-2xl border border-hairline bg-card p-5 sm:p-6" aria-label="Package manager">
+        <section className="console-card flex flex-col gap-4 p-5 sm:p-6" aria-label="Package manager">
             <header className="flex flex-wrap items-center gap-2">
                 <Package className="size-4 text-ink-muted" aria-hidden="true" />
-                <h2 className="flex-1 text-[0.95rem] font-semibold">Package manager</h2>
+                <h2 className="flex-1 text-lead font-semibold">Package manager</h2>
                 {managerLabel && (
-                    <span className="rounded-full border border-hairline bg-veil px-2.5 py-0.5 font-mono text-[0.72rem] font-bold text-ink-secondary">
+                    <span className="chip font-mono font-bold">
                         {managerLabel}
                     </span>
                 )}
                 <button
                     type="button"
                     onClick={load}
-                    className="inline-flex items-center gap-1.5 rounded-full border border-hairline px-2.5 py-1 text-[0.7rem] font-bold text-ink-secondary transition hover:text-foreground"
+                    className="btn btn-secondary btn-sm"
                 >
                     <RefreshCw className={cn('size-3.5', loading && 'animate-spin')} aria-hidden="true" />
                     Refresh
@@ -89,8 +86,8 @@ export default function ServerPackages({ server }) {
             {!manager ? (
                 <div className="rounded-lg border border-dashed border-hairline px-4 py-6 text-center">
                     <HelpCircle className="mx-auto size-5 text-ink-muted" aria-hidden="true" />
-                    <p className="mt-2 text-[0.88rem] font-bold text-foreground">No package manager for this runtime</p>
-                    <p className="mx-auto mt-1 max-w-md text-[0.8rem] text-ink-secondary">
+                    <p className="mt-2 text-small font-bold text-foreground">No package manager for this runtime</p>
+                    <p className="mx-auto mt-1 max-w-md text-tiny text-ink-secondary">
                         This platform packages {server.runtime} projects with their own dependencies — upload your vendor files
                         from the Files tab instead.
                     </p>
@@ -102,7 +99,7 @@ export default function ServerPackages({ server }) {
                         className="flex flex-col gap-2 sm:flex-row sm:items-end"
                     >
                         <label className="min-w-0 flex-1">
-                            <span className="mb-1.5 block text-[0.82rem] font-semibold text-ink-secondary">
+                            <span className="mb-1.5 block text-small font-semibold text-ink-secondary">
                                 Install a package with {managerLabel}
                             </span>
                             <span className="relative block">
@@ -111,7 +108,7 @@ export default function ServerPackages({ server }) {
                                     value={name}
                                     onChange={(e) => setName(e.target.value)}
                                     placeholder={manager === 'pip' ? 'requests' : 'express'}
-                                    className={cn(inputClass, 'pl-9 font-mono')}
+                                    className="input-field pl-9 font-mono"
                                     dir="ltr"
                                     maxLength={214}
                                     disabled={busy}
@@ -121,25 +118,25 @@ export default function ServerPackages({ server }) {
                         <button
                             type="submit"
                             disabled={busy || !name.trim()}
-                            className="inline-flex h-11 shrink-0 items-center gap-2 rounded-full bg-white px-5 text-[0.84rem] font-bold text-black transition hover:bg-white/90 disabled:opacity-40"
+                            className="btn btn-primary h-11 shrink-0 px-5"
                         >
                             {busy && op?.kind === 'install' ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Package className="size-4" aria-hidden="true" />}
                             Install
                         </button>
                     </form>
 
-                    <p className="text-[0.75rem] text-ink-muted">
+                    <p className="text-tiny text-ink-muted">
                         The server must be running. The command is run inside your own container with {managerLabel} — you only
                         choose the package.
                     </p>
 
                     {result && !result.ok && (
-                        <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-3.5 py-3 text-[0.82rem] text-amber-200" role="alert">
+                        <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-3.5 py-3 text-small text-amber-200" role="alert">
                             <p className="font-bold">
                                 {result.error ? `Could not ${op?.kind === 'uninstall' ? 'remove' : 'install'} ${op?.name}` : `The operation failed${result.timedOut ? ' (timed out)' : ''}`}
                             </p>
                             {result.error && <p className="mt-1">{result.error}</p>}
-                            {result.stderr && <pre className="mt-2 max-h-32 overflow-auto font-mono text-[0.72rem] whitespace-pre-wrap">{result.stderr.trim()}</pre>}
+                            {result.stderr && <pre className="mt-2 max-h-32 overflow-auto font-mono text-tiny whitespace-pre-wrap">{result.stderr.trim()}</pre>}
                             {!result.error && result.exitCode !== null && !result.timedOut && (
                                 <p className="mt-1">Exit code {result.exitCode} — check the console for the full output.</p>
                             )}
@@ -147,30 +144,30 @@ export default function ServerPackages({ server }) {
                     )}
 
                     {result?.ok && (
-                        <p className="rounded-lg border border-hairline bg-veil px-3.5 py-2.5 text-[0.82rem] text-emerald-300" role="status">
+                        <p className="rounded-lg border border-hairline bg-veil px-3.5 py-2.5 text-small text-emerald-300" role="status">
                             {op?.name} {op?.kind === 'uninstall' ? 'removed' : 'installed'} successfully.
                         </p>
                     )}
 
                     <div className="border-t border-hairline pt-4">
                         <div className="mb-3 flex items-center justify-between">
-                            <h3 className="text-[0.85rem] font-semibold">Managed packages</h3>
-                            <span className="text-[0.74rem] text-ink-muted">
+                            <h3 className="text-small font-semibold">Managed packages</h3>
+                            <span className="text-tiny text-ink-muted">
                                 {info?.manifest ? `from ${info.manifest}` : 'no manifest yet'}
                             </span>
                         </div>
 
                         {loading ? (
                             <div className="flex flex-col gap-2">
-                                {[0, 1, 2].map((i) => <div key={i} className="h-11 animate-pulse rounded-xl border border-hairline bg-white/[0.04]" />)}
+                                {[0, 1, 2].map((i) => <div key={i} className="h-11 animate-pulse rounded-xl border border-hairline bg-console" />)}
                             </div>
                         ) : error ? (
-                            <p className="flex items-center gap-2 rounded-lg border border-hairline bg-veil px-3.5 py-3 text-[0.82rem] text-ink-secondary" role="alert">
+                            <p className="flex items-center gap-2 rounded-lg border border-hairline bg-veil px-3.5 py-3 text-small text-ink-secondary" role="alert">
                                 <AlertTriangle className="size-4 shrink-0" aria-hidden="true" />
                                 {error}
                             </p>
                         ) : packages.length === 0 ? (
-                            <p className="rounded-lg border border-dashed border-hairline px-4 py-8 text-center text-[0.84rem] text-ink-secondary">
+                            <p className="rounded-lg border border-dashed border-hairline px-4 py-8 text-center text-small text-ink-secondary">
                                 No packages listed yet. Install one above, or add it to your{' '}
                                 <span className="font-mono">{info?.manifest ?? 'manifest'}</span> from the Files tab.
                             </p>
@@ -179,13 +176,13 @@ export default function ServerPackages({ server }) {
                                 {packages.map((p) => (
                                     <li
                                         key={`${p.name}@${p.version ?? ''}`}
-                                        className="flex flex-wrap items-center gap-3 rounded-xl border border-hairline bg-veil/50 px-3.5 py-2.5"
+                                        className="console-lift flex flex-wrap items-center gap-3 rounded-xl border border-hairline bg-veil/50 px-3.5 py-2.5"
                                     >
-                                        <span className="min-w-0 flex-1 truncate font-mono text-[0.86rem] font-bold text-foreground" dir="ltr">
+                                        <span className="min-w-0 flex-1 truncate font-mono text-small font-bold text-foreground" dir="ltr">
                                             {p.name}
                                         </span>
                                         {p.version && (
-                                            <span className="rounded-full border border-hairline px-2 py-0.5 font-mono text-[0.7rem] text-ink-muted" dir="ltr">
+                                            <span className="rounded-full border border-hairline px-2 py-0.5 font-mono text-tiny text-ink-muted" dir="ltr">
                                                 {p.version}
                                             </span>
                                         )}
@@ -193,7 +190,7 @@ export default function ServerPackages({ server }) {
                                             type="button"
                                             disabled={busy}
                                             onClick={() => run('uninstall', p.name)}
-                                            className="inline-flex items-center gap-1.5 rounded-full border border-hairline px-3 py-1 text-[0.74rem] font-bold text-ink-secondary transition hover:border-red-500/40 hover:text-red-300 disabled:opacity-40"
+                                            className="btn btn-secondary btn-sm hover:border-red-500/40! hover:text-red-300!"
                                         >
                                             {busy && op?.kind === 'uninstall' && op?.name === p.name ? (
                                                 <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />

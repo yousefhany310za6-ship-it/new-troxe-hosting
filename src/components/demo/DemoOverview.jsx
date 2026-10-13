@@ -37,16 +37,14 @@ import {
 } from './primitives.jsx';
 
 /** Copy button — identical treatment to ServerOverview.jsx `CopyButton`. */
-function CopyButton({ value, label, done }) {
+function CopyButton({ onCopy, label, done }) {
     return (
         <button
             type="button"
             disabled={done}
             aria-label={done ? `${label} copied` : `Copy ${label}`}
             title={done ? 'Copied' : `Copy ${label}`}
-            onClick={() => {
-                navigator.clipboard?.writeText(value);
-            }}
+            onClick={onCopy}
             className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-ink-muted transition hover:bg-white/10 hover:text-foreground"
         >
             {done ? <Check className="size-3.5 text-emerald-400" /> : <Copy className="size-3.5" />}
@@ -104,17 +102,17 @@ export default function DemoOverview({ server, metrics, series, onNavigate, onAc
                     <span className="font-mono text-[0.75rem] text-ink-muted capitalize">{server.status}</span>
 
                     <div className="ml-auto flex flex-wrap items-center gap-2">
-                        <span className="hidden sm:inline-flex">
-                            <button
-                                type="button"
-                                disabled={busy || online || server.status === 'restarting'}
-                                onClick={() => onAction('start')}
-                                className="inline-flex items-center gap-1.5 rounded-md border border-hairline bg-veil px-3 py-1.5 text-[0.8rem] font-semibold text-ink-secondary transition hover:border-hairline-hover hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-                            >
-                                <Play className="size-3.5" />
-                                Start
-                            </button>
-                        </span>
+                        {/* Not hidden on phones: it is the only way back from
+                            "Offline" once the demo server has been stopped. */}
+                        <button
+                            type="button"
+                            disabled={busy || online || server.status === 'restarting'}
+                            onClick={() => onAction('start')}
+                            className="inline-flex items-center gap-1.5 rounded-md border border-hairline bg-veil px-3 py-1.5 text-[0.8rem] font-semibold text-ink-secondary transition hover:border-hairline-hover hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                            <Play className="size-3.5" />
+                            Start
+                        </button>
                         <button
                             type="button"
                             disabled={busy || !online}
@@ -156,7 +154,7 @@ export default function DemoOverview({ server, metrics, series, onNavigate, onAc
                         <p className="mt-1.5 flex items-center gap-1.5 font-mono text-[1.05rem] leading-none font-extrabold break-all text-foreground sm:text-[1.35rem]">
                             <span className="text-ink-muted">http://</span>
                             <span className="break-all">{server.address}</span>
-                            <CopyButton value={address} label="Address" done={copied === 'Address'} />
+                            <CopyButton label="Address" done={copied === 'Address'} onCopy={() => copy(address, 'Address')} />
                         </p>
                         <p className="mt-2 text-[0.75rem] text-ink-muted">
                             Reserved <code className="font-mono">.example</code> domain — nothing resolves here.
@@ -166,7 +164,7 @@ export default function DemoOverview({ server, metrics, series, onNavigate, onAc
                         <span className="text-[0.78rem] font-semibold text-ink-secondary">Port</span>
                         <p className="mt-1.5 flex items-center gap-1.5 font-mono text-[1.05rem] leading-none font-extrabold text-foreground sm:text-[1.35rem]">
                             {server.port}
-                            <CopyButton value={String(server.port)} label="Port" done={copied === 'Port'} />
+                            <CopyButton label="Port" done={copied === 'Port'} onCopy={() => copy(String(server.port), 'Port')} />
                         </p>
                     </div>
                 </div>
@@ -276,7 +274,11 @@ export default function DemoOverview({ server, metrics, series, onNavigate, onAc
             </div>
 
             {/* ---- limits + quick actions ---- */}
-            <div className="grid gap-4 lg:grid-cols-2">
+            {/* `items-start` keeps the two panels at their natural height —
+                "Resource limits" has 3 rows and "Configuration" 5, so without
+                it the grid stretches the short one and leaves dead space.
+                ServerOverview.jsx carries the identical rule; keep them in sync. */}
+            <div className="grid items-start gap-4 lg:grid-cols-2">
                 <Panel title="Resource limits" icon={Cpu}>
                     <div className="flex flex-col gap-5">
                         <LimitRow

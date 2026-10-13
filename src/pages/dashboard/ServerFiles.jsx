@@ -57,17 +57,15 @@ import { Skeleton } from '@/components/ui/field.jsx';
 const CodeEditor = lazy(() => import('./CodeEditor.jsx'));
 import { languageFor } from './CodeEditor.jsx';
 
-// Modern controls: soft pills, normal-case labels.
-const btnSecondary =
-    'inline-flex min-h-10 items-center gap-1.5 rounded-xl border border-hairline bg-white/[0.06] px-4 py-2 text-[0.8rem] font-semibold text-ink-secondary transition hover:border-hairline-hover hover:bg-white/[0.1] hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40';
-const btnPrimary =
-    'inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-white px-4 py-2 text-[0.8rem] font-bold text-black shadow-[0_10px_36px_-12px_rgba(255,255,255,0.5)] transition hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none';
+// Toolbar controls. The file manager uses the shared `.btn` family so its
+// buttons match every other server page; only the icon-only variant is local.
+const btnSecondary = 'btn btn-secondary';
+const btnPrimary = 'btn btn-primary';
 const btnIcon =
     'inline-flex min-h-9 min-w-9 items-center justify-center rounded-xl p-2 text-ink-secondary transition hover:bg-white/10 hover:text-foreground hover:shadow disabled:opacity-40';
-const inputClass =
-    'w-full rounded-md border border-hairline bg-black/40 px-3.5 py-2.5 text-[0.88rem] text-foreground placeholder-ink-muted transition focus:border-primary focus:ring-2 focus:ring-ring/40 focus:outline-none';
+const inputClass = 'input-field';
 const menuItem =
-    'flex w-full items-center gap-2 px-4 py-2 text-left text-[0.83rem] font-semibold text-ink-secondary transition hover:bg-veil hover:text-foreground disabled:opacity-40';
+    'flex w-full items-center gap-2 px-4 py-2 text-left text-small font-semibold text-ink-secondary transition hover:bg-veil hover:text-foreground disabled:opacity-40';
 
 const EDIT_MAX = 512 * 1024;
 const UPLOAD_MAX = 1024 * 1024 * 1024; // 1 GB (streamed raw to the API)
@@ -204,7 +202,7 @@ function RowMenu({ items, onSelect, disabled, align = 'right', trigger, label = 
             {open && (
                 <>
                     <div className="fixed inset-0 z-[60]" onClick={() => setOpen(false)} />
-                    <div role="menu" style={{ top: pos.top, left: pos.left }} className="fixed z-[61] w-52 overflow-hidden rounded-lg border border-hairline bg-card py-1 shadow-2xl">
+                    <div role="menu" style={{ top: pos.top, left: pos.left }} className="fixed z-[61] w-52 overflow-hidden rounded-lg border border-hairline bg-console py-1 shadow-2xl">
                         {items.map(([key, labelText, Icon, danger]) => (
                             <button
                                 key={key}
@@ -212,7 +210,7 @@ function RowMenu({ items, onSelect, disabled, align = 'right', trigger, label = 
                                 role="menuitem"
                                 disabled={disabled}
                                 onClick={(e) => { e.stopPropagation(); setOpen(false); onSelect?.(key); }}
-                                className={cn(menuItem, danger && 'text-red-400 hover:!text-red-300')}
+                                className={cn(menuItem, danger && 'text-red-400 hover:text-red-300!')}
                             >
                                 {Icon && <Icon size={15} />}
                                 {labelText}
@@ -266,7 +264,7 @@ function TreeNode({ serverId, base, name, path, depth, dirPath, setDir, readOnly
                     className="flex min-w-0 flex-1 items-center gap-2 py-1.5 text-left"
                 >
                     <Folder size={14} className={cn('shrink-0', active ? 'text-foreground' : 'text-ink-muted')} />
-                    <span className="truncate text-[0.82rem] font-medium">{name}</span>
+                    <span className="truncate text-small font-medium">{name}</span>
                 </button>
             </div>
             {open && children.length > 0 && (
@@ -303,7 +301,7 @@ function FolderTree({ serverId, base, dir, setDir, readOnly, onNavigate }) {
                 type="button"
                 onClick={() => go([])}
                 className={cn(
-                    'flex items-center gap-2 rounded-lg px-2 py-1.5 text-[0.82rem] font-medium transition',
+                    'flex items-center gap-2 rounded-lg px-2 py-1.5 text-small font-medium transition',
                     dirPath === '' ? 'bg-white/[0.09] text-foreground' : 'text-ink-secondary hover:bg-white/[0.05] hover:text-foreground',
                 )}
             >
@@ -311,12 +309,12 @@ function FolderTree({ serverId, base, dir, setDir, readOnly, onNavigate }) {
                 Storage root
             </button>
             {isFetching && folders.length === 0 && (
-                <p className="flex items-center gap-2 px-2 py-1.5 text-[0.78rem] text-ink-muted">
+                <p className="flex items-center gap-2 px-2 py-1.5 text-tiny text-ink-muted">
                     <Loader2 size={12} className="animate-spin" /> Loading…
                 </p>
             )}
             {!isFetching && folders.length === 0 && (
-                <p className="px-2 py-1.5 text-[0.76rem] text-ink-muted">No folders yet</p>
+                <p className="px-2 py-1.5 text-tiny text-ink-muted">No folders yet</p>
             )}
             <ul className="flex flex-col">
                 {folders.map((f) => (
@@ -798,23 +796,23 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
         const lang = languageFor(editing.split('/').pop());
         return (
             <div className={fullscreen ? 'fixed inset-0 z-[70] flex flex-col bg-[#0a0a0d]' : 'flex min-h-[70vh] flex-col overflow-hidden rounded-2xl border border-hairline bg-[#0a0a0d]'}>
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-2 border-b border-hairline bg-card px-3 py-2.5 sm:px-4">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-2 border-b border-hairline bg-console px-3 py-2.5 sm:px-4">
                     <button type="button" onClick={closeEditor} aria-label="Back to files" title="Back to files" className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg text-ink-secondary transition hover:bg-white/10 hover:text-foreground">
                         <ArrowLeft size={17} />
                     </button>
                     {icon ? <img src={icon} alt="" aria-hidden="true" className="size-5 shrink-0" draggable={false} /> : null}
                     <div className="min-w-0 flex-1 basis-40 leading-tight">
-                        <p className="truncate font-mono text-[0.85rem] font-semibold">{editing.split('/').pop()}</p>
-                        <p className="truncate font-mono text-[0.68rem] text-ink-muted">{editing}</p>
+                        <p className="truncate font-mono text-small font-semibold">{editing.split('/').pop()}</p>
+                        <p className="truncate font-mono text-micro text-ink-muted">{editing}</p>
                     </div>
                     {lang && (
-                        <span className="hidden shrink-0 rounded-full border border-hairline bg-veil px-2.5 py-0.5 text-[0.68rem] font-semibold text-ink-secondary md:inline-block">
+                        <span className="hidden shrink-0 rounded-full border border-hairline bg-veil px-2.5 py-0.5 text-micro font-semibold text-ink-secondary md:inline-block">
                             {lang.label}
                         </span>
                     )}
                     {dirty
-                        ? <span className="flex shrink-0 items-center gap-1.5 rounded-full bg-amber-500/15 px-2.5 py-0.5 text-[0.68rem] font-bold uppercase tracking-wide text-amber-400"><span className="size-1.5 animate-pulse rounded-full bg-amber-400" />unsaved</span>
-                        : <span className="hidden shrink-0 items-center gap-1 text-[0.7rem] text-ink-muted sm:inline-flex"><Check size={14} /> saved</span>}
+                        ? <span className="flex shrink-0 items-center gap-1.5 rounded-full bg-amber-500/15 px-2.5 py-0.5 text-micro font-bold uppercase tracking-wide text-amber-400"><span className="size-1.5 animate-pulse rounded-full bg-amber-400" />unsaved</span>
+                        : <span className="hidden shrink-0 items-center gap-1 text-tiny text-ink-muted sm:inline-flex"><Check size={14} /> saved</span>}
                     <div className="ml-auto flex shrink-0 items-center gap-1">
                         <button type="button" onClick={() => editorRef.current?.openSearch()} title="Find in file (Ctrl+F)" aria-label="Find in file" className={btnIcon}>
                             <Search size={16} />
@@ -825,7 +823,7 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
                         <button type="button" onClick={() => setFullscreen((f) => !f)} title={fullscreen ? 'Exit fullscreen (Esc)' : 'Fullscreen'} aria-label="Toggle fullscreen" className={btnIcon}>
                             {fullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
                         </button>
-                        {readOnly && <span className="mr-1 hidden rounded-full border border-hairline bg-veil px-2.5 py-1 text-[0.68rem] font-semibold text-ink-secondary sm:inline-block">Read-only</span>}
+                        {readOnly && <span className="mr-1 hidden rounded-full border border-hairline bg-veil px-2.5 py-1 text-micro font-semibold text-ink-secondary sm:inline-block">Read-only</span>}
                         <button type="button" onClick={saveEdit} disabled={readOnly || fileLoading || !!fileError || writeFile.isPending || !dirty} title={readOnly ? 'Admin view is read-only' : 'Save'} className={btnPrimary}>
                             {writeFile.isPending ? 'Saving…' : 'Save'}
                         </button>
@@ -842,10 +840,10 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
                     )}
                     {fileError && (
                         <div className="flex flex-col items-center gap-2 p-8 text-center">
-                            <p className="text-[0.9rem] font-semibold text-red-400">
+                            <p className="text-body font-semibold text-red-400">
                                 {fileError.code === 'FILE_BINARY' ? 'Binary file — preview unavailable' : 'Failed to load file'}
                             </p>
-                            <p className="max-w-sm text-[0.82rem] text-ink-secondary">
+                            <p className="max-w-sm text-small text-ink-secondary">
                                 {fileError.code === 'FILE_BINARY' ? 'Download it instead.' : fileError.message}
                             </p>
                         </div>
@@ -872,7 +870,7 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
                 </div>
                 {sheet?.type === 'discard' && (
                     <Sheet title={sheetTitle()} subtitle={sheetSubtitle()} onClose={() => setSheet(null)} onSubmit={submitSheet} submitLabel="Discard" danger>
-                        <p className="text-[0.88rem] text-ink-secondary">Unsaved changes to this file will be lost.</p>
+                        <p className="text-small text-ink-secondary">Unsaved changes to this file will be lost.</p>
                     </Sheet>
                 )}
             </div>
@@ -884,7 +882,7 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
 
     return (
         <div
-            className="relative flex min-h-[70vh] overflow-hidden rounded-2xl border border-hairline bg-card"
+            className="console-card relative flex min-h-[70vh] overflow-hidden rounded-2xl"
             onDragEnter={(e) => { e.preventDefault(); dragDepth.current += 1; setDragActive(true); }}
             onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }}
             onDragLeave={() => { dragDepth.current = Math.max(0, dragDepth.current - 1); if (!dragDepth.current) setDragActive(false); }}
@@ -896,7 +894,7 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
             <aside className="hidden w-60 shrink-0 flex-col border-r border-hairline bg-veil/25 lg:flex">
                 <div className="flex items-center gap-2 border-b border-hairline px-3.5 py-3">
                     <FolderTreeIcon size={15} className="shrink-0 text-ink-muted" />
-                    <p className="text-[0.82rem] font-bold tracking-wide">Folders</p>
+                    <p className="text-small font-bold tracking-wide">Folders</p>
                 </div>
                 <FolderTree serverId={server.id} base={base} dir={dir} setDir={setDir} readOnly={readOnly} />
                 {!readOnly && (
@@ -915,10 +913,10 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
             {treeOpen && (
                 <div className="fixed inset-0 z-[75] lg:hidden">
                     <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setTreeOpen(false)} />
-                    <aside className="relative flex h-full w-72 max-w-[85vw] flex-col border-r border-hairline bg-card shadow-2xl">
+                    <aside className="relative flex h-full w-72 max-w-[85vw] flex-col border-r border-hairline bg-console shadow-2xl">
                         <div className="flex items-center gap-2 border-b border-hairline px-3.5 py-3">
                             <FolderTreeIcon size={15} className="shrink-0 text-ink-muted" />
-                            <p className="flex-1 text-[0.82rem] font-bold tracking-wide">Folders</p>
+                            <p className="flex-1 text-small font-bold tracking-wide">Folders</p>
                             <button type="button" onClick={() => setTreeOpen(false)} aria-label="Close folder tree" className={btnIcon}>
                                 <X size={16} />
                             </button>
@@ -944,7 +942,7 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
                         <FolderTreeIcon size={16} />
                     </button>
                     <nav aria-label="Breadcrumb" className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto rounded-xl bg-veil/40 px-2 py-1 whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                        <button type="button" onClick={() => { setDir([]); setQuery(''); }} aria-label="Root directory" className="flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 font-mono text-[0.82rem] font-bold transition hover:bg-veil">
+                        <button type="button" onClick={() => { setDir([]); setQuery(''); }} aria-label="Root directory" className="flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 font-mono text-small font-bold transition hover:bg-veil">
                             <Home size={14} className="text-ink-secondary" />
                             <span className="hidden sm:inline">root</span>
                         </button>
@@ -966,7 +964,7 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
                                     type="button"
                                     onClick={() => { setDir(dir.slice(0, i + 1)); setQuery(''); }}
                                     className={cn(
-                                        'max-w-32 truncate rounded-md px-1.5 py-1 font-mono text-[0.82rem] transition hover:bg-veil',
+                                        'max-w-32 truncate rounded-md px-1.5 py-1 font-mono text-small transition hover:bg-veil',
                                         i === dir.length - 1 ? 'font-bold text-foreground' : 'text-ink-secondary',
                                     )}
                                 >
@@ -976,7 +974,7 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
                         ))}
                     </nav>
                     {readOnly && (
-                        <span className="shrink-0 rounded-full border border-hairline bg-veil px-2.5 py-1 text-[0.68rem] font-semibold text-ink-secondary">Read-only</span>
+                        <span className="shrink-0 rounded-full border border-hairline bg-veil px-2.5 py-1 text-micro font-semibold text-ink-secondary">Read-only</span>
                     )}
                     <div className="flex shrink-0 items-center gap-1.5">
                         {!readOnly && <input ref={uploadRef} type="file" multiple className="hidden" onChange={onPick} />}
@@ -1073,8 +1071,8 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
 
                 {!isLoading && error && (
                     <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-red-500/40 px-4 py-12 text-center">
-                        <p className="text-[0.95rem] font-semibold text-red-400">Unable to load files</p>
-                        <p className="max-w-sm text-[0.82rem] text-ink-secondary">{error.message}</p>
+                        <p className="text-lead font-semibold text-red-400">Unable to load files</p>
+                        <p className="max-w-sm text-small text-ink-secondary">{error.message}</p>
                         <button type="button" onClick={() => refetch()} className={btnPrimary}>
                             <RotateCcw size={15} /> Retry
                         </button>
@@ -1084,8 +1082,8 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
                 {!isLoading && !error && !hasEntries && (
                     <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-hairline px-4 py-14 text-center">
                         <Folder size={34} className="text-ink-muted" />
-                        <p className="text-[0.95rem] font-semibold">This folder is empty</p>
-                        <p className="max-w-xs text-[0.84rem] text-ink-secondary">
+                        <p className="text-lead font-semibold">This folder is empty</p>
+                        <p className="max-w-xs text-small text-ink-secondary">
                             {readOnly ? 'Nothing has been uploaded here yet.' : 'Upload files or create a new folder to get started.'}
                         </p>
                         {!readOnly && (
@@ -1104,7 +1102,7 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
                 {!isLoading && !error && hasEntries && filterActive && entries.length === 0 && (
                     <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-hairline px-4 py-12 text-center">
                         <Search size={28} className="text-ink-muted" />
-                        <p className="text-[0.92rem] font-semibold">No matches for “{query.trim()}”</p>
+                        <p className="text-lead font-semibold">No matches for “{query.trim()}”</p>
                         <button type="button" onClick={() => setQuery('')} className={btnSecondary}>Clear search</button>
                     </div>
                 )}
@@ -1158,8 +1156,8 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
                                         <span className={cn('flex size-14 items-center justify-center rounded-2xl', KIND_TILE[kind])}>
                                             {isDir ? <Folder size={26} /> : icon ? <img src={icon} alt="" aria-hidden="true" className="size-7" draggable={false} /> : <FileText size={22} />}
                                         </span>
-                                        <span className="w-full truncate text-[0.82rem] font-semibold">{entry.name}</span>
-                                        <span className="font-mono text-[0.68rem] text-ink-muted">{isDir ? 'Folder' : fmtSize(entry.size)}</span>
+                                        <span className="w-full truncate text-small font-semibold">{entry.name}</span>
+                                        <span className="font-mono text-micro text-ink-muted">{isDir ? 'Folder' : fmtSize(entry.size)}</span>
                                     </button>
                                 </div>
                             );
@@ -1178,16 +1176,16 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
                                 <section key={label} className="mb-4 last:mb-0">
                                     <div className="mb-1.5 flex items-center gap-2 px-1">
                                         {label === 'Folders' ? <Folder size={13} className="text-ink-muted" /> : <FileText size={13} className="text-ink-muted" />}
-                                        <p className="text-[0.7rem] font-bold tracking-[0.14em] text-ink-muted uppercase">{label}</p>
-                                        <span className="font-mono text-[0.68rem] text-ink-muted tabular-nums">{rows.length}</span>
+                                        <p className="text-tiny font-bold tracking-[0.14em] text-ink-muted uppercase">{label}</p>
+                                        <span className="font-mono text-micro text-ink-muted tabular-nums">{rows.length}</span>
                                     </div>
                                     <div className="overflow-hidden rounded-xl border border-hairline">
                                         {/* column headers */}
                                         <div className="hidden items-center gap-3 border-b border-hairline bg-veil/30 px-3 py-1.5 sm:flex">
                                             <span className="w-[18px] shrink-0" />
-                                            <span className="flex-1 text-[0.66rem] font-bold tracking-wide text-ink-muted uppercase">Name</span>
-                                            <span className="w-20 shrink-0 text-right text-[0.66rem] font-bold tracking-wide text-ink-muted uppercase">Size</span>
-                                            <span className="hidden w-32 shrink-0 text-right text-[0.66rem] font-bold tracking-wide text-ink-muted uppercase sm:block">Modified</span>
+                                            <span className="flex-1 text-micro font-bold tracking-wide text-ink-muted uppercase">Name</span>
+                                            <span className="w-20 shrink-0 text-right text-micro font-bold tracking-wide text-ink-muted uppercase">Size</span>
+                                            <span className="hidden w-32 shrink-0 text-right text-micro font-bold tracking-wide text-ink-muted uppercase sm:block">Modified</span>
                                             <span className="w-8 shrink-0" />
                                         </div>
                                         {rows.map((entry) => {
@@ -1234,16 +1232,16 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
                                                             {isDir ? <Folder size={18} /> : icon ? <img src={icon} alt="" aria-hidden="true" className="size-5" draggable={false} /> : <FileText size={17} />}
                                                         </span>
                                                         <span className="min-w-0 flex-1">
-                                                            <span className="block truncate text-[0.88rem] font-medium">{entry.name}</span>
-                                                            <span className="mt-0.5 block truncate font-mono text-[0.66rem] text-ink-muted sm:hidden">
+                                                            <span className="block truncate text-small font-medium">{entry.name}</span>
+                                                            <span className="mt-0.5 block truncate font-mono text-micro text-ink-muted sm:hidden">
                                                                 {isDir ? 'Folder' : (<>{fmtSize(entry.size)} <span className="mx-1 text-hairline">·</span> {fmtDate(entry.mtime)}</>)}
                                                             </span>
                                                         </span>
                                                     </button>
-                                                    <span className="w-20 shrink-0 text-right font-mono text-[0.74rem] text-ink-secondary tabular-nums">
+                                                    <span className="w-20 shrink-0 text-right font-mono text-tiny text-ink-secondary tabular-nums">
                                                         {isDir ? <span className="text-ink-muted">—</span> : fmtSize(entry.size)}
                                                     </span>
-                                                    <span className="hidden w-32 shrink-0 text-right font-mono text-[0.7rem] text-ink-muted sm:block">
+                                                    <span className="hidden w-32 shrink-0 text-right font-mono text-tiny text-ink-muted sm:block">
                                                         {fmtDate(entry.mtime)}
                                                     </span>
                                                     {canPreview && !selectOn && (
@@ -1287,7 +1285,7 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
                                 aria-label="Select all in this folder"
                                 className="size-5 shrink-0 cursor-pointer accent-white"
                             />
-                            <span className="font-mono text-[0.75rem] text-ink-secondary">{selected.length} selected</span>
+                            <span className="font-mono text-tiny text-ink-secondary">{selected.length} selected</span>
                             <div className="flex flex-wrap items-center gap-1.5">
                                 <button type="button" onClick={() => setSheet({ type: 'archive-many', names: [...selected], value: `${selected.length === 1 ? selected[0] : (dir[dir.length - 1] ?? server.name)}.tar.gz` })} disabled={busy} className={btnSecondary}>
                                     <Archive size={15} /> <span className="hidden sm:inline">Archive</span>
@@ -1298,11 +1296,11 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
                                 <button type="button" onClick={() => setSheet({ type: 'delete-many', names: [...selected], value: '' })} disabled={busy} className={btnSecondary}>
                                     <Trash2 size={15} /> <span className="hidden sm:inline">Delete</span>
                                 </button>
-                                <button type="button" onClick={exitSelect} className="font-mono text-[0.75rem] text-ink-secondary hover:text-foreground">Cancel</button>
+                                <button type="button" onClick={exitSelect} className="font-mono text-tiny text-ink-secondary hover:text-foreground">Cancel</button>
                             </div>
                         </>
                     ) : (
-                        <span className="font-mono text-[0.72rem] text-ink-muted">
+                        <span className="font-mono text-tiny text-ink-muted">
                             {dirStats.count} item{dirStats.count === 1 ? '' : 's'} ({dirStats.dirs} folders · {dirStats.files} files) · {fmtSize(dirStats.bytes)}
                         </span>
                     )}
@@ -1320,20 +1318,20 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
 
             {/* ============================ transfers dock ============================ */}
             {(queue.length > 0 || download) && (
-                <div className="flex flex-col gap-2 border-t border-hairline bg-card px-4 py-3">
-                    <p className="flex items-center gap-2 text-[0.72rem] font-bold tracking-[0.12em] text-ink-muted uppercase">
+                <div className="flex flex-col gap-2 border-t border-hairline bg-console px-4 py-3">
+                    <p className="flex items-center gap-2 text-tiny font-bold tracking-[0.12em] text-ink-muted uppercase">
                         <Upload size={12} />
                         {queue.length ? `Uploading ${queue.length} file${queue.length === 1 ? '' : 's'}` : `Downloading ${download?.name ?? 'file'}`}
                     </p>
                     {queue.map((it) => (
                         <div key={it.id} className="flex flex-col gap-1.5">
                             <div className="flex items-center gap-3">
-                                <span className="min-w-0 flex-1 truncate font-mono text-[0.78rem] text-ink-secondary">{it.name}</span>
-                                <span className="shrink-0 font-mono text-[0.72rem] text-ink-muted">
+                                <span className="min-w-0 flex-1 truncate font-mono text-tiny text-ink-secondary">{it.name}</span>
+                                <span className="shrink-0 font-mono text-tiny text-ink-muted">
                                     {fmtSize(it.size)} · {it.status === 'failed' ? 'failed' : `${Math.round((it.ratio ?? 0) * 100)}%`}
                                 </span>
                                 {it.status === 'failed' && (
-                                    <button type="button" onClick={() => retryUpload(it.id)} className="shrink-0 rounded-md border border-hairline px-2 py-0.5 font-mono text-[0.7rem] font-bold text-ink-secondary hover:text-ink">Retry</button>
+                                    <button type="button" onClick={() => retryUpload(it.id)} className="shrink-0 rounded-md border border-hairline px-2 py-0.5 font-mono text-tiny font-bold text-ink-secondary hover:text-ink">Retry</button>
                                 )}
                                 <button type="button" onClick={() => { it.abort?.(); patchItem(it.id, { status: 'cancelled' }); }} aria-label={`Cancel ${it.name}`} className="shrink-0 rounded-md p-1 text-ink-muted hover:text-red-400">
                                     <X size={14} />
@@ -1345,15 +1343,15 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
                                     style={{ width: `${Math.round((it.ratio ?? 0) * 100)}%` }}
                                 />
                             </div>
-                            {it.error && <p className="text-[0.72rem] text-red-400">{it.error}</p>}
+                            {it.error && <p className="text-tiny text-red-400">{it.error}</p>}
                         </div>
                     ))}
                     {download && (
                         <div className="flex flex-col gap-1.5">
                             <div className="flex items-center gap-3">
-                                <span className="min-w-0 flex-1 truncate font-mono text-[0.78rem] text-ink-secondary">{download.name}</span>
-                                <span className="shrink-0 font-mono text-[0.72rem] text-ink-muted">{Math.round((download.ratio ?? 0) * 100)}%</span>
-                                <button type="button" onClick={() => download.abort?.()} className="shrink-0 rounded-md border border-red-500/40 px-2 py-0.5 font-mono text-[0.7rem] font-bold text-red-400">Stop</button>
+                                <span className="min-w-0 flex-1 truncate font-mono text-tiny text-ink-secondary">{download.name}</span>
+                                <span className="shrink-0 font-mono text-tiny text-ink-muted">{Math.round((download.ratio ?? 0) * 100)}%</span>
+                                <button type="button" onClick={() => download.abort?.()} className="shrink-0 rounded-md border border-red-500/40 px-2 py-0.5 font-mono text-tiny font-bold text-red-400">Stop</button>
                             </div>
                             <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
                                 <div className="h-full rounded-full bg-white transition-[width]" style={{ width: `${Math.round((download.ratio ?? 0) * 100)}%` }} />
@@ -1368,14 +1366,14 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
             {preview && (
                 <div className="fixed inset-0 z-[80] flex justify-end" role="dialog" aria-modal="true" aria-label={`Preview ${preview.name}`}>
                     <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setPreview(null)} />
-                    <div className="relative flex h-full w-full max-w-xl flex-col border-l border-hairline bg-card shadow-2xl">
+                    <div className="relative flex h-full w-full max-w-xl flex-col border-l border-hairline bg-console shadow-2xl">
                         <div className="flex items-center gap-2.5 border-b border-hairline px-4 py-3">
                             <span className={cn('flex size-8 shrink-0 items-center justify-center rounded-lg', KIND_TILE[tileKind({ type: 'file', name: preview.name })])}>
                                 <FileText size={16} />
                             </span>
                             <div className="min-w-0 flex-1 leading-tight">
-                                <p className="truncate text-[0.88rem] font-semibold">{preview.name}</p>
-                                <p className="font-mono text-[0.68rem] text-ink-muted">
+                                <p className="truncate text-small font-semibold">{preview.name}</p>
+                                <p className="font-mono text-micro text-ink-muted">
                                     {preview.kind} · {fmtSize(preview.size)}
                                 </p>
                             </div>
@@ -1400,8 +1398,8 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
                             {previewLoading && <Loader2 size={28} className="animate-spin text-ink-muted" />}
                             {!previewLoading && previewError && (
                                 <div className="flex flex-col items-center gap-2 py-10 text-center">
-                                    <p className="text-[0.9rem] font-semibold text-red-400">Preview failed</p>
-                                    <p className="max-w-sm text-[0.8rem] text-ink-secondary">{previewError}</p>
+                                    <p className="text-body font-semibold text-red-400">Preview failed</p>
+                                    <p className="max-w-sm text-small text-ink-secondary">{previewError}</p>
                                 </div>
                             )}
                             {!previewLoading && !previewError && previewUrl && preview.kind === 'image' && (
@@ -1431,8 +1429,8 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
                 <div className="pointer-events-none absolute inset-0 z-30 bg-black/70 backdrop-blur-sm">
                     <div className="absolute inset-3 flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-white/30">
                         <Upload size={30} className="text-white" />
-                        <p className="text-[0.95rem] font-bold">Drop to upload</p>
-                        <p className="font-mono text-[0.75rem] text-ink-secondary">into {dirPath || '/ (root)'}</p>
+                        <p className="text-lead font-bold">Drop to upload</p>
+                        <p className="font-mono text-tiny text-ink-secondary">into {dirPath || '/ (root)'}</p>
                     </div>
                 </div>
             )}
@@ -1453,7 +1451,7 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
                     danger={sheet.type.startsWith('delete')}
                 >
                     {sheet.type.startsWith('delete') ? (
-                        <p className="text-[0.88rem] text-ink-secondary">
+                        <p className="text-small text-ink-secondary">
                             {sheet.names?.length
                                 ? `${sheet.names.length} item(s) will be permanently removed. Folders are deleted with everything inside. This cannot be undone.`
                                 : sheet.entry.type === 'dir'
@@ -1470,7 +1468,7 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
                                 placeholder="path/inside/storage"
                                 className={cn(inputClass, 'font-mono')}
                             />
-                            <p className="mt-2 font-mono text-[0.72rem] text-ink-muted">Destination path inside storage — folders are created as needed.</p>
+                            <p className="mt-2 font-mono text-tiny text-ink-muted">Destination path inside storage — folders are created as needed.</p>
                         </>
                     ) : sheet.type === 'extract' ? (
                         <>
@@ -1481,7 +1479,7 @@ export default function ServerFiles({ server, apiBase = '/servers', readOnly = f
                                 placeholder="Current folder (leave empty)"
                                 className={cn(inputClass, 'font-mono')}
                             />
-                            <p className="mt-2 font-mono text-[0.72rem] text-ink-muted">Empty = extract here. Or type a subfolder name.</p>
+                            <p className="mt-2 font-mono text-tiny text-ink-muted">Empty = extract here. Or type a subfolder name.</p>
                         </>
                     ) : (
                         <input

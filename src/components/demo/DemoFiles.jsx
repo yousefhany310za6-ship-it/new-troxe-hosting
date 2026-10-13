@@ -136,22 +136,43 @@ export default function DemoFiles({ now }) {
         setOpenFile({ ...entry, path: dir ? `${dir}/${entry.name}` : entry.name });
     };
 
+    // Mirrors ServerFiles.jsx:887/896 exactly — `min-h-[70vh]` on the section plus
+    // no `self-start` on the rail, so the divider runs the full height instead of
+    // stopping mid-panel and leaving a black gap. (A `{/* */}` child can't be the
+    // first node inside `return (` — esbuild reads it as an empty JS expression.)
     return (
-        <section className="relative flex h-[440px] flex-col overflow-hidden rounded-2xl border border-hairline bg-card sm:h-[520px]">
+        <section className="relative flex min-h-[70vh] overflow-hidden rounded-2xl border border-hairline bg-card">
             <span
                 aria-hidden="true"
                 className="pointer-events-none absolute inset-x-0 top-0 z-10 h-px bg-gradient-to-r from-transparent via-white/30 to-transparent"
             />
 
             {/* ---- folder tree (desktop only, as in production) ---- */}
-            <aside className="hidden w-56 shrink-0 flex-col border-r border-hairline bg-veil/25 lg:flex">
+            <aside className="hidden w-60 shrink-0 flex-col border-r border-hairline bg-veil/25 lg:flex">
                 <div className="flex items-center gap-2 border-b border-hairline px-3.5 py-3">
                     <FolderTreeIcon size={15} className="shrink-0 text-ink-muted" aria-hidden="true" />
                     <p className="text-[0.82rem] font-bold tracking-wide">Folders</p>
                 </div>
-                <nav className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto py-1.5">
-                    {segments(dir).map((seg, i) => {
-                        const target = segments(dir).slice(0, i + 1).join('/');
+                <nav className="flex flex-col gap-1 py-1.5">
+                    <button
+                        type="button"
+                        onClick={() => {
+                            setDir('');
+                            setOpenFile(null);
+                        }}
+                        className={cn(
+                            'flex items-center gap-2 rounded-lg px-2 py-1.5 text-[0.82rem] font-medium transition',
+                            dir === ''
+                                ? 'bg-white/[0.09] text-foreground'
+                                : 'text-ink-secondary hover:bg-white/[0.05] hover:text-foreground'
+                        )}
+                    >
+                        <HardDrive size={14} className="shrink-0 text-ink-muted" aria-hidden="true" />
+                        <span className="truncate">Storage root</span>
+                    </button>
+
+                    {segments(dir).map((seg, i, arr) => {
+                        const target = arr.slice(0, i + 1).join('/');
                         const active = target === dir;
                         return (
                             <button
@@ -174,22 +195,6 @@ export default function DemoFiles({ now }) {
                             </button>
                         );
                     })}
-                    <button
-                        type="button"
-                        onClick={() => {
-                            setDir('');
-                            setOpenFile(null);
-                        }}
-                        className={cn(
-                            'flex items-center gap-2 rounded-lg px-2 py-1.5 text-[0.82rem] font-medium transition',
-                            dir === ''
-                                ? 'bg-white/[0.09] text-foreground'
-                                : 'text-ink-secondary hover:bg-white/[0.05] hover:text-foreground'
-                        )}
-                    >
-                        <HardDrive size={14} className="shrink-0 text-ink-muted" aria-hidden="true" />
-                        <span className="truncate">Storage root</span>
-                    </button>
                 </nav>
                 <div className="border-t border-hairline px-3 py-2.5">
                     <p className="text-[0.68rem] leading-relaxed text-ink-muted">
@@ -199,7 +204,7 @@ export default function DemoFiles({ now }) {
             </aside>
 
             {/* ---- main pane ---- */}
-            <div className="flex min-w-0 flex-1 flex-col">
+            <div className="flex min-w-0 flex-1 self-stretch flex-col">
                 {/* toolbar */}
                 <div className="flex flex-col gap-2.5 border-b border-hairline px-3 py-2.5 sm:px-4">
                     <div className="flex items-center gap-1.5">
@@ -292,7 +297,7 @@ export default function DemoFiles({ now }) {
                 </div>
 
                 {/* ---- content ---- */}
-                <div className="min-h-0 flex-1 overflow-y-auto">
+                <div className="flex-1">
                     {creating && (
                         <div className="flex flex-wrap items-center gap-2 border-b border-hairline bg-veil/25 px-4 py-3">
                             <label htmlFor="demo-new-file" className="text-[0.8rem] font-semibold text-ink-secondary">
@@ -359,7 +364,7 @@ export default function DemoFiles({ now }) {
                                     </span>
                                 )}
                             </div>
-                            <pre className="min-h-0 flex-1 overflow-auto px-4 py-3 font-mono text-[0.76rem] leading-[1.6] whitespace-pre-wrap text-ink-secondary">
+                            <pre className="max-h-[420px] overflow-auto px-4 py-3 font-mono text-[0.76rem] leading-[1.6] whitespace-pre-wrap text-ink-secondary">
                                 {openFile.body ?? '// This demo file has no preview content.'}
                             </pre>
                         </div>
@@ -422,7 +427,7 @@ export default function DemoFiles({ now }) {
                                                             {entry.name}
                                                         </span>
                                                         <span className="mt-0.5 block truncate font-mono text-[0.66rem] text-ink-muted sm:hidden">
-                                                            {isDir ? 'Folder' : `${fmtSize(entry.size)} · ${fmtModified(entry.modifiedAt)}`}
+                                                            {isDir ? 'Folder' : `${fmtSize(entry.size)} · ${fmtModified(entry.modifiedAt, now)}`}
                                                         </span>
                                                     </span>
 
@@ -430,7 +435,7 @@ export default function DemoFiles({ now }) {
                                                         {isDir ? <span className="text-ink-muted">—</span> : fmtSize(entry.size)}
                                                     </span>
                                                     <span className="hidden w-32 shrink-0 text-right font-mono text-[0.7rem] text-ink-muted sm:block">
-                                                        {fmtDate(entry.modifiedAt)}
+                                                        {fmtModified(entry.modifiedAt, now)}
                                                     </span>
                                                 </button>
                                             );

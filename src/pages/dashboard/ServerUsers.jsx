@@ -59,17 +59,17 @@ function PermissionGrid({ value, onChange, disabled }) {
             onClick={() => toggle(p.key)}
             aria-pressed={on}
             className={cn(
-              'rounded-xl border p-3 text-left transition',
+              'console-lift rounded-xl border p-3 text-left',
               on ? 'border-white/40 bg-white/[0.07]' : 'border-hairline bg-veil/40 hover:border-hairline-hover'
             )}
           >
-            <span className="flex items-center gap-2 text-[0.84rem] font-bold">
+            <span className="flex items-center gap-2 text-small font-bold">
               <span className={cn('flex size-4 items-center justify-center rounded border text-[0.65rem]', on ? 'border-white bg-white text-black' : 'border-hairline text-transparent')}>
                 ✓
               </span>
               {p.title}
             </span>
-            <span className="mt-1 block text-[0.74rem] leading-relaxed text-ink-secondary">{p.text}</span>
+            <span className="mt-1 block text-tiny leading-relaxed text-ink-secondary">{p.text}</span>
           </button>
         );
       })}
@@ -122,37 +122,37 @@ export default function ServerUsers({ server }) {
 
   return (
     <div className="flex flex-col gap-5">
-      <section className="rounded-2xl border border-hairline bg-card p-5 sm:p-6">
+      <section className="console-card p-5 sm:p-6">
         <header className="flex items-center gap-2.5">
           <UserPlus className="size-4 text-ink-muted" aria-hidden="true" />
-          <h2 className="text-[0.95rem] font-semibold">Share this server</h2>
+          <h2 className="text-lead font-semibold">Share this server</h2>
         </header>
-        <p className="mt-1.5 max-w-2xl text-[0.82rem] leading-relaxed text-ink-secondary">
+        <p className="mt-1.5 max-w-2xl text-small leading-relaxed text-ink-secondary">
           They sign in with their own account and only get what you tick below. The really destructive actions —
           deleting the server, reinstalling it, changing its runtime and managing this list — always stay yours.
           Sharing works with accounts that already exist on Troxe — so they need to sign up first.
         </p>
         <form onSubmit={submitAdd} className="mt-4 flex flex-col gap-3">
           <label className="block max-w-md">
-            <span className="mb-1.5 block text-[0.82rem] font-semibold text-ink-secondary">Their account email</span>
+            <span className="mb-1.5 block text-small font-semibold text-ink-secondary">Their account email</span>
             <input
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="friend@example.com"
               dir="ltr"
               maxLength={255}
-              className="w-full rounded-xl border border-hairline bg-white/10 px-4 py-2.5 text-[0.88rem] text-foreground placeholder-ink-muted transition focus:border-primary focus:ring-2 focus:ring-ring/40 focus:outline-none"
+              className="input-field"
             />
           </label>
           <PermissionGrid value={perms} onChange={setPerms} disabled={add.isPending} />
           {formError && !editing && (
-            <p className="text-[0.8rem] text-red-300" role="alert">{formError}</p>
+            <p className="text-tiny text-red-300" role="alert">{formError}</p>
           )}
           <div>
             <button
               type="submit"
               disabled={add.isPending}
-              className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-[0.84rem] font-bold text-black transition hover:bg-white/90 disabled:opacity-50"
+              className="btn btn-primary"
             >
               {add.isPending ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <UserPlus className="size-4" aria-hidden="true" />}
               Share server
@@ -161,37 +161,37 @@ export default function ServerUsers({ server }) {
         </form>
       </section>
 
-      <section className="rounded-2xl border border-hairline bg-card p-5 sm:p-6" aria-label="People with access">
-        <h2 className="flex items-center gap-2 text-[0.95rem] font-semibold">
+      <section className="console-card p-5 sm:p-6" aria-label="People with access">
+        <h2 className="flex items-center gap-2 text-lead font-semibold">
           <ShieldCheck className="size-4 text-ink-muted" aria-hidden="true" />
           People with access
-          <span className="font-mono text-[0.72rem] font-normal text-ink-muted tabular-nums">{rows.length}/20</span>
+          <span className="font-mono text-tiny font-normal text-ink-muted tabular-nums">{rows.length}/20</span>
         </h2>
 
         {isLoading ? (
           <div className="mt-4 flex flex-col gap-2" aria-busy="true">
-            {[0, 1].map((i) => <div key={i} className="h-14 animate-pulse rounded-xl bg-white/[0.04]" />)}
+            {[0, 1].map((i) => <div key={i} className="h-14 animate-pulse rounded-xl bg-console" />)}
           </div>
         ) : error ? (
-          <p className="mt-4 rounded-xl border border-red-500/25 bg-red-500/5 px-4 py-3 text-[0.84rem] text-red-200" role="alert">
+          <p className="mt-4 rounded-xl border border-red-500/25 bg-red-500/5 px-4 py-3 text-small text-red-200" role="alert">
             Could not load the list: {error.message}
           </p>
         ) : rows.length === 0 ? (
-          <p className="mt-4 rounded-xl border border-dashed border-hairline px-4 py-8 text-center text-[0.84rem] text-ink-secondary">
+          <p className="mt-4 rounded-xl border border-dashed border-hairline px-4 py-8 text-center text-small text-ink-secondary">
             Only you can access this server right now.
           </p>
         ) : (
           <ul className="mt-4 flex flex-col gap-2.5">
             {rows.map((r) => (
-              <li key={r.userId} className="rounded-xl border border-hairline bg-veil/40 p-4">
+              <li key={r.userId} className="console-lift rounded-xl border border-hairline bg-veil/40 p-4">
                 <div className="flex flex-wrap items-center gap-3">
-                  <AvatarBadge url={r.avatarUrl} name={r.name ?? r.email} size="size-9" text="text-sm" />
+                  <AvatarBadge url={r.avatarUrl} name={r.name ?? r.email} size="size-9" text="text-small" />
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-[0.9rem] font-bold">{r.name ?? 'Account'}</p>
-                    <p className="truncate font-mono text-[0.72rem] text-ink-muted" dir="ltr">{r.email}</p>
+                    <p className="truncate text-body font-bold">{r.name ?? 'Account'}</p>
+                    <p className="truncate font-mono text-tiny text-ink-muted" dir="ltr">{r.email}</p>
                   </div>
                   {r.status !== 'active' && (
-                    <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-0.5 text-[0.7rem] font-bold text-amber-300">
+                    <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-0.5 text-tiny font-bold text-amber-300">
                       {r.status}
                     </span>
                   )}
@@ -199,7 +199,7 @@ export default function ServerUsers({ server }) {
                     <button
                       type="button"
                       onClick={() => { setEditing(editing === r.userId ? null : r.userId); setEditPerms(r.permissions ?? []); setFormError(null); }}
-                      className="rounded-full border border-hairline px-3.5 py-1.5 text-[0.76rem] font-bold text-ink-secondary transition hover:text-foreground"
+                      className="btn btn-secondary btn-sm"
                     >
                       {editing === r.userId ? 'Cancel' : 'Edit'}
                     </button>
@@ -207,13 +207,13 @@ export default function ServerUsers({ server }) {
                       type="button"
                       onClick={() => setConfirmRemove(r)}
                       aria-label={`Remove ${r.email}`}
-                      className="inline-flex size-8 items-center justify-center rounded-full border border-hairline text-ink-muted transition hover:border-red-500/50 hover:text-red-400"
+                      className="inline-flex size-8 items-center justify-center rounded-full border border-hairline text-ink-muted transition hover:border-red-500/50! hover:text-red-400"
                     >
                       <Trash2 size={14} />
                     </button>
                   </div>
                 </div>
-                <p className="mt-2.5 text-[0.76rem] text-ink-secondary">
+                <p className="mt-2.5 text-tiny text-ink-secondary">
                   {(r.permissions ?? []).length
                     ? (r.permissions ?? []).map((k) => PERMISSIONS.find((p) => p.key === k)?.title ?? k).join(' · ')
                     : 'No permissions'}
@@ -222,14 +222,14 @@ export default function ServerUsers({ server }) {
                   <div className="mt-3 border-t border-hairline pt-3">
                     <PermissionGrid value={editPerms} onChange={setEditPerms} disabled={update.isPending} />
                     {formError && (
-                      <p className="mt-2 text-[0.8rem] text-red-300" role="alert">{formError}</p>
+                      <p className="mt-2 text-tiny text-red-300" role="alert">{formError}</p>
                     )}
                     <div className="mt-3 flex justify-end">
                       <button
                         type="button"
                         disabled={update.isPending || !editPerms.length}
                         onClick={() => submitEdit(r.userId)}
-                        className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-[0.82rem] font-bold text-black transition hover:bg-white/90 disabled:opacity-50"
+                        className="btn btn-primary"
                       >
                         {update.isPending && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
                         Save permissions
@@ -242,7 +242,7 @@ export default function ServerUsers({ server }) {
           </ul>
         )}
 
-        <button type="button" onClick={() => refetch()} className="mt-3 text-[0.78rem] font-bold text-ink-secondary underline decoration-dotted hover:text-foreground">
+        <button type="button" onClick={() => refetch()} className="mt-3 text-tiny font-bold text-ink-secondary underline decoration-dotted hover:text-foreground">
           Refresh list
         </button>
       </section>

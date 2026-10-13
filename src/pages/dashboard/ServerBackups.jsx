@@ -65,7 +65,7 @@ function StatusChip({ status }) {
   return (
     <span
       className={cn(
-        'inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[0.7rem] font-semibold',
+        'inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-tiny font-semibold',
         STATUS_CHIP[s] ?? 'border-hairline bg-veil text-ink-secondary',
       )}
     >
@@ -82,7 +82,7 @@ function StatusChip({ status }) {
 function TypeChip({ type }) {
   const auto = type === 'auto';
   return (
-    <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-hairline bg-veil px-2 py-0.5 text-[0.68rem] font-semibold text-ink-secondary">
+    <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-hairline bg-veil px-2 py-0.5 text-micro font-semibold text-ink-secondary">
       {auto ? <Sparkles size={11} className="text-violet-300" /> : <Clock size={11} />}
       {auto ? 'Automatic' : 'Manual'}
     </span>
@@ -116,11 +116,11 @@ function SlotsRing({ used, slots, locked = false }) {
         />
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <span className="font-mono text-[1.15rem] leading-none font-extrabold tabular-nums">
+        <span className="font-mono text-lead leading-none font-extrabold tabular-nums">
           {used}
-          <span className="text-[0.8rem] font-bold text-ink-muted">/{slots}</span>
+          <span className="text-small font-bold text-ink-muted">/{slots}</span>
         </span>
-        <span className="mt-0.5 text-[0.6rem] font-bold tracking-[0.12em] text-ink-muted uppercase">slots</span>
+        <span className="mt-0.5 text-micro font-bold tracking-[0.12em] text-ink-muted uppercase">slots</span>
       </div>
     </div>
   );
@@ -129,10 +129,10 @@ function SlotsRing({ used, slots, locked = false }) {
 /** A labelled number in the hero strip. */
 function Stat({ label, value, sub }) {
   return (
-    <div className="flex-1 rounded-xl border border-hairline bg-veil/30 px-4 py-3">
-      <p className="text-[0.68rem] font-bold tracking-[0.12em] text-ink-muted uppercase">{label}</p>
-      <p className="mt-1 font-mono text-[1.05rem] font-extrabold tabular-nums">{value}</p>
-      {sub && <p className="mt-0.5 text-[0.72rem] text-ink-secondary">{sub}</p>}
+    <div className="console-lift flex-1 rounded-xl border border-hairline bg-veil/30 px-4 py-3">
+      <p className="text-micro font-bold tracking-[0.12em] text-ink-muted uppercase">{label}</p>
+      <p className="mt-1 font-mono text-lead font-extrabold tabular-nums">{value}</p>
+      {sub && <p className="mt-0.5 text-tiny text-ink-secondary">{sub}</p>}
     </div>
   );
 }
@@ -172,7 +172,7 @@ export default function ServerBackups({
   return (
     <div className="flex flex-col gap-5">
       {/* ============================ protection hero ============================ */}
-      <section className="relative overflow-hidden rounded-2xl border border-hairline bg-card">
+      <section className="console-card relative overflow-hidden">
         <div
           aria-hidden="true"
           className="pointer-events-none absolute inset-0"
@@ -186,10 +186,10 @@ export default function ServerBackups({
             </span>
           )}
           <div className="min-w-0 flex-1 basis-56">
-            <h2 className="text-[1.35rem] font-extrabold tracking-tight">
+            <h2 className="text-display-lg font-extrabold tracking-tight">
               {locked ? 'Backups are locked' : ready.length === 0 ? 'Not protected yet' : 'Protected'}
             </h2>
-            <p className="mt-1 max-w-lg text-[0.85rem] leading-relaxed text-ink-secondary">
+            <p className="mt-1 max-w-lg text-small leading-relaxed text-ink-secondary">
               {quota == null ? (
                 'Full copies of your server files — restore any of them in one click.'
               ) : locked ? (
@@ -213,7 +213,7 @@ export default function ServerBackups({
           {!locked && (
             <div className="flex shrink-0 items-center gap-3">
               {slots != null && slots > 0 && (
-                <span className="hidden font-mono text-[0.72rem] text-ink-muted tabular-nums sm:inline">
+                <span className="hidden font-mono text-tiny text-ink-muted tabular-nums sm:inline">
                   {used}/{slots} slots
                 </span>
               )}
@@ -222,7 +222,7 @@ export default function ServerBackups({
                 onClick={onCreateBackup}
                 disabled={creating || full}
                 title={full ? 'All backup slots are used — delete one to make room' : 'Take a snapshot now'}
-                className="inline-flex items-center gap-1.5 rounded-full bg-white px-4 py-2.5 text-[0.82rem] font-bold text-black transition hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-40"
+                className="btn btn-primary"
               >
                 {creating ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
                 {creating ? 'Creating…' : full ? 'Slots full' : 'Create backup'}
@@ -244,7 +244,7 @@ export default function ServerBackups({
 
       {/* ---- locked hero ---- */}
       {locked && (
-        <section className="relative overflow-hidden rounded-2xl border border-amber-500/25 bg-card p-6 text-center sm:p-10">
+        <section className="console-card relative overflow-hidden border-amber-500/25! p-6 text-center sm:p-10">
           <div
             aria-hidden="true"
             className="pointer-events-none absolute inset-0"
@@ -254,25 +254,22 @@ export default function ServerBackups({
             <span className="flex size-16 items-center justify-center rounded-2xl border border-amber-500/30 bg-amber-500/10 text-amber-300">
               <Lock className="size-7" />
             </span>
-            <h3 className="mt-4 text-[1.15rem] font-extrabold">Protect {server.name}</h3>
-            <p className="mt-1.5 max-w-md text-[0.85rem] leading-relaxed text-ink-secondary">
+            <h3 className="mt-4 text-lead font-extrabold">Protect {server.name}</h3>
+            <p className="mt-1.5 max-w-md text-small leading-relaxed text-ink-secondary">
               Manual snapshots and daily automatic backups are available from the Starter plan up.
             </p>
-            <div className="mt-4 flex flex-wrap items-center justify-center gap-2 text-[0.76rem]">
+            <div className="mt-4 flex flex-wrap items-center justify-center gap-2 text-tiny">
               {[
                 ['Starter', '2 slots'],
                 ['Pro', '3 slots'],
                 ['Super', '10 slots'],
               ].map(([plan, what]) => (
-                <span key={plan} className="inline-flex items-center gap-1.5 rounded-full border border-hairline bg-veil px-3 py-1 font-semibold text-ink-secondary">
+                <span key={plan} className="chip">
                   <Check size={12} className="text-emerald-400" /> {plan} · {what}
                 </span>
               ))}
             </div>
-            <Link
-              to="/pricing"
-              className="group mt-5 inline-flex items-center gap-2 rounded-full bg-white px-5 py-2.5 text-[0.85rem] font-bold text-black transition hover:bg-gray-200"
-            >
+            <Link to="/pricing" className="btn btn-primary mt-5">
               <Crown className="size-4" /> Upgrade plan
               <ChevronRight size={15} className="transition group-hover:translate-x-0.5" />
             </Link>
@@ -282,18 +279,18 @@ export default function ServerBackups({
 
       {/* ---- automatic backups ---- */}
       {!locked && (
-        <section className="flex flex-wrap items-center gap-4 rounded-2xl border border-hairline bg-card p-5">
+        <section className="console-card flex flex-wrap items-center gap-4 p-5">
           <span className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-hairline bg-veil text-ink-secondary">
             <Database className="size-5" />
           </span>
           <div className="min-w-0 flex-1 basis-64">
-            <p className="flex items-center gap-2 text-[0.92rem] font-bold">
+            <p className="flex items-center gap-2 text-md font-bold">
               Automatic snapshots
               {server.autoBackup && (
-                <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[0.68rem] font-bold text-emerald-300">ON</span>
+                <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-micro font-bold text-emerald-300">ON</span>
               )}
             </p>
-            <p className="mt-0.5 text-[0.8rem] leading-relaxed text-ink-secondary">
+            <p className="mt-0.5 text-small leading-relaxed text-ink-secondary">
               {server.autoBackup
                 ? `The platform checks for a due snapshot all day long and takes one at most once every 24 hours, keeping the newest ${server.autoBackupRetain ?? 7}. Suspended servers are skipped.`
                 : 'Off — only manual snapshots. Turn this on for daily protection without thinking about it.'}
@@ -301,14 +298,14 @@ export default function ServerBackups({
           </div>
           <div className="flex shrink-0 items-center gap-3">
             {server.autoBackup && (
-              <span className="flex items-center gap-2 text-[0.85rem] font-semibold">
+              <span className="flex items-center gap-2 text-small font-semibold">
                 Keep
                 <Select
                   ariaLabel="Backup retention"
                   value={String(server.autoBackupRetain ?? 7)}
                   onChange={(v) => onRetain(Number(v))}
                   options={[1, 3, 7, 14, 30].map((n) => ({ value: String(n), label: `${n} snapshot${n === 1 ? '' : 's'}` }))}
-                  buttonClassName="px-2.5 py-1.5 font-mono text-[0.82rem]"
+                  buttonClassName="px-2.5 py-1.5 font-mono text-small"
                 />
               </span>
             )}
@@ -337,13 +334,13 @@ export default function ServerBackups({
       {/* ============================ snapshot timeline ============================ */}
       {list.length === 0 ? (
         !locked && (
-          <div className="flex flex-col items-center gap-3 rounded-2xl border border-dashed border-hairline bg-card px-4 py-14 text-center">
+          <div className="flex flex-col items-center gap-3 rounded-2xl border border-dashed border-hairline bg-console px-4 py-14 text-center">
             <span className="flex size-12 items-center justify-center rounded-2xl border border-hairline bg-veil">
               <Archive className="size-6 text-ink-muted" />
             </span>
             <div>
-              <p className="text-[0.95rem] font-bold">No snapshots yet</p>
-              <p className="mt-1 max-w-xs text-[0.82rem] text-ink-secondary">
+              <p className="text-lead font-bold">No snapshots yet</p>
+              <p className="mt-1 max-w-xs text-small text-ink-secondary">
                 Take your first snapshot — if anything breaks you can roll the whole server back in one click.
               </p>
             </div>
@@ -351,7 +348,7 @@ export default function ServerBackups({
               type="button"
               onClick={onCreateBackup}
               disabled={creating}
-              className="inline-flex items-center gap-1 rounded-full bg-white px-4 py-2 text-[0.8rem] font-bold text-black transition hover:bg-gray-200 disabled:opacity-40"
+              className="btn btn-primary btn-sm"
             >
               <Plus className="size-4" /> Create first backup
             </button>
@@ -359,7 +356,7 @@ export default function ServerBackups({
         )
       ) : (
         <div className="flex flex-col gap-2.5">
-          <p className="flex items-center gap-2 px-1 text-[0.72rem] font-bold tracking-[0.14em] text-ink-muted uppercase">
+          <p className="flex items-center gap-2 px-1 text-tiny font-bold tracking-[0.14em] text-ink-muted uppercase">
             <History size={13} />
             {list.length} snapshot{list.length === 1 ? '' : 's'} · newest first
           </p>
@@ -370,8 +367,8 @@ export default function ServerBackups({
               <div
                 key={backup.id}
                 className={cn(
-                  'relative flex flex-col gap-3 rounded-2xl border bg-card p-4 transition duration-150 hover:border-hairline-hover sm:flex-row sm:flex-wrap sm:items-center sm:px-5',
-                  failed ? 'border-red-500/25' : 'border-hairline',
+                  'console-card console-lift relative flex flex-col gap-3 p-4 sm:flex-row sm:flex-wrap sm:items-center sm:px-5',
+                  failed ? 'border-red-500/25!' : '',
                 )}
               >
                 {/* timeline rail */}
@@ -396,11 +393,11 @@ export default function ServerBackups({
                 </span>
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
-                    <p className="truncate font-mono text-[0.88rem] font-bold">{backup.name}</p>
+                    <p className="truncate font-mono text-small font-bold">{backup.name}</p>
                     <TypeChip type={backup.type} />
                     <StatusChip status={backup.status} />
                   </div>
-                  <p className="mt-1 truncate font-mono text-[0.72rem] text-ink-muted" title={fmtDateTime(backup.createdAt)}>
+                  <p className="mt-1 truncate font-mono text-tiny text-ink-muted" title={fmtDateTime(backup.createdAt)}>
                     {fmtBytes(backup.sizeBytes)} · {timeAgo(backup.createdAt)}
                     {failed && backup.error ? <span className="text-red-300"> · {String(backup.error).slice(0, 160)}</span> : null}
                   </p>
@@ -411,7 +408,7 @@ export default function ServerBackups({
                     onClick={() => onDownload(backup)}
                     disabled={backup.status !== 'ready' || !!downloadingId}
                     title={backup.status === 'ready' ? 'Download this snapshot' : 'Available once the snapshot is ready'}
-                    className="inline-flex items-center gap-1.5 rounded-full border border-hairline bg-veil px-3.5 py-1.5 text-[0.78rem] font-semibold text-ink-secondary transition hover:border-hairline-hover hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                    className="btn btn-secondary btn-sm"
                   >
                     {downloadingId === backup.id ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} Download
                   </button>
@@ -420,7 +417,7 @@ export default function ServerBackups({
                     onClick={() => onRestore(backup)}
                     disabled={backup.status !== 'ready'}
                     title="Restore this snapshot"
-                    className="inline-flex items-center gap-1.5 rounded-full border border-hairline bg-veil px-3.5 py-1.5 text-[0.78rem] font-semibold text-ink-secondary transition hover:border-hairline-hover hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                    className="btn btn-secondary btn-sm"
                   >
                     <History size={14} /> Restore
                   </button>
@@ -429,7 +426,7 @@ export default function ServerBackups({
                     aria-label={`Delete ${backup.name}`}
                     title="Delete snapshot"
                     onClick={() => onDelete(backup)}
-                    className="inline-flex size-8 items-center justify-center rounded-full border border-hairline text-ink-muted transition hover:border-red-500/50 hover:text-red-400"
+                    className="inline-flex size-8 items-center justify-center rounded-full border border-hairline text-ink-muted transition hover:border-red-500/50! hover:text-red-400"
                   >
                     <Trash2 size={14} />
                   </button>
@@ -442,7 +439,7 @@ export default function ServerBackups({
 
       {/* ---- restore hint ---- */}
       {list.some((b) => b.status === 'ready') && (
-        <p className="flex items-start gap-2 rounded-xl border border-hairline bg-white/[0.02] px-4 py-3 text-[0.78rem] leading-relaxed text-ink-secondary">
+        <p className="flex items-start gap-2 rounded-xl border border-hairline bg-white/[0.02] px-4 py-3 text-tiny leading-relaxed text-ink-secondary">
           <AlertTriangle size={14} className="mt-0.5 shrink-0 text-amber-300" />
           Restoring replaces the server&apos;s current files with the snapshot. Files created after it are lost — take a
           fresh backup first if they matter.

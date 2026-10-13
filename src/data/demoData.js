@@ -189,9 +189,12 @@ export const DEMO_SERIES = (() => {
 
 /* ---------------------------------------------------------------
  * File manager fixtures. `body` powers the read-only preview.
+ *
+ * Keys are directory paths; the empty string is the storage root,
+ * which matches the `dir` state used by the demo file manager.
  * --------------------------------------------------------------- */
 export const DEMO_FILES = {
-    '.': [
+    '': [
         { name: 'src', type: 'dir', size: null, modifiedAt: '2026-10-09T18:40:00.000Z' },
         { name: 'public', type: 'dir', size: null, modifiedAt: '2026-10-02T11:05:00.000Z' },
         { name: '.env', type: 'file', size: 0.4 * 1024, modifiedAt: '2026-10-11T08:12:00.000Z' },

@@ -2,7 +2,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { randomInt } from 'crypto';
 import { rm } from 'fs/promises';
 import { posix } from 'path';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, ne, sql } from 'drizzle-orm';
 import { config } from '../../config/env';
 import { decryptEnv, encryptEnv, maskEnv } from '../../common/crypto';
 import { AppError, Err } from '../../common/errors';
@@ -18,12 +18,41 @@ import { ServerAccessService } from './server-access.service';
 import { normalizePermissions, type ServerPermission } from './server-access-policy';
 import { defaultMainFile, migrateEnvForRuntime, recommendedStartup, runtimeChangeWarnings } from './runtime-switch';
 import { PortsService } from './ports.service';
-import { ChangeRuntimeDto, CreateServerDto, UpdateServerDto } from './dto';
+import { ChangeRuntimeDto, CreateServerDto, RescaleServerDto, UpdateServerDto } from './dto';
 import { backupDirFor, backupOwnerDir } from './backup-paths';
+import { platformHardMax, resolveLimits, resolveRequest, serverHeadroom } from './resource-policy';
+import type { PlanResourceRow, ResourceGrant, ResourceUsage } from './resource-policy';
 import { RealtimeGateway } from '../auth/realtime.gateway';
 import { GeoIpService } from '../../common/geoip/geoip.service';
 
 const CONTROL_CHARS = /[\u0000-\u0008\u000B-\u001F\u007F]/g;
+
+/**
+ * Sum a set of server rows into the account usage shape the policy consumes.
+ * Rows in `deleting` state still count: the volume (and its disk) is only free
+ * once the teardown actually finished, so the conservative side is correct.
+ */
+function sumUsage(rows: { cpuMilli: number; ramMb: number; storageGb: number }[]): ResourceUsage {
+  return rows.reduce<ResourceUsage>(
+    (acc, r) => ({
+      servers: acc.servers + 1,
+      cpuMilli: acc.cpuMilli + (r.cpuMilli || 0),
+      ramMb: acc.ramMb + (r.ramMb || 0),
+      storageGb: acc.storageGb + (r.storageGb || 0),
+    }),
+    { servers: 0, cpuMilli: 0, ramMb: 0, storageGb: 0 },
+  );
+}
+
+/** Absolute per-server ceilings from the environment, never above the
+ *  compiled-in platform maximum. */
+function platformHardMaxConfigured() {
+  return platformHardMax({
+    cpuMilli: config.MAX_SERVER_CPU_MILLI,
+    ramMb: config.MAX_SERVER_RAM_MB,
+    storageGb: config.MAX_SERVER_STORAGE_GB,
+  });
+}
 
 @Injectable()
 export class ServersService {
@@ -239,6 +268,55 @@ export class ServersService {
     return rows[0];
   }
 
+  // ---- quotas ----------------------------------------------------------------
+
+  /**
+   * Everything the create / rescale forms need to render a truthful picker:
+   * the owner's plan, how many servers are left, and for each resource the
+   * per-server ceiling, the account pool and what is still free in it.
+   *
+   * Purely derived from `plans` + the owner's own servers, so it can never
+   * leak another account's numbers. `excludeServerId` makes a server's own
+   * allocation re-usable when it is being resized.
+   */
+  async quotaFor(ownerId: string, opts: { excludeServerId?: string } = {}) {
+    const [owner] = await this.db.select({ planId: users.planId }).from(users).where(eq(users.id, ownerId)).limit(1);
+    if (!owner) throw Err.notFound('USER_NOT_FOUND');
+    const [plan] = await this.db.select().from(plans).where(eq(plans.id, owner.planId)).limit(1);
+    if (!plan) throw Err.invalid('PLAN_INVALID', 'Unknown plan');
+
+    const owned = await this.db
+      .select({ cpuMilli: servers.cpuMilli, ramMb: servers.ramMb, storageGb: servers.storageGb })
+      .from(servers)
+      .where(
+        opts.excludeServerId
+          ? and(eq(servers.ownerId, ownerId), ne(servers.id, opts.excludeServerId))
+          : eq(servers.ownerId, ownerId),
+      );
+    return this.quotaPayload(plan, sumUsage(owned));
+  }
+
+  /** Shared read model for the user and admin forms. */
+  private quotaPayload(plan: PlanResourceRow, usage: ResourceUsage) {
+    const limits = resolveLimits(plan, usage);
+    const maxServers = Math.min(plan.maxServers || 0, config.MAX_SERVERS_PER_USER);
+    return {
+      plan: { id: plan.id, name: plan.name },
+      servers: {
+        used: usage.servers,
+        max: plan.maxServers,
+        accountMax: config.MAX_SERVERS_PER_USER,
+        remaining: serverHeadroom(plan, usage.servers, config.MAX_SERVERS_PER_USER),
+      },
+      resources: limits,
+      defaults: {
+        cpuMilli: limits.cpuMilli.max,
+        ramMb: limits.ramMb.max,
+        storageGb: limits.storageGb.max,
+      },
+    };
+  }
+
   // ---- create ---------------------------------------------------------------
 
   /**
@@ -315,11 +393,17 @@ export class ServersService {
     );
   }
 
-  async create(ownerId: string, dto: CreateServerDto, ctx: ReqCtx, opts?: { nodeId?: string }) {
+  async create(
+    ownerId: string,
+    dto: CreateServerDto,
+    ctx: ReqCtx,
+    opts?: { nodeId?: string; resourcesOverride?: boolean },
+  ) {
     // The plan comes from the account, never from the request body: otherwise
     // any client could claim "enterprise" and escalate its quotas (CVE-class).
     // Same for the node: users get placed automatically; only the admin path
     // may request a specific node (validated inside pickNode).
+    // `resourcesOverride` is the admin-only escape hatch and is audited.
     const region = dto.region ?? config.REGIONS[0];
     if (!config.REGIONS.includes(region)) throw Err.invalid('REGION_UNSUPPORTED', `Allowed regions: ${config.REGIONS.join(', ')}`);
     const nodeId = await this.pickHealthyNode(opts?.nodeId);
@@ -347,9 +431,10 @@ export class ServersService {
     }
 
     // quota + insert are ONE transaction holding a row lock on the owner:
-    // two concurrent creates cannot both pass the count check (TOCTOU).
+    // two concurrent creates cannot both pass the count check or both spend
+    // the same leftover pool (TOCTOU).
     // Docker provisioning stays outside (saga: reconciler heals orphans).
-    const { plan, row } = await this.db.transaction(async (tx) => {
+    const { plan, row, grant } = await this.db.transaction(async (tx) => {
       const [owner] = await tx
         .select({ planId: users.planId })
         .from(users)
@@ -360,11 +445,25 @@ export class ServersService {
       const [plan] = await tx.select().from(plans).where(eq(plans.id, owner.planId)).limit(1);
       if (!plan) throw Err.invalid('PLAN_INVALID', 'Unknown plan');
 
-      const owned = await tx.select({ id: servers.id }).from(servers).where(eq(servers.ownerId, ownerId));
+      const owned = await tx
+        .select({ id: servers.id, cpuMilli: servers.cpuMilli, ramMb: servers.ramMb, storageGb: servers.storageGb })
+        .from(servers)
+        .where(eq(servers.ownerId, ownerId));
       if (owned.length >= plan.maxServers)
         throw Err.quota('QUOTA_SERVERS', `Your "${plan.name}" plan allows ${plan.maxServers} server(s). Upgrade to add more.`);
       if (owned.length >= config.MAX_SERVERS_PER_USER)
         throw Err.quota('QUOTA_SERVERS', `Account limit of ${config.MAX_SERVERS_PER_USER} servers reached.`);
+
+      // What this server gets: the client's request clamped to BOTH the
+      // plan's per-server ceiling and what the account pool still has free.
+      const resolved = resolveRequest({
+        limits: resolveLimits(plan, sumUsage(owned)),
+        planName: plan.name,
+        override: opts?.resourcesOverride,
+        hardMax: platformHardMaxConfigured(),
+        requested: { cpuMilli: dto.cpuMilli, ramMb: dto.ramMb, storageGb: dto.storageGb },
+      });
+      if (!resolved.ok) throw Err.quota(resolved.refusal!.code, resolved.refusal!.message);
 
       const base: Record<string, unknown> = {
         ownerId,
@@ -375,9 +474,9 @@ export class ServersService {
         status: 'provisioning',
         region,
         planId: plan.id,
-        cpuMilli: plan.cpuMilli,
-        ramMb: plan.ramMb,
-        storageGb: plan.storageGb,
+        cpuMilli: resolved.grant.cpuMilli,
+        ramMb: resolved.grant.ramMb,
+        storageGb: resolved.grant.storageGb,
         startup: startupRaw,
         envEncrypted: storedEnv.length ? encryptEnv(storedEnv) : null,
         autoRestart: dto.autoRestart ?? true,
@@ -403,10 +502,17 @@ export class ServersService {
         }
       }
       if (!row) throw Err.unavailable('CONTACT_CODE_COLLISION', 'Could not allocate a server contact ID, please retry');
-      return { plan, row };
+      return { plan, row, grant: resolved.grant };
     });
 
-    await this.event(row.id, ownerId, 'create', { plan: plan.id, runtime: dto.runtime, region });
+    await this.event(row.id, ownerId, 'create', {
+      plan: plan.id,
+      runtime: dto.runtime,
+      region,
+      cpuMilli: grant.cpuMilli,
+      ramMb: grant.ramMb,
+      storageGb: grant.storageGb,
+    });
 
     try {
       // Host port first: it is allocated atomically in the database (unique on
@@ -428,8 +534,8 @@ export class ServersService {
         image: version.image,
         startup,
         env,
-        cpuMilli: plan.cpuMilli,
-        ramMb: plan.ramMb,
+        cpuMilli: grant.cpuMilli,
+        ramMb: grant.ramMb,
         autoRestart: row.autoRestart,
       });
       const updated = await this.persistProvision(row.id, result, { start: config.AUTO_START_ON_CREATE, nodeId });
@@ -446,7 +552,16 @@ export class ServersService {
         targetId: row.id,
         ip: ctx.ip,
         userAgent: ctx.device,
-        meta: { name: row.name, runtime: row.runtime, plan: plan.id, region },
+        meta: {
+          name: row.name,
+          runtime: row.runtime,
+          plan: plan.id,
+          region,
+          cpuMilli: grant.cpuMilli,
+          ramMb: grant.ramMb,
+          storageGb: grant.storageGb,
+          quotaOverride: !!opts?.resourcesOverride,
+        },
       });
       return this.toPublic(updated);
     } catch (e) {
@@ -642,23 +757,10 @@ export class ServersService {
     const release = await this.acquire(id);
     try {
       await this.db.update(servers).set({ status: 'restarting', lastError: null }).where(eq(servers.id, id));
-      const env = row.envEncrypted ? this.safeDecrypt(row.envEncrypted) : [];
-      const startup = applyTemplate(row.startup, resolveEggEnv(row.runtime, env));
       // provision() reuses the existing network + volume; rollback never
       // deletes a reused resource holding live client data
-      const result = await this.provisioner.provision({
-        id: row.id,
-        ownerId,
-        nodeId: row.nodeId,
-        runtime: row.runtime as Runtime,
-        image: row.runtimeVersion ?? undefined,
-        startup,
-        env: resolveEggEnv(row.runtime, env),
-        cpuMilli: row.cpuMilli,
-        ramMb: row.ramMb,
-        autoRestart: row.autoRestart,
-      });
-      const updated = await this.persistProvision(row.id, result, { start: true, nodeId: row.nodeId });
+      await this.rebuildContainer(row, ownerId);
+      const updated = await this.requireOwned(ownerId, id);
       await this.event(id, ownerId, 'reprovision', { status: updated.status });
       await this.audit.record({
         actorId: ownerId,
@@ -675,6 +777,147 @@ export class ServersService {
     } finally {
       release();
     }
+  }
+
+  /**
+   * Change the CPU / RAM / storage allocation of an existing server.
+   *
+   * Storage is a quota row only — it needs no rebuild and takes effect on the
+   * next upload check. CPU and RAM are Docker limits baked into the container,
+   * so changing either rebuilds it through the SAME network + volume: the
+   * client's files survive, the server bounces once.
+   *
+   * The account pool is re-read inside the owner row lock (the server's own
+   * current allocation excluded), so a resize can never race another create
+   * into an overcommitted account.
+   */
+  async rescale(
+    ownerId: string,
+    id: string,
+    dto: RescaleServerDto,
+    ctx: ReqCtx,
+    opts?: { actorId?: string; actorEmail?: string | null; isAdmin?: boolean; override?: boolean },
+  ) {
+    const row = await this.requireOwned(ownerId, id);
+    const isAdmin = opts?.isAdmin ?? false;
+    this.assertOperable(row, { admin: isAdmin });
+    if (row.status === 'deleting') throw Err.conflict('SERVER_DELETING', 'Server is being deleted');
+
+    // Cheap pre-check outside the lock: refusing early beats opening a
+    // transaction for a request that cannot be satisfied anyway.
+    if (dto.storageGb !== undefined && dto.storageGb < row.storageGb) {
+      const used = await this.provisioner
+        .volumeUsage(row.volumeName ?? '', runtimeImage(row.runtime).image, row.nodeId)
+        .catch(() => 0);
+      if (used && used > dto.storageGb * 1024 ** 3) {
+        throw Err.quota(
+          'STORAGE_BELOW_USAGE',
+          `This server already holds ${(used / 1024 ** 3).toFixed(1)} GB — delete files before shrinking storage below that.`,
+        );
+      }
+    }
+
+    const release = await this.acquire(id);
+    try {
+      const { grant, needsRebuild } = await this.db.transaction(async (tx) => {
+        const [owner] = await tx
+          .select({ planId: users.planId })
+          .from(users)
+          .where(eq(users.id, ownerId))
+          .for('update')
+          .limit(1);
+        if (!owner) throw Err.notFound('USER_NOT_FOUND');
+        const [plan] = await tx.select().from(plans).where(eq(plans.id, owner.planId)).limit(1);
+        if (!plan) throw Err.invalid('PLAN_INVALID', 'Unknown plan');
+
+        const others = await tx
+          .select({ cpuMilli: servers.cpuMilli, ramMb: servers.ramMb, storageGb: servers.storageGb })
+          .from(servers)
+          .where(and(eq(servers.ownerId, ownerId), ne(servers.id, id)));
+        const resolved = resolveRequest({
+          limits: resolveLimits(plan, sumUsage(others)),
+          planName: plan.name,
+          override: opts?.override,
+          hardMax: platformHardMaxConfigured(),
+          requested: {
+            cpuMilli: dto.cpuMilli ?? row.cpuMilli,
+            ramMb: dto.ramMb ?? row.ramMb,
+            storageGb: dto.storageGb ?? row.storageGb,
+          },
+        });
+        if (!resolved.ok) throw Err.quota(resolved.refusal!.code, resolved.refusal!.message);
+
+        const before: ResourceGrant = { cpuMilli: row.cpuMilli, ramMb: row.ramMb, storageGb: row.storageGb };
+        const grant = resolved.grant;
+        if (grant.cpuMilli !== before.cpuMilli || grant.ramMb !== before.ramMb || grant.storageGb !== before.storageGb) {
+          await tx
+            .update(servers)
+            .set({ cpuMilli: grant.cpuMilli, ramMb: grant.ramMb, storageGb: grant.storageGb, updatedAt: new Date() })
+            .where(eq(servers.id, id));
+        }
+        return { grant, needsRebuild: grant.cpuMilli !== before.cpuMilli || grant.ramMb !== before.ramMb };
+      });
+
+      await this.audit.record({
+        actorId: opts?.actorId ?? ownerId,
+        actorEmail: opts?.actorEmail ?? null,
+        action: isAdmin ? 'admin.server.rescale' : 'server.rescale',
+        targetType: 'server',
+        targetId: id,
+        ip: ctx.ip,
+        userAgent: ctx.device,
+        meta: {
+          before: { cpuMilli: row.cpuMilli, ramMb: row.ramMb, storageGb: row.storageGb },
+          after: grant,
+          rebuilt: needsRebuild,
+          quotaOverride: !!opts?.override,
+        },
+      });
+
+      let status: string | undefined;
+      if (needsRebuild) {
+        await this.db.update(servers).set({ status: 'restarting', lastError: null }).where(eq(servers.id, id));
+        try {
+          await this.rebuildContainer(await this.requireOwned(ownerId, id), ownerId);
+        } catch (e) {
+          await this.setField(id, { status: 'error', lastError: String((e as Error).message).slice(0, 400) }).catch(() => undefined);
+          throw e;
+        }
+        status = (await this.requireOwned(ownerId, id)).status;
+      }
+      await this.event(id, ownerId, 'rescale', { ...grant, rebuilt: needsRebuild });
+      return { ...this.toPublic(await this.requireOwned(ownerId, id)), needsRebuild, status };
+    } catch (e) {
+      if ((e as AppError)?.getStatus?.() !== 402) {
+        this.log.error(`rescale ${id} failed: ${String((e as Error).message).slice(0, 300)}`);
+      }
+      throw e;
+    } finally {
+      release();
+    }
+  }
+
+  /**
+   * Rebuild the container from the row's CURRENT limits/startup, reusing the
+   * existing network and volume (the client's files are never at risk).
+   * Callers must already hold the per-server lock.
+   */
+  private async rebuildContainer(row: Server, ownerId: string): Promise<Server> {
+    const env = row.envEncrypted ? this.safeDecrypt(row.envEncrypted) : [];
+    const startup = applyTemplate(row.startup, resolveEggEnv(row.runtime, env));
+    const result = await this.provisioner.provision({
+      id: row.id,
+      ownerId,
+      nodeId: row.nodeId,
+      runtime: row.runtime as Runtime,
+      image: row.runtimeVersion ?? undefined,
+      startup,
+      env: resolveEggEnv(row.runtime, env),
+      cpuMilli: row.cpuMilli,
+      ramMb: row.ramMb,
+      autoRestart: row.autoRestart,
+    });
+    return this.persistProvision(row.id, result, { start: true, nodeId: row.nodeId });
   }
 
   /**

@@ -42,17 +42,17 @@ const FILTERS = [
     { id: 'attention', label: 'Needs attention' },
 ];
 
-const actionBtn =
-    'inline-flex items-center gap-1.5 rounded-full border border-hairline bg-veil px-3 py-1.5 text-[0.74rem] font-semibold text-ink-secondary transition hover:border-hairline-hover hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35';
+const actionBtn = 'btn btn-secondary btn-sm';
 
 function Meter({ label, pct, color }) {
+    const p = Math.min(100, Math.max(0, pct));
     return (
-        <div className="flex items-center gap-2">
-            <span className="w-8 font-mono text-[0.66rem] tracking-wider text-ink-muted uppercase">{label}</span>
-            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/[0.07]">
-                <div className="h-full rounded-full transition-[width]" style={{ width: `${Math.min(100, pct)}%`, background: color }} />
+        <div className="flex items-center gap-2.5">
+            <span className="w-8 font-mono text-micro tracking-wider text-ink-muted uppercase">{label}</span>
+            <div className="meter meter-live">
+                <div className="meter-fill" style={{ width: `${p}%`, background: color }} />
             </div>
-            <span className="w-10 text-right font-mono text-[0.68rem] text-ink-secondary tabular-nums">{Math.round(Math.min(100, pct))}%</span>
+            <span className="w-10 text-right font-mono text-micro text-ink-secondary tabular-nums">{Math.round(p)}%</span>
         </div>
     );
 }
@@ -87,36 +87,36 @@ function ServerCard({ server }) {
             }}
             tabIndex={0}
             className={cn(
-                'group relative cursor-pointer overflow-hidden rounded-2xl border bg-card p-5 transition duration-200 hover:-translate-y-0.5',
+                'group console-card console-lift cursor-pointer p-5',
                 failed
-                    ? 'border-red-500/30 hover:border-red-500/55 hover:shadow-[0_18px_50px_-20px_rgba(239,68,68,0.35)]'
+                    ? 'border-red-500/30! hover:border-red-500/55! hover:shadow-[0_18px_50px_-20px_rgba(239,68,68,0.35)]!'
                     : online
-                      ? 'border-hairline hover:border-emerald-500/30 hover:shadow-[0_18px_50px_-20px_rgba(52,211,153,0.25)]'
-                      : 'border-hairline hover:border-hairline-hover hover:shadow-[0_18px_50px_-20px_rgba(255,255,255,0.15)]',
+                      ? 'hover:border-emerald-500/30! hover:shadow-[0_18px_50px_-20px_rgba(52,211,153,0.25)]!'
+                      : '',
             )}
         >
             <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                 {RuntimeIcon ? (
                     <span className="relative flex size-10 shrink-0 items-center justify-center rounded-xl border border-hairline bg-veil text-ink-secondary">
                         <RuntimeIcon className="size-5" />
-                        <span title={server.status} className={cn('absolute -top-1 -right-1 size-3 rounded-full border-2 border-card', STATUS_STYLE[server.status])}>
+                        <span title={server.status} className={cn('absolute -top-1 -right-1 size-3 rounded-full border-2 border-console', STATUS_STYLE[server.status])}>
                             {online && <span className="absolute inset-0 animate-ping rounded-full bg-emerald-400 opacity-60" />}
                         </span>
                     </span>
                 ) : (
                     <span className={cn('size-2.5 shrink-0 rounded-full', STATUS_STYLE[server.status])} />
                 )}
-                <h2 className="min-w-0 flex-1 truncate font-mono text-[1rem] font-bold sm:flex-none">{server.name}</h2>
+                <h2 className="min-w-0 flex-1 truncate font-mono text-lead font-bold sm:flex-none">{server.name}</h2>
                 {server.shared && (
-                    <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-hairline bg-veil px-2.5 py-0.5 text-[0.68rem] font-bold text-ink-secondary">
+                    <span className="chip shrink-0 font-bold">
                         <Users size={11} aria-hidden="true" />
                         Shared
                     </span>
                 )}
-                <span className="rounded-full border border-hairline bg-veil px-2.5 py-0.5 text-[0.7rem] font-semibold text-ink-secondary">
+                <span className="chip">
                     {server.runtimeLabel ?? server.runtime}
                 </span>
-                <span className={cn('rounded-full border px-2.5 py-0.5 text-[0.7rem] font-semibold capitalize', STATUS_PILL[server.status] ?? STATUS_PILL.offline)}>
+                <span className={cn('rounded-full border px-2.5 py-0.5 text-tiny font-semibold capitalize', STATUS_PILL[server.status] ?? STATUS_PILL.offline)}>
                     {server.status}
                 </span>
                 <div className="ml-auto flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
@@ -127,7 +127,7 @@ function ServerCard({ server }) {
                     <button type="button" aria-label={`Restart ${server.name}`} disabled={!online || isPending} onClick={() => run('restart', 'restarted')} className={actionBtn}>
                         <RotateCcw className="size-3.5" /> <span className="hidden sm:inline">Restart</span>
                     </button>
-                    <button type="button" aria-label={`Stop ${server.name}`} disabled={!online || isPending} onClick={() => run('stop', 'stopped')} className={cn(actionBtn, 'hover:!border-red-500/50 hover:!text-red-300')}>
+                    <button type="button" aria-label={`Stop ${server.name}`} disabled={!online || isPending} onClick={() => run('stop', 'stopped')} className={cn(actionBtn, 'hover:border-red-500/50! hover:text-red-300!')}>
                         <Square className="size-3.5" /> <span className="hidden sm:inline">Stop</span>
                     </button>
                     </>) : null}
@@ -136,7 +136,7 @@ function ServerCard({ server }) {
             </div>
 
             {failed && server.lastError && (
-                <p className="relative mt-3 flex items-start gap-2 rounded-xl border border-red-500/25 bg-red-500/[0.06] px-3.5 py-2.5 text-[0.78rem] text-red-300">
+                <p className="relative mt-3 flex items-start gap-2 rounded-xl border border-red-500/25 bg-red-500/[0.06] px-3.5 py-2.5 text-tiny text-red-300">
                     <AlertTriangle size={14} className="mt-0.5 shrink-0" />
                     <span className="min-w-0 break-words font-mono">{server.lastError}</span>
                 </p>
@@ -149,7 +149,7 @@ function ServerCard({ server }) {
                         <Meter label="RAM" pct={memPct} color="#a78bfa" />
                     </div>
                 ) : !failed ? (
-                    <p className="font-mono text-[0.72rem] text-ink-muted">
+                    <p className="font-mono text-tiny text-ink-muted">
                         {server.status === 'offline' ? 'Stopped — start it to see live usage.' : `${server.status}…`}
                     </p>
                 ) : null}
@@ -186,7 +186,7 @@ export default function Servers() {
             <div className="flex flex-col gap-4">
                 <div className="h-9 w-48 animate-pulse rounded-lg bg-white/[0.06]" />
                 {[0, 1].map((i) => (
-                    <div key={i} className="h-44 animate-pulse rounded-2xl bg-white/[0.04]" />
+                    <div key={i} className="h-44 animate-pulse rounded-2xl bg-console" />
                 ))}
             </div>
         );
@@ -202,19 +202,16 @@ export default function Servers() {
             <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="min-w-0 flex-1 basis-56">
                     <div className="flex flex-wrap items-center gap-2.5">
-                        <h1 className="text-[1.6rem] font-extrabold tracking-tight">Servers</h1>
-                        <span className="rounded-full border border-hairline bg-veil px-2.5 py-0.5 font-mono text-[0.7rem] font-bold text-ink-secondary tabular-nums">
+                        <h1 className="text-display-lg font-extrabold tracking-tight">Servers</h1>
+                        <span className="chip font-mono font-bold tabular-nums">
                             {onlineCount}/{servers.length} online
                         </span>
                     </div>
-                    <p className="mt-1 text-[0.9rem] text-ink-secondary">
+                    <p className="mt-1 text-body text-ink-secondary">
                         {servers.length === 0 ? 'Your fleet lives here.' : 'Deploy, monitor and control everything.'}
                     </p>
                 </div>
-                <Link
-                    to="/dashboard/servers/new"
-                    className="inline-flex items-center gap-2 rounded-xl bg-white px-5 py-2.5 text-sm font-bold text-black shadow-[0_10px_36px_-12px_rgba(255,255,255,0.5)] transition hover:bg-gray-200"
-                >
+                <Link to="/dashboard/servers/new" className="btn btn-primary btn-lg">
                     <Plus className="size-4" /> New server
                 </Link>
             </div>
@@ -240,7 +237,7 @@ export default function Servers() {
                                 aria-selected={filter === f.id}
                                 onClick={() => setFilter(f.id)}
                                 className={cn(
-                                    'rounded-full px-3.5 py-1.5 text-[0.78rem] font-semibold transition',
+                                    'rounded-full px-3.5 py-1.5 text-tiny font-semibold transition',
                                     filter === f.id ? 'bg-white text-black' : 'text-ink-secondary hover:text-foreground',
                                 )}
                             >
@@ -257,7 +254,7 @@ export default function Servers() {
                 ))}
                 {shared.length > 0 && (
                     <>
-                        <p className="mt-2 flex items-center gap-2 px-1 text-[0.72rem] font-bold tracking-[0.14em] text-ink-muted uppercase">
+                        <p className="mt-2 flex items-center gap-2 px-1 text-tiny font-bold tracking-[0.14em] text-ink-muted uppercase">
                             <Users size={13} aria-hidden="true" />
                             Shared with me · {shared.length}
                         </p>
@@ -267,7 +264,7 @@ export default function Servers() {
                     </>
                 )}
                 {servers.length === 0 && (
-                    <div className="relative flex flex-col items-center gap-3 overflow-hidden rounded-2xl border border-dashed border-hairline bg-card px-4 py-14 text-center">
+                    <div className="relative flex flex-col items-center gap-3 overflow-hidden rounded-2xl border border-dashed border-hairline bg-console px-4 py-14 text-center">
                         <div
                             aria-hidden="true"
                             className="pointer-events-none absolute inset-0"
@@ -280,24 +277,21 @@ export default function Servers() {
                             </span>
                         </span>
                         <div className="relative">
-                            <p className="text-[0.95rem] font-bold">No servers yet</p>
-                            <p className="mx-auto mt-1 max-w-xs text-[0.84rem] text-ink-secondary">
+                            <p className="text-lead font-bold">No servers yet</p>
+                            <p className="mx-auto mt-1 max-w-xs text-small text-ink-secondary">
                                 Deploy your first app, bot or site — pick a runtime and go live in minutes.
                             </p>
                         </div>
-                        <Link
-                            to="/dashboard/servers/new"
-                            className="relative inline-flex items-center gap-1.5 rounded-xl bg-white px-5 py-2.5 text-[0.83rem] font-bold text-black shadow-[0_10px_36px_-12px_rgba(255,255,255,0.5)] transition hover:bg-gray-200"
-                        >
+                        <Link to="/dashboard/servers/new" className="btn btn-primary relative">
                             <Plus className="size-4" /> Create server
                         </Link>
                     </div>
                 )}
                 {servers.length > 0 && filtered.length === 0 && (
-                    <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-hairline bg-card px-4 py-12 text-center">
+                    <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-hairline bg-console px-4 py-12 text-center">
                         <Search size={26} className="text-ink-muted" />
-                        <p className="text-[0.92rem] font-semibold">No servers match</p>
-                        <button type="button" onClick={() => { setQuery(''); setFilter('all'); }} className="mt-1 rounded-full border border-hairline bg-veil px-4 py-1.5 text-[0.8rem] font-semibold text-ink-secondary transition hover:text-foreground">
+                        <p className="text-lead font-semibold">No servers match</p>
+                        <button type="button" onClick={() => { setQuery(''); setFilter('all'); }} className="btn btn-secondary mt-1">
                             Clear search & filters
                         </button>
                     </div>
@@ -305,7 +299,7 @@ export default function Servers() {
             </div>
 
             {servers.length > 0 && (
-                <p className="flex items-center gap-4 font-mono text-[0.7rem] text-ink-muted">
+                <p className="flex items-center gap-4 font-mono text-micro text-ink-muted">
                     <span className="inline-flex items-center gap-1.5"><Cpu size={12} /> CPU</span>
                     <span className="inline-flex items-center gap-1.5"><MemoryStick size={12} /> RAM</span>
                     <span className="ml-auto hidden sm:inline">Usage refreshes every few seconds</span>
